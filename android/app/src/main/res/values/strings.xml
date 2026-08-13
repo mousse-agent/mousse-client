@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Mousse</string>
+    <string name="title_activity_main">Mousse</string>
+    <string name="package_name">com.ryspa.mousse.client</string>
+    <string name="custom_url_scheme">com.ryspa.mousse.client</string>
+</resources>
