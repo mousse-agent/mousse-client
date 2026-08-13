@@ -1,0 +1,5 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ReconnectingSse } from '../src/sse'
+import type { TokenSet } from '../src/types'
+const token: TokenSet = { access_token: 'a', refresh_token: 'r', expires_at: Date.now() + 99_999, scope: 'mousse:read', client_id: 'c', base_url: 'https://m.test', issuer: 'https://m.test' }
+describe('reconnecting SSE', () => { afterEach(() => vi.unstubAllGlobals()); it('parses ordered events and treats stream.reset as snapshot invalidation', async () => { const body = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('id: 41\nevent: thread.message\ndata: {"ok":true}\n\nid: 42\nevent: stream.reset\ndata: {}\n\n')); c.close() } }); vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { status: 200 }))); const events: string[] = []; let reset = 0; const stream = new ReconnectingSse('https://m.test/v1/events', token, e => events.push(e.event), () => undefined, () => reset++); stream.start(); await new Promise(resolve => setTimeout(resolve, 15)); stream.stop(); expect(events).toEqual(['thread.message', 'stream.reset']); expect(reset).toBe(1) }) })

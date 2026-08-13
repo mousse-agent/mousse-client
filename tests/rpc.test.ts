@@ -1,0 +1,5 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { MousseRpc } from '../src/rpc'
+import type { TokenSet } from '../src/types'
+const token: TokenSet = { access_token: 'access', refresh_token: 'refresh', expires_at: Date.now() + 3600_000, scope: 'mousse:read', client_id: 'mobile', base_url: 'https://mousse.test', issuer: 'https://mousse.test' }
+describe('JSON-RPC client', () => { afterEach(() => vi.unstubAllGlobals()); it('uses bearer headers and idempotency only for mutations', async () => { const fetcher = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ jsonrpc: '2.0', id: 'ignored', result: { ok: true } })))); vi.stubGlobal('fetch', fetcher); const rpc = new MousseRpc('https://mousse.test/v1/rpc', token); await expect(rpc.request('threads.create', {}, true)).resolves.toEqual({ ok: true }); const [, init] = fetcher.mock.calls[0]; expect(init.headers.Authorization).toBe('Bearer access'); expect(init.headers['Idempotency-Key']).toMatch(/[0-9a-f-]{36}/); await rpc.request('threads.list'); expect(fetcher.mock.calls[1][1].headers['Idempotency-Key']).toBeUndefined() }) })

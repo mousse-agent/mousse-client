@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+android/.gradle/
+android/app/build/
+ios/App/App/public/
+ios/App/Pods/
+ios/App/DerivedData/

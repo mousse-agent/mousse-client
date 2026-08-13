@@ -1,0 +1,9 @@
+export type OAuthMetadata = { issuer: string; authorization_endpoint: string; token_endpoint: string; revocation_endpoint?: string; registration_endpoint: string; code_challenge_methods_supported: string[]; scopes_supported: string[] }
+export type MousseConfiguration = { protocol_version: string; server_name: string; server_version: string; api_endpoint: string; events_endpoint: string; max_request_bytes: number; event_retention: number }
+export type TokenSet = { access_token: string; refresh_token: string; expires_at: number; scope: string; client_id: string; base_url: string; issuer: string }
+export type Connection = { baseUrl: string; serverName: string; serverVersion: string; apiEndpoint: string; eventsEndpoint: string; scopes: string[] }
+export type RpcError = { code: number; message: string; data?: { required_scope?: string; retryable?: boolean; [key: string]: unknown } }
+export type Thread = { id: string; title: string; projectId?: string; model?: string; active?: boolean; updatedAt?: string; settledAt?: string }
+export type Project = { id: string; name: string; path?: string; pinned?: boolean }
+export type Message = { id: string; role: 'user' | 'assistant' | 'system'; content: string; createdAt?: string; streaming?: boolean; toolCalls?: { name: string; status: string }[] }
+export type AppSnapshot = { projects: Project[]; threads: Thread[]; messages: Record<string, Message[]>; agents: Record<string, unknown>[]; tasks: Record<string, unknown>[]; workspace: Record<string, unknown>; jobs: Record<string, unknown>[]; channels: Record<string, unknown>; settings: Record<string, unknown>; mcp: Record<string, unknown>[]; skills: Record<string, unknown>[] }
