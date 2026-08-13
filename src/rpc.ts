@@ -3,7 +3,7 @@ import type { RpcError, TokenSet } from './types'
 const refreshes = new Map<string, Promise<TokenSet>>()
 
 function validateRequiredParams(method: string, params: Record<string, unknown>) {
-  const required = method.startsWith('files.') || method.startsWith('git.') ? ['projectId'] : method === 'threads.create' ? ['name'] : /^(thread\.|threads\.(get|delete|rename|pin|settle|regenerateTitle|setModel)|orchestrator\.(send|abort|steer|isTurnActive)|queue\.|agents\.spawn|tasks\.|pty\.create|mousseAgent\.(getMessages|send|retry)|workspace\.)/.test(method) ? ['threadId'] : []
+  const required = method.startsWith('files.') || method.startsWith('git.') ? ['projectId'] : method === 'threads.create' ? ['name'] : /^(thread\.|threads\.(get|delete|rename|pin|settle|regenerateTitle|setModel)|orchestrator\.(send|abort|steer|isTurnActive)|queue\.|agents\.(spawn|stop)|tasks\.|pty\.create|mousseAgent\.(getMessages|send|retry)|workspace\.)/.test(method) ? ['threadId'] : []
   for (const name of required) if (typeof params[name] !== 'string' || !params[name].trim()) throw new Error(`${name} is required.`)
   if (method === 'orchestrator.answerQuestions') {
     if (typeof params.requestId !== 'string' || !params.requestId.trim()) throw new Error('requestId is required.')
