@@ -15,3 +15,16 @@ export function normalizedBaseUrl(raw: string) {
   if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('Enter only the server base URL.')
   return value
 }
+
+export function trustedUrl(raw: string, baseUrl: string, label: string, requireBasePath = false) {
+  const base = new URL(normalizedBaseUrl(baseUrl))
+  const url = new URL(raw)
+  if (url.origin !== base.origin) throw new Error(`${label} must use the discovered server origin.`)
+  if (url.username || url.password || url.hash || (requireBasePath && (url.pathname !== '/' || url.search))) {
+    throw new Error(`${label} is not a valid server URL.`)
+  }
+  // The base URL check above also guarantees HTTPS outside loopback, including
+  // for every metadata URL rather than only the URL typed by the user.
+  normalizedBaseUrl(url.origin)
+  return url.toString()
+}
