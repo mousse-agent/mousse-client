@@ -20,6 +20,7 @@
     "@aparajita/capacitor-secure-storage": "^7.1.6",
     "@capacitor/android": "^7.4.3",
     "@capacitor/app": "^7.1.0",
+    "@capacitor/barcode-scanner": "^2.2.6",
     "@capacitor/browser": "^7.0.2",
     "@capacitor/core": "^7.4.3",
     "@capacitor/ios": "^7.4.3",
