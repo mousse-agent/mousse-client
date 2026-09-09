@@ -30,6 +30,7 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>com.ryspa.mousse</string>
+				<string>mousse</string>
 			</array>
 		</dict>
 	</array>

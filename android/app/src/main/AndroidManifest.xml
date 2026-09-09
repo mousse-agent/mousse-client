@@ -29,6 +29,7 @@
                 <!-- The registered redirect is com.ryspa.mousse:/oauth/callback.
                      The appUrlOpen handler validates the exact callback path. -->
                 <data android:scheme="com.ryspa.mousse" />
+                <data android:scheme="mousse" />
             </intent-filter>
 
         </activity>
