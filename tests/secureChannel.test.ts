@@ -1,7 +1,8 @@
-﻿import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { SecureChannel } from '../src/crypto/secureChannel'
 import { base64UrlEncode } from '../src/security'
 import type { ControlEnvelope } from '../src/types'
+import type { Envelope } from '../src/crypto/envelopes'
 
 describe('Audited SecureChannel and E2E Envelopes', () => {
   const prologue = {
@@ -36,22 +37,6 @@ describe('Audited SecureChannel and E2E Envelopes', () => {
       role: 'client'
     })
 
-    expect(clientChannel.isEstablished()).toBe(true)
-    expect(handshakeResult.clientEphemeralPublic).toBeDefined()
-    expect(handshakeResult.prologueHash).toBeDefined()
-
-    // Encrypt request envelope
-    const reqEnvelope: ControlEnvelope = {
-      type: 'request',
-      requestId: 'req-123',
-      method: 'threads.list',
-      params: {},
-      protocolVersion: '2.0'
-    }
-
-    const frame = await clientChannel.encryptEnvelope(reqEnvelope)
-    expect(frame.byteLength).toBeGreaterThan(16)
-
     // Set up server side channel with client ephemeral key and static private key
     const serverChannel = new SecureChannel()
     await serverChannel.initializeSession({
@@ -62,6 +47,24 @@ describe('Audited SecureChannel and E2E Envelopes', () => {
       prologue,
       role: 'server'
     })
+
+    expect(clientChannel.isEstablished()).toBe(true)
+    expect(serverChannel.isEstablished()).toBe(true)
+    expect(handshakeResult.clientEphemeralPublic).toBeDefined()
+    expect(handshakeResult.prologueHash).toBeDefined()
+
+    // Encrypt request envelope
+    const reqEnvelope: ControlEnvelope = {
+      type: 'request',
+      requestId: 'req-123',
+      method: 'threads.list',
+      params: {},
+      protocolVersion: '2.0',
+      protocolMajor: 2,
+    }
+
+    const frame = await clientChannel.encryptEnvelope(reqEnvelope as unknown as Envelope)
+    expect(frame.byteLength).toBeGreaterThan(16)
 
     const decrypted = await serverChannel.decryptFrame(frame)
     expect(decrypted).toEqual(reqEnvelope)

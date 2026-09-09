@@ -1,4 +1,4 @@
-﻿export type OAuthMetadata = {
+export type OAuthMetadata = {
   issuer: string
   authorization_endpoint: string
   token_endpoint: string
@@ -189,7 +189,8 @@ export type RequestEnvelope = {
   method: string
   params: Record<string, unknown>
   idempotencyKey?: string
-  protocolVersion: '2.0'
+  protocolVersion?: '2.0'
+  protocolMajor?: number
 }
 
 /** Application response envelope (inside encrypted channel). */

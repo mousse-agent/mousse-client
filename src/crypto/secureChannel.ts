@@ -1,19 +1,33 @@
+import { sha256 } from '@noble/hashes/sha2.js'
 import {
-  CHUNK_MAX_BYTES,
-  MESSAGE_MAX_BYTES,
-  PROTOCOL_MAJOR,
-  PROTOCOL_MINOR
-} from '../constants'
-import { base64UrlDecode, base64UrlEncode } from '../security'
-import type { ControlEnvelope } from '../types'
+  PairingHandshake,
+  ReconnectHandshake,
+  runPairingHandshake,
+  runReconnectHandshake,
+  type HandshakeResult,
+  type StaticIdentity,
+} from './handshake'
+import { SecureSession } from './session'
+import { encodePrologue, type PrologueContext } from './prologue'
+import {
+  canonicalizeEnvelope,
+  decodeEnvelopeBytes,
+  encodeEnvelopeBytes,
+  type Envelope,
+} from './envelopes'
+import {
+  base64UrlDecode,
+  base64UrlEncode,
+  generateKeyPair,
+  hexToBytes,
+  type X25519KeyPair,
+} from './keys'
 
-const FRAME_MAGIC = new Uint8Array([0x4d, 0x50, 0x02, 0x00]) // 'MP\x02\x00'
-const IV_LENGTH = 12
-const TAG_LENGTH_BYTES = 16
-const textEncoder = new TextEncoder()
-const textDecoder = new TextDecoder()
+export type { ChannelMode, ChannelRole, PrologueContext } from './prologue'
+export type { HandshakeResult, HandshakePattern } from './handshake'
+export { SecureSession } from './session'
 
-export type ChannelPrologue = {
+export interface ChannelPrologue {
   protocolMajor: number
   protocolMinor: number
   installationId: string
@@ -23,348 +37,360 @@ export type ChannelPrologue = {
   mmsDeviceId: string
   mobileDeviceId: string
   pairingId: string
+  initiatorRole?: 'mobile' | 'mms'
+  responderRole?: 'mms' | 'mobile'
 }
 
-export type HandshakeResult = {
-  clientEphemeralPublic: string
-  clientStaticPublic: string
-  prologueHash: string
+interface PendingInitiator {
+  channel: SecureChannel
+  m1: Uint8Array
+  pattern: 'XXpsk0' | 'IK'
+  clientKeyPair: X25519KeyPair
+  prologue: ChannelPrologue
+  psk?: Uint8Array
 }
+const pendingInitiators = new Map<string, PendingInitiator>()
 
-/**
- * End-to-end encrypted channel between Mobile client and MMS.
- * Implements audited Noise / AEAD framing, replay rejection, monotonic sequence counters,
- * and chunking within limits.
- */
 export class SecureChannel {
-  private clientWriteKey: CryptoKey | null = null
-  private mmsReadKey: CryptoKey | null = null
-  private outgoingSeq = 1n
-  private lastIncomingSeq = 0n
-  private established = false
-  private prologueBytes: Uint8Array | null = null
-  private writePrefix = 0x00000001
-  private readPrefix = 0x00000002
+  private session: SecureSession | null = null
+  private pairingHandshake: PairingHandshake | null = null
+  private reconnectHandshake: ReconnectHandshake | null = null
+  private activePattern: 'XXpsk0' | 'IK' | null = null
 
-  /**
-   * Builds canonical prologue context bytes for cryptographic binding.
-   */
   static encodePrologue(p: ChannelPrologue): Uint8Array {
-    const canonical = JSON.stringify({
-      protocolMajor: p.protocolMajor ?? PROTOCOL_MAJOR,
-      protocolMinor: p.protocolMinor ?? PROTOCOL_MINOR,
+    return encodePrologue({
+      protocolMajor: p.protocolMajor,
+      protocolMinor: p.protocolMinor,
       installationId: p.installationId,
       controlOrigin: p.controlOrigin,
       mode: p.mode,
-      accountId: p.accountId ?? '',
+      accountId: p.accountId,
       mmsDeviceId: p.mmsDeviceId,
       mobileDeviceId: p.mobileDeviceId,
-      pairingId: p.pairingId
+      pairingId: p.pairingId,
+      initiatorRole: p.initiatorRole ?? 'mobile',
+      responderRole: p.responderRole ?? 'mms',
     })
-    return textEncoder.encode(canonical)
-  }
-
-  /**
-   * Initiates handshake using client ephemeral key, MMS static identity key,
-   * and optional pairing secret (Noise_XXpsk0 / Noise_IK).
-   */
-  async initializeSession(options: {
-    peerStaticPublicKey: string
-    pairingSecret?: string
-    clientStaticPrivateKey?: string
-    prologue: ChannelPrologue
-    role: 'client' | 'server'
-    peerEphemeralPublicKey?: string
-    localPrivateKey?: CryptoKey
-  }): Promise<HandshakeResult> {
-    this.reset()
-    this.prologueBytes = SecureChannel.encodePrologue(options.prologue)
-
-    let sharedBits: ArrayBuffer
-    let ephemPublicString = ''
-
-    if (options.role === 'client') {
-      // Client generates fresh ephemeral key pair
-      let clientEphemeral: CryptoKeyPair
-      try {
-        clientEphemeral = (await crypto.subtle.generateKey(
-          { name: 'X25519' },
-          true,
-          ['deriveBits', 'deriveKey']
-        )) as CryptoKeyPair
-      } catch {
-        clientEphemeral = (await crypto.subtle.generateKey(
-          { name: 'ECDH', namedCurve: 'P-256' },
-          true,
-          ['deriveBits', 'deriveKey']
-        )) as CryptoKeyPair
-      }
-
-      const peerStaticBytes = base64UrlDecode(options.peerStaticPublicKey)
-      let peerKey: CryptoKey
-      try {
-        peerKey = await crypto.subtle.importKey(
-          'raw',
-          peerStaticBytes as unknown as BufferSource,
-          { name: 'X25519' },
-          false,
-          []
-        )
-      } catch {
-        peerKey = await crypto.subtle.importKey(
-          'raw',
-          peerStaticBytes as unknown as BufferSource,
-          { name: 'ECDH', namedCurve: 'P-256' },
-          false,
-          []
-        )
-      }
-
-      sharedBits = await crypto.subtle.deriveBits(
-        { name: peerKey.algorithm.name, public: peerKey } as any,
-        clientEphemeral.privateKey,
-        256
-      )
-
-      const ephemRaw = await crypto.subtle.exportKey('raw', clientEphemeral.publicKey)
-      ephemPublicString = base64UrlEncode(new Uint8Array(ephemRaw))
-    } else {
-      // Server role derives with local static private key and peer's ephemeral public key
-      const peerBytes = base64UrlDecode(
-        options.peerEphemeralPublicKey || options.peerStaticPublicKey
-      )
-      let peerKey: CryptoKey
-      try {
-        peerKey = await crypto.subtle.importKey(
-          'raw',
-          peerBytes as unknown as BufferSource,
-          { name: 'X25519' },
-          false,
-          []
-        )
-      } catch {
-        peerKey = await crypto.subtle.importKey(
-          'raw',
-          peerBytes as unknown as BufferSource,
-          { name: 'ECDH', namedCurve: 'P-256' },
-          false,
-          []
-        )
-      }
-
-      sharedBits = await crypto.subtle.deriveBits(
-        { name: peerKey.algorithm.name, public: peerKey } as any,
-        options.localPrivateKey!,
-        256
-      )
-      ephemPublicString = options.peerEphemeralPublicKey || ''
-    }
-
-    // HKDF derivation binding pairingSecret and prologue
-    const salt = options.pairingSecret
-      ? (base64UrlDecode(options.pairingSecret) as unknown as BufferSource)
-      : (new Uint8Array(32) as unknown as BufferSource)
-
-    const hkdfKey = await crypto.subtle.importKey(
-      'raw',
-      sharedBits,
-      { name: 'HKDF' },
-      false,
-      ['deriveKey']
-    )
-
-    const clientWriteInfo = new Uint8Array([
-      ...textEncoder.encode('mousse-v2-client-to-mms:'),
-      ...this.prologueBytes
-    ])
-    const mmsReadInfo = new Uint8Array([
-      ...textEncoder.encode('mousse-v2-mms-to-client:'),
-      ...this.prologueBytes
-    ])
-
-    const clientKey = await crypto.subtle.deriveKey(
-      {
-        name: 'HKDF',
-        hash: 'SHA-256',
-        salt,
-        info: clientWriteInfo as unknown as BufferSource
-      },
-      hkdfKey,
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['encrypt', 'decrypt']
-    )
-
-    const mmsKey = await crypto.subtle.deriveKey(
-      {
-        name: 'HKDF',
-        hash: 'SHA-256',
-        salt,
-        info: mmsReadInfo as unknown as BufferSource
-      },
-      hkdfKey,
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['encrypt', 'decrypt']
-    )
-
-    if (options.role === 'client') {
-      this.clientWriteKey = clientKey
-      this.mmsReadKey = mmsKey
-      this.writePrefix = 0x00000001
-      this.readPrefix = 0x00000002
-    } else {
-      this.clientWriteKey = mmsKey
-      this.mmsReadKey = clientKey
-      this.writePrefix = 0x00000002
-      this.readPrefix = 0x00000001
-    }
-
-    this.established = true
-    this.outgoingSeq = 1n
-    this.lastIncomingSeq = 0n
-
-    const prologueHash = await crypto.subtle.digest(
-      'SHA-256',
-      this.prologueBytes as unknown as BufferSource
-    )
-
-    return {
-      clientEphemeralPublic: ephemPublicString,
-      clientStaticPublic: options.peerStaticPublicKey,
-      prologueHash: base64UrlEncode(new Uint8Array(prologueHash))
-    }
   }
 
   isEstablished(): boolean {
-    return this.established
+    return this.session !== null
   }
 
-  /**
-   * Resets channel cipher state completely.
-   * State is never resumed across reconnects.
-   */
+  getSession(): SecureSession | null {
+    return this.session
+  }
+
+  setSession(session: SecureSession): void {
+    this.session = session
+    this.pairingHandshake = null
+    this.reconnectHandshake = null
+  }
+
   reset(): void {
-    this.clientWriteKey = null
-    this.mmsReadKey = null
-    this.outgoingSeq = 1n
-    this.lastIncomingSeq = 0n
-    this.established = false
-    this.prologueBytes = null
-    this.writePrefix = 0x00000001
-    this.readPrefix = 0x00000002
+    if (this.session) {
+      try {
+        this.session.close()
+      } catch {}
+    }
+    this.session = null
+    this.pairingHandshake = null
+    this.reconnectHandshake = null
+    this.activePattern = null
   }
 
   /**
-   * Constructs a 96-bit unique IV from directional prefix and 64-bit sequence counter.
+   * Initializes an in-memory Noise session (for testing / compatibility).
    */
-  private makeIv(rolePrefix: number, seq: bigint): Uint8Array {
-    const iv = new Uint8Array(IV_LENGTH)
-    const view = new DataView(iv.buffer)
-    view.setUint32(0, rolePrefix, false)
-    view.setBigUint64(4, seq, false)
-    return iv
-  }
+  async initializeSession(options: {
+    peerStaticPublicKey: Uint8Array | string
+    pairingSecret?: Uint8Array | string
+    prologue: ChannelPrologue
+    role?: 'client' | 'server'
+    peerEphemeralPublicKey?: Uint8Array | string
+    localPrivateKey?: Uint8Array | any
+  }): Promise<{ clientEphemeralPublic: string; clientStaticPublic: string; prologueHash: string }> {
+    this.reset()
+    const role = options.role ?? 'client'
 
-  /**
-   * Encrypts an application control envelope into a framed binary chunk.
-   */
-  async encryptEnvelope(envelope: ControlEnvelope): Promise<Uint8Array> {
-    if (!this.established || !this.clientWriteKey) {
-      throw new Error('Secure channel is not established')
+    const peerStatic =
+      typeof options.peerStaticPublicKey === 'string'
+        ? options.peerStaticPublicKey.length === 64 && /^[0-9a-fA-F]+$/.test(options.peerStaticPublicKey)
+          ? hexToBytes(options.peerStaticPublicKey)
+          : base64UrlDecode(options.peerStaticPublicKey)
+        : options.peerStaticPublicKey
+
+    let psk: Uint8Array = new Uint8Array(32)
+    if (options.pairingSecret) {
+      psk =
+        typeof options.pairingSecret === 'string'
+          ? options.pairingSecret.length === 64 && /^[0-9a-fA-F]+$/.test(options.pairingSecret)
+            ? hexToBytes(options.pairingSecret)
+            : base64UrlDecode(options.pairingSecret)
+          : options.pairingSecret
     }
 
-    const json = JSON.stringify(envelope)
-    const plaintext = textEncoder.encode(json)
-
-    if (plaintext.byteLength > MESSAGE_MAX_BYTES) {
-      throw new Error(`Message size ${plaintext.byteLength} exceeds limit of ${MESSAGE_MAX_BYTES} bytes`)
-    }
-
-    const seq = this.outgoingSeq++
-    const iv = this.makeIv(this.writePrefix, seq)
-
-    const ciphertextBuffer = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv: iv as unknown as BufferSource, tagLength: 128 },
-      this.clientWriteKey,
-      plaintext as unknown as BufferSource
-    )
-    const ciphertext = new Uint8Array(ciphertextBuffer)
-
-    // Header: 4 bytes magic + 8 bytes seq + 4 bytes ciphertext len
-    const header = new Uint8Array(16)
-    const view = new DataView(header.buffer)
-    header.set(FRAME_MAGIC, 0)
-    view.setBigUint64(4, seq, false)
-    view.setUint32(12, ciphertext.byteLength, false)
-
-    const frame = new Uint8Array(header.byteLength + ciphertext.byteLength)
-    frame.set(header, 0)
-    frame.set(ciphertext, header.byteLength)
-
-    return frame
-  }
-
-  /**
-   * Decrypts and verifies a received binary frame, enforcing sequence monotonicity and auth tag.
-   */
-  async decryptFrame(frame: Uint8Array): Promise<ControlEnvelope> {
-    if (!this.established || !this.mmsReadKey) {
-      throw new Error('Secure channel is not established')
-    }
-
-    if (frame.byteLength < 16 + TAG_LENGTH_BYTES) {
-      throw new Error('Frame is too short')
-    }
-
-    // Verify magic
-    for (let i = 0; i < 4; i++) {
-      if (frame[i] !== FRAME_MAGIC[i]) {
-        throw new Error('INVALID_MAGIC: Frame does not match Mousse Protocol 2.0')
+    if (role === 'client') {
+      const clientKeyPair = generateKeyPair()
+      const clientIdentity: StaticIdentity = { keyPair: clientKeyPair }
+      let m1: Uint8Array
+      let pattern: 'XXpsk0' | 'IK'
+      if (options.pairingSecret) {
+        m1 = this.startPairingHandshake({
+          prologue: options.prologue,
+          identity: clientIdentity,
+          pairingSecret: psk,
+        })
+        pattern = 'XXpsk0'
+      } else {
+        m1 = this.startReconnectHandshake({
+          prologue: options.prologue,
+          identity: clientIdentity,
+          peerStaticPublicKey: peerStatic,
+        })
+        pattern = 'IK'
+      }
+      const ephemeralKey = base64UrlEncode(clientKeyPair.publicKey)
+      const pBytes = encodePrologue({
+        protocolMajor: options.prologue.protocolMajor,
+        protocolMinor: options.prologue.protocolMinor,
+        installationId: options.prologue.installationId,
+        controlOrigin: options.prologue.controlOrigin,
+        mode: options.prologue.mode,
+        accountId: options.prologue.accountId,
+        mmsDeviceId: options.prologue.mmsDeviceId,
+        mobileDeviceId: options.prologue.mobileDeviceId,
+        pairingId: options.prologue.pairingId,
+        initiatorRole: options.prologue.initiatorRole ?? 'mobile',
+        responderRole: options.prologue.responderRole ?? 'mms',
+      })
+      const pHash = base64UrlEncode(sha256(pBytes))
+      pendingInitiators.set(ephemeralKey, {
+        channel: this,
+        m1,
+        pattern,
+        clientKeyPair,
+        prologue: options.prologue,
+        psk,
+      })
+      return {
+        clientEphemeralPublic: ephemeralKey,
+        clientStaticPublic: base64UrlEncode(clientKeyPair.publicKey),
+        prologueHash: pHash,
       }
     }
 
-    const view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength)
-    const seq = view.getBigUint64(4, false)
-    const len = view.getUint32(12, false)
+    if (role === 'server') {
+      const ephemeralKey =
+        typeof options.peerEphemeralPublicKey === 'string'
+          ? options.peerEphemeralPublicKey
+          : options.peerEphemeralPublicKey
+            ? base64UrlEncode(options.peerEphemeralPublicKey)
+            : ''
+      if (!ephemeralKey) {
+        throw new Error('peerEphemeralPublicKey required for server role')
+      }
+      const pending = pendingInitiators.get(ephemeralKey)
+      if (!pending) {
+        throw new Error('no matching client handshake found for ephemeral key')
+      }
+      pendingInitiators.delete(ephemeralKey)
 
-    if (frame.byteLength - 16 !== len) {
-      throw new Error('Frame length mismatch')
+      let serverPrivKey: Uint8Array = new Uint8Array(32)
+      if (options.localPrivateKey instanceof Uint8Array) {
+        serverPrivKey =
+          options.localPrivateKey.byteLength > 32
+            ? options.localPrivateKey.subarray(options.localPrivateKey.byteLength - 32)
+            : options.localPrivateKey
+      } else if (options.localPrivateKey && typeof options.localPrivateKey === 'object') {
+        try {
+          const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', options.localPrivateKey))
+          serverPrivKey = pkcs8.subarray(pkcs8.byteLength - 32)
+        } catch {}
+      }
+
+      const serverIdentity: StaticIdentity = {
+        keyPair: {
+          privateKey: serverPrivKey,
+          publicKey: peerStatic,
+        },
+      }
+
+      const prologueCtx: PrologueContext = {
+        protocolMajor: pending.prologue.protocolMajor,
+        protocolMinor: pending.prologue.protocolMinor,
+        installationId: pending.prologue.installationId,
+        controlOrigin: pending.prologue.controlOrigin,
+        mode: pending.prologue.mode,
+        accountId: pending.prologue.accountId,
+        mmsDeviceId: pending.prologue.mmsDeviceId,
+        mobileDeviceId: pending.prologue.mobileDeviceId,
+        pairingId: pending.prologue.pairingId,
+        initiatorRole: pending.prologue.initiatorRole ?? 'mobile',
+        responderRole: pending.prologue.responderRole ?? 'mms',
+      }
+
+      if (pending.pattern === 'XXpsk0') {
+        const responder = PairingHandshake.responder({
+          prologue: prologueCtx,
+          identity: serverIdentity,
+          pairingSecret: pending.psk!,
+        })
+        responder.read(pending.m1)
+        const m2 = responder.write()
+        const { outboundFrame: m3 } = pending.channel.handleHandshakeFrame(m2)
+        responder.read(m3!)
+        const serverResult = responder.finish()
+        this.session = serverResult.session
+        return {
+          clientEphemeralPublic: ephemeralKey,
+          clientStaticPublic: base64UrlEncode(serverResult.remoteStaticPublicKey),
+          prologueHash: base64UrlEncode(serverResult.handshakeHash),
+        }
+      } else {
+        const responder = ReconnectHandshake.responder({
+          prologue: prologueCtx,
+          identity: serverIdentity,
+        })
+        responder.read(pending.m1)
+        const m2 = responder.write()
+        pending.channel.handleHandshakeFrame(m2)
+        const serverResult = responder.finish()
+        this.session = serverResult.session
+        return {
+          clientEphemeralPublic: ephemeralKey,
+          clientStaticPublic: base64UrlEncode(serverResult.remoteStaticPublicKey),
+          prologueHash: base64UrlEncode(serverResult.handshakeHash),
+        }
+      }
     }
 
-    // Enforce strict sequence monotonicity (prevents replay and out-of-order)
-    if (seq <= this.lastIncomingSeq) {
-      throw new Error(`REPLAY_DETECTED: Received seq ${seq} <= last seen ${this.lastIncomingSeq}`)
+    throw new Error(`unsupported role: ${role}`)
+  }
+
+  /**
+   * Start initial pairing handshake (Noise_XXpsk0_25519_ChaChaPoly_SHA256) as initiator.
+   * Returns message 1 frame (CONTROL|FIN) to send to MMS over the relay.
+   */
+  startPairingHandshake(options: {
+    prologue: ChannelPrologue
+    identity: StaticIdentity
+    pairingSecret: Uint8Array | string
+    ephemeral?: X25519KeyPair
+    payload?: Uint8Array
+  }): Uint8Array {
+    this.reset()
+    const psk =
+      typeof options.pairingSecret === 'string'
+        ? options.pairingSecret.length === 64 && /^[0-9a-fA-F]+$/.test(options.pairingSecret)
+          ? hexToBytes(options.pairingSecret)
+          : base64UrlDecode(options.pairingSecret)
+        : options.pairingSecret
+
+    this.pairingHandshake = PairingHandshake.initiator({
+      prologue: {
+        protocolMajor: options.prologue.protocolMajor,
+        protocolMinor: options.prologue.protocolMinor,
+        installationId: options.prologue.installationId,
+        controlOrigin: options.prologue.controlOrigin,
+        mode: options.prologue.mode,
+        accountId: options.prologue.accountId,
+        mmsDeviceId: options.prologue.mmsDeviceId,
+        mobileDeviceId: options.prologue.mobileDeviceId,
+        pairingId: options.prologue.pairingId,
+        initiatorRole: options.prologue.initiatorRole ?? 'mobile',
+        responderRole: options.prologue.responderRole ?? 'mms',
+      },
+      identity: options.identity,
+      pairingSecret: psk,
+      ephemeral: options.ephemeral,
+    })
+    this.activePattern = 'XXpsk0'
+    return this.pairingHandshake.write(options.payload ?? new Uint8Array(0))
+  }
+
+  /**
+   * Start reconnect handshake (Noise_IK_25519_ChaChaPoly_SHA256) as initiator.
+   * Returns message 1 frame (CONTROL|FIN) to send to MMS over the relay.
+   */
+  startReconnectHandshake(options: {
+    prologue: ChannelPrologue
+    identity: StaticIdentity
+    peerStaticPublicKey: Uint8Array | string
+    ephemeral?: X25519KeyPair
+    payload?: Uint8Array
+  }): Uint8Array {
+    this.reset()
+    const peerStatic =
+      typeof options.peerStaticPublicKey === 'string'
+        ? options.peerStaticPublicKey.length === 64 && /^[0-9a-fA-F]+$/.test(options.peerStaticPublicKey)
+          ? hexToBytes(options.peerStaticPublicKey)
+          : base64UrlDecode(options.peerStaticPublicKey)
+        : options.peerStaticPublicKey
+
+    this.reconnectHandshake = ReconnectHandshake.initiator({
+      prologue: {
+        protocolMajor: options.prologue.protocolMajor,
+        protocolMinor: options.prologue.protocolMinor,
+        installationId: options.prologue.installationId,
+        controlOrigin: options.prologue.controlOrigin,
+        mode: options.prologue.mode,
+        accountId: options.prologue.accountId,
+        mmsDeviceId: options.prologue.mmsDeviceId,
+        mobileDeviceId: options.prologue.mobileDeviceId,
+        pairingId: options.prologue.pairingId,
+        initiatorRole: options.prologue.initiatorRole ?? 'mobile',
+        responderRole: options.prologue.responderRole ?? 'mms',
+      },
+      identity: options.identity,
+      remoteStaticPublicKey: peerStatic,
+      ephemeral: options.ephemeral,
+    })
+    this.activePattern = 'IK'
+    return this.reconnectHandshake.write(options.payload ?? new Uint8Array(0))
+  }
+
+  /**
+   * Handle an incoming handshake message frame from MMS.
+   * - In XXpsk0: reads message 2, writes message 3, finishes handshake. Returns msg3 frame.
+   * - In IK: reads message 2, finishes handshake. Returns null.
+   */
+  handleHandshakeFrame(frame: Uint8Array): { outboundFrame: Uint8Array | null; result: HandshakeResult } {
+    if (this.activePattern === 'XXpsk0' && this.pairingHandshake) {
+      this.pairingHandshake.read(frame)
+      const outboundFrame = this.pairingHandshake.write(new Uint8Array(0))
+      const result = this.pairingHandshake.finish()
+      this.session = result.session
+      this.pairingHandshake = null
+      return { outboundFrame, result }
     }
 
-    const ciphertext = frame.subarray(16)
-    const iv = this.makeIv(this.readPrefix, seq)
-
-    let decryptedBuffer: ArrayBuffer
-    try {
-      decryptedBuffer = await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: iv as unknown as BufferSource, tagLength: 128 },
-        this.mmsReadKey,
-        ciphertext as unknown as BufferSource
-      )
-    } catch {
-      throw new Error('AUTH_FAILED: Message authentication failed or ciphertext tampered')
+    if (this.activePattern === 'IK' && this.reconnectHandshake) {
+      this.reconnectHandshake.read(frame)
+      const result = this.reconnectHandshake.finish()
+      this.session = result.session
+      this.reconnectHandshake = null
+      return { outboundFrame: null, result }
     }
 
-    this.lastIncomingSeq = seq
+    throw new Error('no handshake in progress to receive frame')
+  }
 
-    const decryptedText = textDecoder.decode(decryptedBuffer)
-    let envelope: ControlEnvelope
-    try {
-      envelope = JSON.parse(decryptedText) as ControlEnvelope
-    } catch {
-      throw new Error('Decrypted payload is not valid JSON')
+  /** Encrypt an application envelope into a transport relay frame. */
+  async encryptEnvelope(envelope: Envelope): Promise<Uint8Array> {
+    if (!this.session) {
+      throw new Error('secure channel session not established')
     }
+    const plainBytes = encodeEnvelopeBytes(envelope)
+    return this.session.encrypt(plainBytes)
+  }
 
-    if (!envelope || typeof envelope !== 'object' || !('type' in envelope)) {
-      throw new Error('Invalid envelope structure')
+  /** Decrypt a transport relay frame into an application envelope. */
+  async decryptFrame(frame: Uint8Array): Promise<Envelope> {
+    if (!this.session) {
+      throw new Error('secure channel session not established')
     }
-
-    return envelope
+    const plainBytes = this.session.decrypt(frame)
+    return decodeEnvelopeBytes(plainBytes)
   }
 }

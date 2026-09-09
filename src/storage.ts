@@ -1,7 +1,8 @@
 import { Preferences } from '@capacitor/preferences'
 import { Capacitor } from '@capacitor/core'
 import { SecureStorage } from '@aparajita/capacitor-secure-storage'
-import { base64UrlEncode } from './security'
+import { base64UrlEncode, base64UrlDecode } from './security'
+import { generateKeyPair, type X25519KeyPair } from './crypto/keys'
 import type { DeviceIdentity, HostedSession, MachineRecord, TokenSet } from './types'
 
 const TOKEN_KEY = 'mousse.connection.tokens.v1'
@@ -88,32 +89,33 @@ export const deviceIdentity = {
     const existing = await this.get()
     if (existing) return existing
 
-    let keyPair: CryptoKeyPair
-    try {
-      keyPair = (await crypto.subtle.generateKey(
-        { name: 'X25519' },
-        true,
-        ['deriveKey', 'deriveBits']
-      )) as CryptoKeyPair
-    } catch {
-      keyPair = (await crypto.subtle.generateKey(
-        { name: 'ECDH', namedCurve: 'P-256' },
-        true,
-        ['deriveKey', 'deriveBits']
-      )) as CryptoKeyPair
-    }
-
-    const rawPublic = await crypto.subtle.exportKey('raw', keyPair.publicKey)
-    const pkcs8Private = await crypto.subtle.exportKey('pkcs8', keyPair.privateKey)
-
+    const keyPair = generateKeyPair()
     const identity: DeviceIdentity = {
       deviceId: crypto.randomUUID(),
-      publicKey: base64UrlEncode(new Uint8Array(rawPublic)),
-      privateKey: base64UrlEncode(new Uint8Array(pkcs8Private)),
+      publicKey: base64UrlEncode(keyPair.publicKey),
+      privateKey: base64UrlEncode(keyPair.privateKey),
       createdAt: Date.now()
     }
     await this.set(identity)
     return identity
+  },
+  async getKeyPair(): Promise<{ keyPair: X25519KeyPair; deviceId: string }> {
+    const ident = await this.getOrCreate()
+    let privBytes = base64UrlDecode(ident.privateKey)
+    if (privBytes.byteLength > 32) {
+      privBytes = privBytes.subarray(privBytes.byteLength - 32)
+    }
+    let pubBytes = base64UrlDecode(ident.publicKey)
+    if (pubBytes.byteLength > 32) {
+      pubBytes = pubBytes.subarray(pubBytes.byteLength - 32)
+    }
+    return {
+      deviceId: ident.deviceId,
+      keyPair: {
+        privateKey: privBytes,
+        publicKey: pubBytes,
+      }
+    }
   },
   async clear(): Promise<void> {
     await secureRemove(DEVICE_IDENTITY_KEY)

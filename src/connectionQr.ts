@@ -1,4 +1,4 @@
-﻿import {
+import {
   PROTOCOL_MAJOR,
   PROTOCOL_MINOR,
   QR_MAX_PAYLOAD_BYTES,
@@ -15,14 +15,45 @@ import type { ParsedQr, QrPayloadV2 } from './types'
 
 const QR_VERSION_V1 = '1'
 
+export const QR_PAYLOAD_KEY_ORDER = [
+  'mode',
+  'controlOrigin',
+  'installationId',
+  'installationPublicKey',
+  'mmsDeviceId',
+  'mmsIdentityPublicKey',
+  'pairingId',
+  'expiresAt',
+  'protocolMajor',
+  'pairingSecret',
+  'accountId',
+] as const
+
+/**
+ * Deterministic JSON object encoding with fixed key order (omit undefined).
+ */
+export function canonicalizeQrPayload(payload: QrPayloadV2 | Record<string, unknown>): string {
+  const ordered: Record<string, unknown> = {}
+  for (const key of QR_PAYLOAD_KEY_ORDER) {
+    const value = (payload as Record<string, unknown>)[key]
+    if (value !== undefined) {
+      ordered[key] = value
+    }
+  }
+  return JSON.stringify(ordered)
+}
+
 /**
  * Encodes a Mousse QR v2 payload to canonical URL string.
+ * mousse://pair?v=2&data=<base64url(canonical-json)>
  */
-export function encodeQrV2(payload: QrPayloadV2): string {
-  const json = JSON.stringify(payload)
-  const encodedData = base64UrlEncode(new TextEncoder().encode(json))
+export function encodeQrUri(payload: QrPayloadV2): string {
+  const canonicalJson = canonicalizeQrPayload(payload)
+  const encodedData = base64UrlEncode(new TextEncoder().encode(canonicalJson))
   return `mousse://pair?v=2&data=${encodedData}`
 }
+
+export const encodeQrV2 = encodeQrUri
 
 /**
  * Parse a configuration-only desktop/CLI QR (version 1).
@@ -59,15 +90,18 @@ export function parseConnectionQrPayload(value: string): string {
   return normalizedBaseUrl(base)
 }
 
+export interface ParseQrOptions {
+  rejectExpired?: boolean
+  nowMs?: number
+}
+
 /**
- * Unified QR parser supporting both Control Protocol 2.0 (mousse://pair?v=2)
- * and legacy protocol 1.0 (mousse://connect?v=1).
- * Enforces strict schema, canonical origin, size bounds, and expiration.
+ * Parses raw QR v2 URI and returns QrPayloadV2.
  */
-export async function parseQr(value: string): Promise<ParsedQr> {
+export function parseQrUri(uri: string, options: ParseQrOptions = {}): QrPayloadV2 {
   let url: URL
   try {
-    url = new URL(value)
+    url = new URL(uri)
   } catch {
     throw new Error('This is not a valid Mousse connection QR code.')
   }
@@ -76,13 +110,6 @@ export async function parseQr(value: string): Promise<ParsedQr> {
     throw new Error('QR code must use the mousse: scheme.')
   }
 
-  // Check legacy v1 format
-  if (url.hostname === 'connect') {
-    const baseUrl = parseConnectionQrPayload(value)
-    return { version: 1, baseUrl }
-  }
-
-  // Version 2 format: mousse://pair?v=2&data=<base64url>
   if (url.hostname !== 'pair' || url.pathname !== '') {
     throw new Error('This QR code is not a valid Mousse pairing request.')
   }
@@ -109,7 +136,9 @@ export async function parseQr(value: string): Promise<ParsedQr> {
   }
 
   if (decodedBytes.byteLength > QR_MAX_PAYLOAD_BYTES) {
-    throw new Error(`Pairing QR payload size (${decodedBytes.byteLength} bytes) exceeds limit of ${QR_MAX_PAYLOAD_BYTES} bytes.`)
+    throw new Error(
+      `Pairing QR payload size (${decodedBytes.byteLength} bytes) exceeds limit of ${QR_MAX_PAYLOAD_BYTES} bytes.`
+    )
   }
 
   let data: Record<string, unknown>
@@ -152,7 +181,9 @@ export async function parseQr(value: string): Promise<ParsedQr> {
     throw new Error('Pairing QR is missing valid expiresAt timestamp.')
   }
 
-  if (Date.now() >= data.expiresAt) {
+  const rejectExpired = options.rejectExpired ?? true
+  const nowMs = options.nowMs ?? Date.now()
+  if (rejectExpired && nowMs >= data.expiresAt) {
     throw new Error('This pairing QR code has expired. Please request a fresh QR code from your computer.')
   }
 
@@ -178,6 +209,34 @@ export async function parseQr(value: string): Promise<ParsedQr> {
     pairingSecret: data.pairingSecret,
     accountId: typeof data.accountId === 'string' ? data.accountId : undefined
   }
+
+  return payload
+}
+
+/**
+ * Unified QR parser supporting both Control Protocol 2.0 (mousse://pair?v=2)
+ * and legacy protocol 1.0 (mousse://connect?v=1).
+ * Enforces strict schema, canonical origin, size bounds, and expiration.
+ */
+export async function parseQr(value: string, options: ParseQrOptions = {}): Promise<ParsedQr> {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    throw new Error('This is not a valid Mousse connection QR code.')
+  }
+
+  if (url.protocol !== 'mousse:') {
+    throw new Error('QR code must use the mousse: scheme.')
+  }
+
+  // Check legacy v1 format
+  if (url.hostname === 'connect') {
+    const baseUrl = parseConnectionQrPayload(value)
+    return { version: 1, baseUrl }
+  }
+
+  const payload = parseQrUri(value, options)
 
   const [fp, mmsFp] = await Promise.all([
     fingerprint(payload.installationPublicKey),

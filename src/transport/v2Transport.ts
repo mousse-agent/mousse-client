@@ -5,6 +5,10 @@ import {
   PROTOCOL_MINOR
 } from '../constants'
 import { SecureChannel } from '../crypto/secureChannel'
+import { FRAME_FLAG_CONTROL } from '../crypto/framing'
+import { type Envelope } from '../crypto/envelopes'
+import { type X25519KeyPair } from '../crypto/keys'
+import { deviceIdentity } from '../storage'
 import { RelayClient } from '../relay/relayClient'
 import {
   ConnectionStatus,
@@ -25,6 +29,7 @@ export type V2TransportOptions = {
   mmsDeviceId: string
   pairingSecret?: string
   isInitialPairing?: boolean
+  identityKeyPair?: X25519KeyPair
   getAdmissionToken: () => Promise<string>
   onStatusChange?: (status: ConnectionStatus) => void
   onHealthUpdate?: (health: { latencyMs: number; lastHeartbeat: number }) => void
@@ -122,35 +127,42 @@ export class V2Transport {
 
   private async initiateChannel(): Promise<void> {
     try {
-      await this.secureChannel.initializeSession({
-        peerStaticPublicKey: this.options.peerStaticPublicKey,
-        pairingSecret: this.options.pairingSecret,
-        prologue: {
-          protocolMajor: PROTOCOL_MAJOR,
-          protocolMinor: PROTOCOL_MINOR,
-          installationId: this.options.installationId,
-          controlOrigin: this.options.controlOrigin,
-          mode: this.options.mode,
-          accountId: this.options.accountId,
-          mmsDeviceId: this.options.mmsDeviceId,
-          mobileDeviceId: this.options.deviceId,
-          pairingId: this.options.pairingId
-        },
-        role: 'client'
-      })
+      this.secureChannel.reset()
 
-      if (this.approvalPending) {
-        this.setStatus('approval_pending')
-        // Send initial handshake request to MMS proving pairingSecret possession
-        await this.request('pairing.requestApproval', {
-          deviceId: this.options.deviceId,
-          deviceName: 'Mousse Mobile',
-          scopes: ['mousse:read', 'mousse:chat', 'mousse:write', 'mousse:terminal', 'mousse:settings']
-        })
-        this.approvalPending = false
+      const identity = this.options.identityKeyPair
+        ? { keyPair: this.options.identityKeyPair }
+        : await deviceIdentity.getKeyPair()
+
+      const prologue = {
+        protocolMajor: PROTOCOL_MAJOR,
+        protocolMinor: PROTOCOL_MINOR,
+        installationId: this.options.installationId,
+        controlOrigin: this.options.controlOrigin,
+        mode: this.options.mode,
+        accountId: this.options.accountId,
+        mmsDeviceId: this.options.mmsDeviceId,
+        mobileDeviceId: this.options.deviceId,
+        pairingId: this.options.pairingId,
+        initiatorRole: 'mobile' as const,
+        responderRole: 'mms' as const,
       }
 
-      this.setStatus('live')
+      let m1: Uint8Array
+      if (this.options.pairingSecret) {
+        m1 = this.secureChannel.startPairingHandshake({
+          prologue,
+          identity,
+          pairingSecret: this.options.pairingSecret,
+        })
+      } else {
+        m1 = this.secureChannel.startReconnectHandshake({
+          prologue,
+          identity,
+          peerStaticPublicKey: this.options.peerStaticPublicKey,
+        })
+      }
+
+      this.relay?.sendFrame(m1)
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
       if (msg.includes(ERROR_CODES.DEVICE_REVOKED) || msg.includes(ERROR_CODES.PAIRING_REVOKED)) {
@@ -162,9 +174,38 @@ export class V2Transport {
   }
 
   private async handleIncomingFrame(frame: Uint8Array): Promise<void> {
+    if (frame.byteLength >= 4 && (frame[3] & FRAME_FLAG_CONTROL) !== 0) {
+      try {
+        const { outboundFrame } = this.secureChannel.handleHandshakeFrame(frame)
+        if (outboundFrame) {
+          this.relay?.sendFrame(outboundFrame)
+        }
+        if (this.secureChannel.isEstablished()) {
+          if (this.approvalPending) {
+            this.setStatus('approval_pending')
+            await this.request('pairing.requestApproval', {
+              deviceId: this.options.deviceId,
+              deviceName: 'Mousse Mobile',
+              scopes: ['mousse:read', 'mousse:chat', 'mousse:write', 'mousse:terminal', 'mousse:settings']
+            })
+            this.approvalPending = false
+          }
+          this.setStatus('live')
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error)
+        if (msg.includes(ERROR_CODES.DEVICE_REVOKED) || msg.includes(ERROR_CODES.PAIRING_REVOKED)) {
+          this.handleRevocation()
+        } else {
+          this.setStatus('reconnecting')
+        }
+      }
+      return
+    }
+
     let envelope: ControlEnvelope
     try {
-      envelope = await this.secureChannel.decryptFrame(frame)
+      envelope = (await this.secureChannel.decryptFrame(frame)) as unknown as ControlEnvelope
     } catch (error) {
       return
     }
@@ -256,7 +297,7 @@ export class V2Transport {
     if (!this.relay || !this.secureChannel.isEstablished()) {
       throw new Error('Channel is not ready')
     }
-    const frame = await this.secureChannel.encryptEnvelope(envelope)
+    const frame = await this.secureChannel.encryptEnvelope(envelope as unknown as Envelope)
     this.relay.sendFrame(frame)
   }
 

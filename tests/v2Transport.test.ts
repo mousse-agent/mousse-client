@@ -5,8 +5,13 @@ import { base64UrlEncode } from '../src/security'
 import { V2Transport } from '../src/transport/v2Transport'
 import { OutcomeUnknownError, type ControlEnvelope, type RequestEnvelope } from '../src/types'
 
+import { generateKeyPair, type X25519KeyPair } from '../src/crypto/keys'
+import { ReconnectHandshake } from '../src/crypto/handshake'
+import type { PrologueContext } from '../src/crypto/prologue'
+
 // Mock RelayClient to control frames directly in tests
 let lastRelayClientInstance: any = null
+let activeMmsResponder: any = null
 
 vi.mock('../src/relay/relayClient', () => {
   return {
@@ -30,6 +35,15 @@ vi.mock('../src/relay/relayClient', () => {
 
       this.sendFrame = vi.fn((frame: Uint8Array) => {
         this.sentFrames.push(frame)
+        if (frame.byteLength >= 4 && (frame[3] & 0x02) !== 0 && activeMmsResponder) {
+          setTimeout(() => {
+            activeMmsResponder.read(frame)
+            if (!activeMmsResponder.isComplete()) {
+              const m2 = activeMmsResponder.write()
+              this.simulateIncomingFrame(m2)
+            }
+          }, 0)
+        }
       })
 
       this.simulateIncomingFrame = (frame: Uint8Array) => {
@@ -46,7 +60,7 @@ vi.mock('../src/relay/relayClient', () => {
 })
 
 describe('V2Transport', () => {
-  let mmsStaticKey: CryptoKeyPair
+  let mmsStaticKeyPair: X25519KeyPair
   let mmsStaticPublic: string
   const prologue = {
     protocolMajor: 2,
@@ -63,14 +77,10 @@ describe('V2Transport', () => {
   beforeEach(async () => {
     vi.clearAllMocks()
     lastRelayClientInstance = null
+    activeMmsResponder = null
 
-    mmsStaticKey = (await crypto.subtle.generateKey(
-      { name: 'X25519' },
-      true,
-      ['deriveBits']
-    )) as CryptoKeyPair
-    const mmsRaw = await crypto.subtle.exportKey('raw', mmsStaticKey.publicKey)
-    mmsStaticPublic = base64UrlEncode(new Uint8Array(mmsRaw))
+    mmsStaticKeyPair = generateKeyPair()
+    mmsStaticPublic = base64UrlEncode(mmsStaticKeyPair.publicKey)
   })
 
   async function createEstablishedTransport(options?: {
@@ -78,6 +88,24 @@ describe('V2Transport', () => {
     onSnapshotRequired?: (reason: string) => void
     onEvent?: (ev: any) => void
   }) {
+    const prologueCtx: PrologueContext = {
+      protocolMajor: 2,
+      protocolMinor: 0,
+      installationId: 'inst-1',
+      controlOrigin: 'https://mousse.example.com',
+      mode: 'hosted',
+      accountId: 'acc-1',
+      mmsDeviceId: 'mms-dev-1',
+      mobileDeviceId: 'phone-dev-1',
+      pairingId: 'pair-1',
+      initiatorRole: 'mobile',
+      responderRole: 'mms',
+    }
+    activeMmsResponder = ReconnectHandshake.responder({
+      prologue: prologueCtx,
+      identity: { keyPair: mmsStaticKeyPair },
+    })
+
     const transport = new V2Transport({
       relayUrl: 'wss://relay.example.com',
       deviceId: 'phone-dev-1',
