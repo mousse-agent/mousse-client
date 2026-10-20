@@ -236,6 +236,17 @@ describe('real connection', () => {
     expect(again.account()).toMatchObject({ status: 'signed-in' })
   })
 
+  it('returns the same account object until the account changes', async () => {
+    // useSyncExternalStore re-renders forever when the snapshot is a new object each time.
+    const { connection } = await connect(world())
+    const signedOut = connection.account()
+    expect(connection.account()).toBe(signedOut)
+    await connection.signInWithPassword('a@b.test', 'pw')
+    const signedIn = connection.account()
+    expect(signedIn).not.toBe(signedOut)
+    expect(connection.account()).toBe(signedIn)
+  })
+
   it('opens the sign-up page of the configured server', async () => {
     const opened: string[] = []
     const { connection } = await connect(world(), { openExternal: async (url) => void opened.push(url) })

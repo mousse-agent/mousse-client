@@ -90,6 +90,7 @@ class RealConnection implements MousseConnection {
   private readonly session?: MousseIdSession
   private readonly net?: MousseIdNet
   private devices?: { used: number; limit: number }
+  private accountSnapshot?: { key: string; state: AccountState }
   private readonly grantLocks = new Map<string, Promise<unknown>>()
 
   constructor(
@@ -113,15 +114,21 @@ class RealConnection implements MousseConnection {
     await this.session?.load()
   }
 
+  /** The same object until the state changes: React's useSyncExternalStore re-renders forever otherwise. */
   account(): AccountState {
     const current = this.session?.current()
-    if (!this.session || !current) return { status: 'signed-out' }
-    return {
-      status: 'signed-in',
-      account: { id: current.account.id, email: current.account.email },
-      idOrigin: this.session.http.origin,
-      ...(this.devices ? { devices: this.devices } : {}),
-    }
+    const next: AccountState =
+      !this.session || !current
+        ? { status: 'signed-out' }
+        : {
+            status: 'signed-in',
+            account: { id: current.account.id, email: current.account.email },
+            idOrigin: this.session.http.origin,
+            ...(this.devices ? { devices: this.devices } : {}),
+          }
+    const key = JSON.stringify(next)
+    if (this.accountSnapshot?.key !== key) this.accountSnapshot = { key, state: next }
+    return this.accountSnapshot.state
   }
 
   onAccountChange(listener: (state: AccountState) => void): () => void {

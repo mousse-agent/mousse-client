@@ -31,26 +31,30 @@ export class MemoryKeyStorage implements KeyStorage {
  * plugin falls back to localStorage, which is acceptable only for development.
  */
 export class SecureKeyStorage implements KeyStorage {
+  // Wrapped in an object on purpose: a Capacitor plugin is a proxy that answers to `then`, so
+  // resolving a promise with the plugin itself never settles and the app hangs on start.
   private plugin?: Promise<{
-    getItem(key: string): Promise<string | null>
-    setItem(key: string, value: string): Promise<void>
-    removeItem(key: string): Promise<void>
+    storage: {
+      getItem(key: string): Promise<string | null>
+      setItem(key: string, value: string): Promise<void>
+      removeItem(key: string): Promise<void>
+    }
   }>
   private load() {
     this.plugin ??= import('@aparajita/capacitor-secure-storage').then(async ({ SecureStorage }) => {
       await SecureStorage.setKeyPrefix('mousse.')
-      return SecureStorage
+      return { storage: SecureStorage }
     })
     return this.plugin
   }
   async getItem(key: string): Promise<string | null> {
-    return (await this.load()).getItem(key)
+    return (await this.load()).storage.getItem(key)
   }
   async setItem(key: string, value: string): Promise<void> {
-    await (await this.load()).setItem(key, value)
+    await (await this.load()).storage.setItem(key, value)
   }
   async removeItem(key: string): Promise<void> {
-    await (await this.load()).removeItem(key)
+    await (await this.load()).storage.removeItem(key)
   }
 }
 
