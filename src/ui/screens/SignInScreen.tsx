@@ -1,10 +1,8 @@
 import { useState, type FormEvent } from 'react'
 import { useConnection } from '../hooks/connection'
 import { errorMessage } from '../hooks/useAsync'
-import { LiquidGlassOrb } from '../components/LiquidGlassOrb'
 import { Button, Field, MousseLogo, Notice } from '../components/primitives'
 import { Lock, Mail } from '../components/icons'
-import { useReducedMotion } from '../hooks/useMediaQuery'
 
 type Pending = 'password' | 'google'
 
@@ -22,7 +20,6 @@ function GoogleMark() {
 
 export function SignInScreen() {
   const connection = useConnection()
-  const reducedMotion = useReducedMotion()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [pending, setPending] = useState<Pending>()
@@ -41,10 +38,6 @@ export function SignInScreen() {
 
   return (
     <main className="m-screen m-signin">
-      <div className="m-signin__hero" aria-hidden="true">
-        <div className="m-empty__aura" />
-        <LiquidGlassOrb appearance={{ palette: 'violet', motion: 0.25, parallax: false }} active={!reducedMotion} />
-      </div>
       <div className="m-signin__panel">
         <div className="m-signin__brand">
           <MousseLogo size={30} />

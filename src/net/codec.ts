@@ -46,6 +46,7 @@ export type WireMessage =
   | { t: 'caughtUp'; stream: string }
   | { t: 'snapshotRequired'; stream: string; reason: string; head: StreamHead }
   | { t: 'unsubscribe'; stream: string }
+  | { t: 'snapshot.get'; stream: string }
   | { t: 'rpc.request'; id: string; method: string; params: unknown; idem?: string; deadlineMs: number }
   | { t: 'rpc.progress'; id: string; data: unknown }
   | { t: 'rpc.result'; id: string; result?: unknown; error?: WireError; blob?: unknown }

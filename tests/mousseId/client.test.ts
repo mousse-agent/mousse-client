@@ -188,7 +188,7 @@ function phoneIdentity(): ControlIdentity {
   return { user: user.user, rootKey: user.rootKey, node, roster: roster(user, computer.node), delegation, signSecret: keys.signSecret, ...{ signPublic: keys.public.sign } } as ControlIdentity
 }
 
-const CONFIG = { protocol: 1, installationId: 'inst_1', gatewayId: 'gw_1', relayAudience: RELAY }
+const CONFIG = { protocol: 'mousse-plus/net-control/v1', installationId: 'inst_1', gatewayId: 'gw_1', relayAudience: RELAY }
 
 function controlServer(identity: ControlIdentity, tamper: (statement: Record<string, unknown>) => void = () => {}) {
   const challenges: Record<string, unknown>[] = []
@@ -282,6 +282,7 @@ describe('Mousse ID Net routes', () => {
         return {
           body: {
             limits: { maxRegistrations: 16, maxPhones: 5 },
+            devices: { used: 2, limit: 5 },
             registrations: [
               { id: 'r1', userId: 'u', nodeId: 'n1', generation: 1, expiresAt: 9, revokedAt: null, kind: 'computer', deviceName: 'Studio', online: true },
               { id: 'r2', userId: 'u', nodeId: 'n2', generation: 1, expiresAt: 9, revokedAt: null },
@@ -303,6 +304,7 @@ describe('Mousse ID Net routes', () => {
 
     const inventory = await net.inventory()
     expect(inventory.limits).toEqual({ maxRegistrations: 16, maxComputers: undefined, maxPhones: 5 })
+    expect(inventory.devices).toEqual({ used: 2, limit: 5 })
     expect(inventory.registrations).toEqual([
       expect.objectContaining({ id: 'r1', kind: 'computer', deviceName: 'Studio', online: true }),
       expect.objectContaining({ id: 'r2', kind: 'computer', online: false }),

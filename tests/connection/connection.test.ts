@@ -1,0 +1,344 @@
+// @vitest-environment node
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createMousseConnection, type ConnectionDeps } from '../../src/connection'
+import type { EnrollmentProgress } from '../../src/connection/types'
+import type { FetchLike } from '../../src/mousseId/http'
+import { sealForOffer, sealForRequest } from '../../src/mousseId/seal'
+import { b64url, fromB64url, randomBytes } from '../../src/net/bytes'
+import { canonicalJson, newId } from '../../src/net/canonical'
+import { sha256, signDocument } from '../../src/net/crypto'
+import { encodeInvite, type Enrollment, type NodeInviteAuthorization, type RedeemOptions } from '../../src/net/enrollment'
+import { MemoryKeyStorage } from '../../src/net/keys'
+import { streamPair } from '../../src/net/stream'
+import { delegate, roster, testComputer, testUser, type TestComputer, type TestUser } from '../net/fixtures'
+import { channelOf, fakeComputer } from './helpers'
+
+const ORIGIN = 'https://id.test'
+const RELAY = 'wss://id.test/v1/net/relay'
+const CONFIG = { protocol: 'mousse-plus/net-control/v1', installationId: 'inst_1', gatewayId: 'gw_1', relayAudience: RELAY, approvalOrigin: 'https://dash.test' }
+
+interface Call {
+  method: string
+  path: string
+  bearer?: string
+  body?: Record<string, unknown>
+}
+
+/** A Mousse ID API with one account, one computer and scripted enrollment answers. */
+function idServer(world: World) {
+  const calls: Call[] = []
+  const requests = new Map<string, { status: string; sealedInvite?: string; polls: number }>()
+  let registrations = 0
+  const fetcher: FetchLike = async (input, init) => {
+    const url = new URL(input)
+    const headers = init.headers as Record<string, string>
+    const call: Call = {
+      method: init.method!,
+      path: url.pathname,
+      bearer: headers.authorization?.replace(/^Bearer /, ''),
+      body: init.body ? JSON.parse(init.body as string) : undefined,
+    }
+    calls.push(call)
+    const reply = (body: unknown, status = 200) => new Response(body === undefined ? null : JSON.stringify(body), { status })
+    const now = Date.now()
+    const path = call.path
+    if (path === '/v1/app/session/password')
+      return reply({ accessToken: 'access-1', refreshToken: 'refresh-1', expiresAt: now + 3_600_000, account: { id: 'acct_1', email: 'a@b.test' } })
+    if (path === '/v1/app/session/logout') return reply(undefined, 204)
+    if (path === '/v1/net/config') return reply(CONFIG)
+    if (path === '/v1/net/inventory')
+      return reply({
+        registrations: [
+          { id: 'reg_c', userId: world.user.user, nodeId: world.computer.node, kind: 'computer', deviceName: 'Studio', online: true, generation: 1, expiresAt: now + 60_000, revokedAt: null },
+          { id: 'reg_old', userId: world.user.user, nodeId: world.computer.node, kind: 'computer', deviceName: 'Studio', online: false, generation: 1, expiresAt: now - 1, revokedAt: null },
+          { id: 'reg_gone', userId: world.user.user, nodeId: 'nod_gone', kind: 'computer', deviceName: 'Old', online: false, generation: 1, expiresAt: now, revokedAt: now - 5 },
+        ],
+        limits: { maxComputers: 3 },
+        devices: { used: 1, limit: 5 },
+      })
+    if (path === '/v1/net/enrollment-requests' && call.method === 'POST') {
+      const id = `req_${requests.size + 1}`
+      requests.set(id, { status: 'pending', polls: 0 })
+      world.onRequest?.(id, call.body!)
+      return reply({ id, expiresAt: now + 600_000 }, 201)
+    }
+    const requestMatch = /^\/v1\/net\/enrollment-requests\/(req_\d+)$/.exec(path)
+    if (requestMatch) {
+      const entry = requests.get(requestMatch[1])!
+      entry.polls++
+      const decided = world.decide?.(requestMatch[1], entry.polls)
+      if (decided) Object.assign(entry, decided)
+      const sealed = entry.sealedInvite
+      if (sealed) {
+        entry.sealedInvite = undefined
+        entry.status = 'delivered'
+        return reply({ id: requestMatch[1], status: 'approved', expiresAt: now + 600_000, sealedInvite: sealed })
+      }
+      return reply({ id: requestMatch[1], status: entry.status, expiresAt: now + 600_000 })
+    }
+    if (path === '/v1/net/enrollment-offers/off_1') return world.offer ? reply({ sealedInvite: world.offer }) : reply({ error: { code: 'expired' } }, 410)
+    if (path === '/v1/net/challenges') {
+      const body = call.body!
+      return reply({
+        v: 1,
+        domain: 'mousse-plus/net-control/v1',
+        installationId: CONFIG.installationId,
+        audience: RELAY,
+        challengeId: crypto.randomUUID(),
+        nonce: b64url(new Uint8Array(32).fill(7)),
+        accountId: 'acct_1',
+        userId: body.userId,
+        rootKey: body.rootKey,
+        nodeId: body.nodeId,
+        purpose: body.purpose,
+        operationId: body.operationId,
+        intentHash: b64url(sha256(canonicalJson(body.intent))),
+        issuedAt: now,
+        expiresAt: now + 60_000,
+      })
+    }
+    if (path === '/v1/net/registrations') {
+      registrations++
+      const intent = call.body!
+      world.phoneNode = String(calls.filter((c) => c.path === '/v1/net/challenges').at(-1)!.body!.nodeId)
+      expect(intent.kind).toBe('phone')
+      return reply(
+        {
+          registration: { id: 'reg_p', accountId: 'acct_1', userId: world.user.user, nodeId: world.phoneNode, generation: registrations, expiresAt: now + 60_000 },
+          connectorToken: 'c'.repeat(40),
+          relayAudience: RELAY,
+        },
+        201,
+      )
+    }
+    if (path === '/v1/net/registrations/reg_p/renew') {
+      if (world.renewError) return reply({ error: { code: world.renewError } }, 403)
+      return reply({ id: 'reg_p', accountId: 'acct_1', userId: world.user.user, nodeId: world.phoneNode, generation: registrations, expiresAt: now + 60_000 })
+    }
+    return reply({ error: { code: 'not_found' } }, 404)
+  }
+  return { calls, fetcher, requests }
+}
+
+interface World {
+  user: TestUser
+  computer: TestComputer
+  phoneNode?: string
+  offer?: string
+  renewError?: string
+  onRequest?: (id: string, body: Record<string, unknown>) => void
+  decide?: (id: string, polls: number) => { status?: string; sealedInvite?: string } | undefined
+}
+
+function world(): World {
+  const user = testUser()
+  return { user, computer: testComputer(user) }
+}
+
+/** A real invite text from the world's computer, carrying the hosted relay rendezvous. */
+function invite(w: World, name?: string): string {
+  const issuedAt = Date.now() - 500
+  const expiresAt = issuedAt + 10 * 60_000
+  const routes = signDocument(
+    { v: 1, node: w.computer.node, routes: [{ transport: 'plus-relay', address: `${RELAY}?node=${w.computer.node}`, priority: 0 }], version: 1, issuedAt },
+    w.computer.keys.signSecret,
+  )
+  const token = randomBytes(32)
+  const document: NodeInviteAuthorization = {
+    v: 1,
+    kind: 'nodeInvite',
+    invite: newId('invite'),
+    user: w.user.user,
+    node: w.computer.node,
+    rootKey: w.user.rootKey,
+    roster: roster(w.user, w.computer.node),
+    delegation: w.computer.delegation,
+    routes,
+    transportFingerprint: b64url(sha256(w.computer.keys.transport.spki)),
+    tokenHash: b64url(sha256(token)),
+    issuedAt,
+    expiresAt,
+    caps: ['read', 'chat'],
+    ...(name ? { name } : {}),
+    rendezvous: { transport: 'plus-relay', relay: RELAY, ticket: b64url(randomBytes(32)), expiresAt },
+  }
+  return encodeInvite(signDocument(document, w.computer.keys.signSecret), token)
+}
+
+/** Stands in for the enrollment handshake: the computer delegates the phone's keys. */
+function fakeRedeem(w: World, seen: RedeemOptions[]) {
+  return async (options: RedeemOptions): Promise<Enrollment> => {
+    seen.push(options)
+    const delegation = delegate(w.user, options.node, options.keys, { name: options.name, caps: ['read', 'chat'] })
+    return {
+      v: 1,
+      user: w.user.user,
+      rootKey: w.user.rootKey,
+      node: options.node,
+      authority: w.computer.node,
+      authorityName: 'Studio',
+      name: options.name,
+      caps: ['read', 'chat'],
+      delegation,
+      roster: roster(w.user, w.computer.node),
+      routes: signDocument({ v: 1 }, w.computer.keys.signSecret),
+      enrolledAt: Date.now(),
+    }
+  }
+}
+
+async function connect(w: World, extra: Partial<ConnectionDeps> = {}) {
+  const server = idServer(w)
+  const storage = new MemoryKeyStorage()
+  const redeemed: RedeemOptions[] = []
+  const deps: ConnectionDeps = { origin: ORIGIN, storage, fetcher: server.fetcher, redeem: fakeRedeem(w, redeemed), pollMs: 1, ...extra }
+  const connection = await createMousseConnection(deps)
+  return { connection, server, storage, redeemed, deps }
+}
+
+afterEach(() => {
+  vi.useRealTimers()
+})
+
+describe('real connection without a Mousse ID server', () => {
+  it('loads signed out and explains every sign-in attempt', async () => {
+    const connection = await createMousseConnection({ origin: '', storage: new MemoryKeyStorage() })
+    expect(connection.account()).toEqual({ status: 'signed-out' })
+    await expect(connection.signInWithPassword('a@b.test', 'pw')).rejects.toThrow('This build has no Mousse ID server configured.')
+    await expect(connection.signInWithGoogle()).rejects.toThrow('This build has no Mousse ID server configured.')
+    await expect(connection.openSignUp()).rejects.toThrow('This build has no Mousse ID server configured.')
+    await expect(connection.listComputers()).rejects.toThrow('This build has no Mousse ID server configured.')
+    await connection.signOut()
+  })
+
+  it('rejects an origin that is not https', async () => {
+    const connection = await createMousseConnection({ origin: 'http://id.test', storage: new MemoryKeyStorage() })
+    await expect(connection.signInWithPassword('a@b.test', 'pw')).rejects.toMatchObject({ code: 'not_configured' })
+  })
+})
+
+describe('real connection', () => {
+  it('signs in, reports devices and lists computers once', async () => {
+    const w = world()
+    const { connection, storage } = await connect(w)
+    const states: unknown[] = []
+    connection.onAccountChange((state) => states.push(state))
+    await connection.signInWithPassword('a@b.test', 'pw')
+    expect(connection.account()).toMatchObject({ status: 'signed-in', account: { id: 'acct_1', email: 'a@b.test' }, idOrigin: ORIGIN })
+
+    const computers = await connection.listComputers()
+    expect(computers).toEqual([{ nodeId: w.computer.node, name: 'Studio', kind: 'computer', online: true, enrolled: false }])
+    expect(connection.account()).toMatchObject({ devices: { used: 1, limit: 5 } })
+    expect(states.length).toBeGreaterThan(0)
+
+    // The session survives a restart.
+    const again = await createMousseConnection({ origin: ORIGIN, storage, fetcher: idServer(w).fetcher })
+    expect(again.account()).toMatchObject({ status: 'signed-in' })
+  })
+
+  it('opens the sign-up page of the configured server', async () => {
+    const opened: string[] = []
+    const { connection } = await connect(world(), { openExternal: async (url) => void opened.push(url) })
+    await connection.openSignUp()
+    expect(opened).toEqual(['https://dash.test/signup'])
+  })
+
+  it('enrolls through an approved request, registers the phone and opens the computer', async () => {
+    const w = world()
+    let boxKey = ''
+    w.onRequest = (_id, body) => {
+      boxKey = String(body.boxPublicKey)
+      expect(body).toMatchObject({ targetNodeId: w.computer.node, deviceName: 'Pixel', kind: 'phone' })
+      expect(String(body.transportFingerprint)).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    }
+    w.decide = (id, polls) => (polls === 2 ? { status: 'approved', sealedInvite: sealForRequest(invite(w), fromB64url(boxKey, 32), id) } : undefined)
+    const { connection, server, redeemed, deps } = await connect(w)
+    await connection.signInWithPassword('a@b.test', 'pw')
+
+    const progress: EnrollmentProgress[] = []
+    await connection.enrollWithComputer(w.computer.node, 'Pixel', (p) => progress.push(p))
+    expect(progress.map((p) => p.stage)).toEqual(['requesting', 'waiting-approval', 'connecting', 'done'])
+    expect(progress[1].matchCode).toMatch(/^\d{6}$/)
+    expect(redeemed[0]).toMatchObject({ name: 'Pixel' })
+    expect(redeemed[0].node).toBe(w.phoneNode)
+    expect(server.calls.filter((call) => call.path === '/v1/net/registrations')).toHaveLength(1)
+
+    const computers = await connection.listComputers()
+    expect(computers.find((c) => c.nodeId === w.computer.node)?.enrolled).toBe(true)
+
+    // Open: the stored registration is still fresh, so no new registration; the session runs over the injected channel.
+    let remote: ReturnType<typeof fakeComputer> | undefined
+    deps.openChannel = async (target) => {
+      expect(target.route).toBe(`${RELAY}?node=${w.computer.node}`)
+      expect(target.grant.registration.id).toBe('reg_p')
+      expect(target.expectedSpki).toEqual(w.computer.keys.transport.spki)
+      const [a, b] = streamPair()
+      remote = fakeComputer(b, w.user, w.computer, roster(w.user, w.computer.node))
+      void remote.handshake()
+      return channelOf(a, w.computer.keys.transport.spki)
+    }
+    const session = await connection.openComputer(w.computer.node)
+    expect(session.state()).toBe('open')
+    const projects = session.listProjects()
+    await remote!.answer('projects.list', { projects: [{ id: 'p1', name: 'Site' }] })
+    expect(await projects).toEqual([{ id: 'p1', name: 'Site' }])
+    session.close()
+    expect(server.calls.filter((call) => call.path === '/v1/net/registrations')).toHaveLength(1)
+  })
+
+  it('renews the registration while a session is open and closes it when Mousse ID revokes the phone', async () => {
+    const w = world()
+    const { connection, server, deps } = await connect(w, { renewMs: 20 })
+    await connection.signInWithPassword('a@b.test', 'pw')
+    w.offer = sealForOffer(invite(w), new Uint8Array(32).fill(3))
+    await connection.enrollFromQr(`mousse://net/join?v=1&plus=${encodeURIComponent(ORIGIN)}&offer=off_1&key=${b64url(new Uint8Array(32).fill(3))}`, () => undefined)
+    deps.openChannel = async () => {
+      const [a, b] = streamPair()
+      void fakeComputer(b, w.user, w.computer, roster(w.user, w.computer.node)).handshake()
+      return channelOf(a, w.computer.keys.transport.spki)
+    }
+    const session = await connection.openComputer(w.computer.node)
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(server.calls.filter((call) => call.path === '/v1/net/registrations/reg_p/renew').length).toBeGreaterThan(0)
+    w.renewError = 'revoked'
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(session.state()).toBe('closed')
+  })
+
+  it('reports a denied request and an unknown computer', async () => {
+    const w = world()
+    w.decide = () => ({ status: 'denied' })
+    const { connection } = await connect(w)
+    await connection.signInWithPassword('a@b.test', 'pw')
+    const progress: EnrollmentProgress[] = []
+    await expect(connection.enrollWithComputer(w.computer.node, 'Pixel', (p) => progress.push(p))).rejects.toThrow(/declined/)
+    expect(progress.at(-1)).toMatchObject({ stage: 'denied' })
+    await expect(connection.openComputer(w.computer.node)).rejects.toThrow('Add this phone to that computer first.')
+  })
+
+  it('refuses a QR code for another server', async () => {
+    const { connection } = await connect(world())
+    await connection.signInWithPassword('a@b.test', 'pw')
+    const progress: EnrollmentProgress[] = []
+    const key = b64url(new Uint8Array(32))
+    await expect(
+      connection.enrollFromQr(`mousse://net/join?v=1&plus=${encodeURIComponent('https://other.test')}&offer=off_1&key=${key}`, (p) => progress.push(p)),
+    ).rejects.toThrow(/another Mousse ID server/)
+    expect(progress).toEqual([{ stage: 'error', message: expect.stringMatching(/another Mousse ID server/) }])
+  })
+
+  it('forgets relay credentials but keeps enrollments on sign-out', async () => {
+    const w = world()
+    const { connection, storage } = await connect(w)
+    await connection.signInWithPassword('a@b.test', 'pw')
+    w.offer = sealForOffer(invite(w, 'Phone'), new Uint8Array(32).fill(4))
+    await connection.enrollFromQr(`mousse://net/join?v=1&plus=${encodeURIComponent(ORIGIN)}&offer=off_1&key=${b64url(new Uint8Array(32).fill(4))}`, () => undefined)
+    const read = async () => JSON.parse((await storage.getItem('net.enrollments'))!) as Array<{ grant?: unknown }>
+    expect((await read())[0].grant).toBeTruthy()
+    await connection.signOut()
+    expect(connection.account()).toEqual({ status: 'signed-out' })
+    const after = await read()
+    expect(after).toHaveLength(1)
+    expect(after[0].grant).toBeUndefined()
+  })
+})

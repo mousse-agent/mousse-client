@@ -16,7 +16,8 @@ const ID = /^[A-Za-z0-9_-]{1,128}$/
 const DEVICE_NAME_MAX = 64
 
 export interface MousseIdConfig {
-  protocol: number
+  /** Protocol name, for example `mousse-plus/net-control/v1`. */
+  protocol: string
   installationId: string
   gatewayId: string
   relayAudience: string
@@ -63,6 +64,8 @@ export interface InventoryRegistration {
 export interface Inventory {
   registrations: InventoryRegistration[]
   limits: { maxRegistrations?: number; maxComputers?: number; maxPhones?: number }
+  /** Devices counted against the account's limit, when Mousse ID reports it. */
+  devices?: { used: number; limit: number }
 }
 
 export type EnrollmentRequestStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'delivered'
@@ -79,7 +82,7 @@ type ChallengePurpose = 'register' | 'renew'
 function checkedConfig(value: unknown): MousseIdConfig {
   if (
     !isObject(value) ||
-    !Number.isSafeInteger(value.protocol) ||
+    !((typeof value.protocol === 'string' && value.protocol) || Number.isSafeInteger(value.protocol)) ||
     typeof value.installationId !== 'string' ||
     !value.installationId ||
     typeof value.gatewayId !== 'string' ||
@@ -98,7 +101,7 @@ function checkedConfig(value: unknown): MousseIdConfig {
   if (relay.protocol !== 'wss:' && !(relay.protocol === 'ws:' && loopback)) return badResponse()
   if (relay.search || relay.hash) return badResponse()
   return {
-    protocol: value.protocol as number,
+    protocol: String(value.protocol),
     installationId: value.installationId,
     gatewayId: value.gatewayId,
     relayAudience: value.relayAudience,
@@ -200,6 +203,10 @@ export class MousseIdNet {
     const value = await this.session.authorized((bearer) => this.http.request<unknown>('GET', '/v1/net/inventory', { bearer, signal }))
     if (!isObject(value) || !Array.isArray(value.registrations)) return badResponse()
     const limits = isObject(value.limits) ? value.limits : {}
+    const devices =
+      isObject(value.devices) && Number.isSafeInteger(value.devices.used) && (value.devices.used as number) >= 0 && positive(value.devices.limit)
+        ? { used: value.devices.used as number, limit: value.devices.limit as number }
+        : undefined
     return {
       registrations: value.registrations.map(checkedInventoryRow).filter((row): row is InventoryRegistration => !!row),
       limits: {
@@ -207,6 +214,7 @@ export class MousseIdNet {
         maxComputers: positive(limits.maxComputers),
         maxPhones: positive(limits.maxPhones),
       },
+      ...(devices ? { devices } : {}),
     }
   }
 

@@ -480,18 +480,7 @@ h1, h2, h3, p { margin: 0; }
   padding: calc(var(--safe-top) + 12px) 20px calc(var(--safe-bottom) + 20px);
   align-items: center;
 }
-.m-signin__hero {
-  position: relative;
-  display: flex;
-  justify-content: center;
-  width: min(48vw, 190px);
-  margin: 4vh auto 18px;
-  flex: none;
-}
-.m-signin__hero .liquid-orb { width: 100%; }
-.m-signin__hero .m-empty__aura { inset: -40%; }
-html[data-keyboard='open'] .m-signin__hero { display: none; }
-.m-signin__panel { width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 18px; }
+.m-signin__panel { margin-block: auto; width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 18px; }
 .m-signin__brand { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
 .m-signin__brand h1 { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; }
 .m-signin__brand p { color: var(--text-secondary); max-width: 30ch; }

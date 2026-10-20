@@ -3,6 +3,7 @@
 // roster updates, RPC and stream subscriptions. The phone never serves streams or RPC.
 import { fromB64url, fromUtf8 } from './bytes'
 import type { MuxMessage, RecordHeader, StreamHead, WireMessage } from './codec'
+export type { StreamHead } from './codec'
 import { verifyBytes, type Signed } from './crypto'
 import { fromWireError, NetError } from './errors'
 import {
@@ -89,6 +90,24 @@ export interface RpcOptions {
   id?: string
 }
 
+/** A complete stream snapshot: every retained record through `target`. */
+export interface StreamSnapshot {
+  target: StreamHead
+  records: StreamRecord[]
+}
+
+type PendingSnapshot = {
+  promise: Promise<StreamSnapshot>
+  resolve(value: StreamSnapshot): void
+  reject(error: Error): void
+  target?: StreamHead
+  records: StreamRecord[]
+  timer: ReturnType<typeof setTimeout>
+}
+
+export const SNAPSHOT_DEADLINE_MS = 60_000
+const SNAPSHOT_MAX_RECORDS = 4096
+
 type Pending = {
   resolve(value: unknown): void
   reject(error: Error): void
@@ -113,6 +132,7 @@ export class LeafSession {
   private peerDelegation?: NodeDelegation
   private readonly pending = new Map<string, Pending>()
   private readonly subscriptions = new Map<string, SubscriptionHandlers>()
+  private readonly snapshots = new Map<string, PendingSnapshot>()
   private readonly closeListeners = new Set<(error?: Error) => void>()
   private readonly stateListeners = new Set<(state: LeafSessionState) => void>()
   private handshakeTimer?: ReturnType<typeof setTimeout>
@@ -244,6 +264,29 @@ export class LeafSession {
     }
   }
 
+  /**
+   * Reads a stream's current snapshot (`snapshot.get`). The records are verified like live ones;
+   * subscribe after `target` to follow the stream from there. Concurrent calls share one transfer.
+   */
+  snapshot(stream: string): Promise<StreamSnapshot> {
+    if (this.stateValue !== 'open') return Promise.reject(this.closedError())
+    if (!this.negotiatedCaps.includes('streams.v1')) return Promise.reject(new NetError('forbidden', 'Streams were not negotiated.'))
+    const existing = this.snapshots.get(stream)
+    if (existing) return existing.promise
+    let resolve!: (value: StreamSnapshot) => void
+    let reject!: (error: Error) => void
+    const promise = new Promise<StreamSnapshot>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    const timer = setTimeout(() => {
+      this.settleSnapshot(stream, undefined, new NetError('deadline_exceeded', 'The computer did not send the thread in time.'))
+    }, SNAPSHOT_DEADLINE_MS)
+    this.snapshots.set(stream, { promise, resolve, reject, records: [], timer })
+    void this.send({ t: 'snapshot.get', stream }).catch((error) => this.settleSnapshot(stream, undefined, error))
+    return promise
+  }
+
   close(error?: Error): void {
     this.fail(error ?? new NetError('cancelled', 'Session closed.'))
   }
@@ -288,6 +331,7 @@ export class LeafSession {
           this.subscriptions.delete(h.re)
           sub.ended?.(fromWireError(h.error))
         }
+        this.settleSnapshot(h.re, undefined, fromWireError(h.error))
         this.finish(h.re, undefined, fromWireError(h.error))
         return
       }
@@ -331,11 +375,41 @@ export class LeafSession {
         if (h.error) this.finish(h.id, undefined, fromWireError(h.error))
         else this.finish(h.id, h.result)
         return
+      case 'snapshot.chunk':
+        return this.snapshotChunk(h, message.parts)
       case 'ephemeral':
         return
       default:
         throw new NetError('forbidden', `Unexpected ${h.t} from the computer.`)
     }
+  }
+
+  private snapshotChunk(h: Extract<WireMessage, { t: 'snapshot.chunk' }>, parts: Uint8Array[]): void {
+    const pending = this.snapshots.get(h.stream)
+    if (!pending) return
+    const target = { epoch: h.epoch, seq: h.throughSeq }
+    if (pending.target && (pending.target.epoch !== target.epoch || pending.target.seq !== target.seq))
+      throw new NetError('bad_request', 'Snapshot target changed mid-transfer.')
+    pending.target = target
+    const records = this.records(h.stream, h.records, parts)
+    for (const record of records)
+      if (record.epoch > target.epoch || (record.epoch === target.epoch && record.seq > target.seq))
+        throw new NetError('bad_request', 'Snapshot record exceeds its declared position.')
+    const last = pending.records.at(-1)
+    if (last && records[0] && (records[0].epoch !== last.epoch || records[0].seq !== last.seq + 1))
+      throw new NetError('bad_request', 'Snapshot chunks are not contiguous.')
+    pending.records.push(...records)
+    if (pending.records.length > SNAPSHOT_MAX_RECORDS) throw new NetError('too_large', 'Snapshot is too large.')
+    if (h.done) this.settleSnapshot(h.stream, { target, records: pending.records })
+  }
+
+  private settleSnapshot(stream: string, value?: StreamSnapshot, error?: Error): void {
+    const pending = this.snapshots.get(stream)
+    if (!pending) return
+    this.snapshots.delete(stream)
+    clearTimeout(pending.timer)
+    if (value) pending.resolve(value)
+    else pending.reject(error ?? new NetError('cancelled'))
   }
 
   private finish(id: string, value: unknown, error?: Error): void {
@@ -493,6 +567,7 @@ export class LeafSession {
       this.subscriptions.delete(stream)
       sub.ended?.(error)
     }
+    for (const stream of [...this.snapshots.keys()]) this.settleSnapshot(stream, undefined, error)
     this.mux.close(error)
     for (const listener of this.closeListeners) listener(error)
   }
