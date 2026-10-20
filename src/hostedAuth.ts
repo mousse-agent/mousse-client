@@ -1,5 +1,5 @@
-import { App as CapacitorApp } from '@capacitor/app'
 import { Browser } from '@capacitor/browser'
+import { openAuthBrowser } from './authBrowser'
 import { ERROR_CODES, MOBILE_REDIRECT_URI } from './constants'
 import { randomUrlSafe, s256 } from './security'
 import { hostedSession } from './storage'
@@ -34,63 +34,7 @@ export async function loginHosted(dashboardUrl: string, supabaseUrl?: string): P
   authUrl.searchParams.set('code_challenge', challenge)
   authUrl.searchParams.set('code_challenge_method', 'S256')
 
-  let removeCallback: (() => Promise<void>) | undefined
-  let listenerReady: Promise<void> | undefined
-
-  const callback = new Promise<URL>((resolve, reject) => {
-    let settled = false
-    const finish = (value?: URL, error?: Error) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      void removeCallback?.()
-      value ? resolve(value) : reject(error)
-    }
-
-    const timer = window.setTimeout(
-      () => finish(undefined, new Error('Hosted authorization timed out.')),
-      180_000
-    )
-
-    listenerReady = Promise.all([
-      CapacitorApp.addListener('appUrlOpen', ({ url }) => {
-        try {
-          const received = new URL(url)
-          const isOAuthCallback =
-            (received.protocol === 'com.ryspa.mousse:' || received.protocol === 'mousse:') &&
-            (received.pathname === '/oauth/callback' ||
-              received.pathname === '//oauth/callback' ||
-              (received.host === 'oauth' && (received.pathname === '/callback' || received.pathname === '')) ||
-              `${received.host}${received.pathname}`.replace(/^\/+/, '') === 'oauth/callback')
-          if (isOAuthCallback) {
-            finish(received)
-          }
-        } catch {
-          finish(undefined, new Error('Authorization callback URL was invalid.'))
-        }
-      }),
-      Browser.addListener('browserFinished', () => {
-        finish(undefined, new Error('Authorization was cancelled when the browser closed.'))
-      })
-    ]).then(([appListener, browserListener]) => {
-      removeCallback = async () => {
-        await appListener.remove()
-        await browserListener.remove()
-      }
-      if (settled) return removeCallback()
-    })
-  })
-
-  let received: URL
-  try {
-    await listenerReady
-    await Browser.open({ url: authUrl.toString(), presentationStyle: 'popover' })
-    received = await callback
-  } finally {
-    await Browser.close().catch(() => undefined)
-    await listenerReady
-    await removeCallback?.()
-  }
+  const received = await openAuthBrowser(authUrl.toString())
 
   const returnedState = received.searchParams.get('state')
   if (returnedState !== state) {
