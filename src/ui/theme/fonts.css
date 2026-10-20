@@ -1,0 +1,42 @@
+/* Ported from mousse/src/renderer/styles/geist-fonts.css. The font files are
+   the same variable Geist builds the desktop bundles (SIL OFL, see OFL.txt). */
+@font-face {
+  font-family: 'Geist';
+  src: url('./fonts/geist/Geist-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('./fonts/geist/Geist-Italic-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('./fonts/geist/GeistMono-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('./fonts/geist/GeistMono-Italic-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
+:root {
+  --font-sans: 'Geist', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Geist Mono', Consolas, 'Courier New', monospace;
+  font-family: var(--font-sans);
+}
+
+pre,
+code,
+kbd,
+samp,
+.font-mono { font-family: var(--font-mono); }

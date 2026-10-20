@@ -1,0 +1,225 @@
+/*
+ * Design tokens shared with the desktop app. Each block names the desktop file
+ * it mirrors; keep names and values in step so the two apps read as one.
+ * Accent-derived values are also set inline by applyAppearance() through
+ * buildAccentCssVars(), exactly like the desktop's useTheme hook.
+ */
+
+/* ---------- mousse/src/renderer/styles/global.css :root ---------- */
+:root {
+  /* Logo palette */
+  --mousse-deep: #523977;
+  --mousse-dark: #5a4080;
+  --mousse-mid: #8f70b1;
+  --mousse-accent: #8a66b6;
+  --mousse-soft: #a785c7;
+  --mousse-light: #bc9cd4;
+  --mousse-pale: #c5a7d9;
+  --mousse-lilac: #e3cbeb;
+  --mousse-blush: #f0def1;
+  --mousse-cream: #f4e5f4;
+
+  --surface-base: #1b1c23;
+  --surface-strong: #17191e;
+  --surface-soft: #272a31;
+  --surface-muted: #111318;
+  --surface-elevated: #343840;
+  --surface-base-rgb: 27, 28, 35;
+  --surface-strong-rgb: 23, 25, 30;
+  --surface-soft-rgb: 39, 42, 49;
+  --surface-muted-rgb: 17, 19, 24;
+  --surface-elevated-rgb: 52, 56, 64;
+  --surface-light-base: #f4eef8;
+  --surface-light-strong: #ebe3f2;
+  --surface-light-soft: #e2d8ec;
+  --surface-light-base-rgb: 244, 238, 248;
+  --surface-light-strong-rgb: 235, 227, 242;
+  --surface-light-soft-rgb: 226, 216, 236;
+  --glass-bg: rgba(var(--surface-base-rgb), 0.58);
+  --glass-bg-strong: rgba(var(--surface-strong-rgb), 0.68);
+  --glass-bg-soft: rgba(var(--surface-soft-rgb), 0.52);
+  --app-window-bg: var(--surface-base);
+  --floating-surface: var(--surface-strong);
+  --bg-primary: var(--glass-bg);
+  --bg-secondary: var(--glass-bg-strong);
+  --bg-tertiary: var(--glass-bg-soft);
+  --border: rgba(var(--accent-pale-rgb), 0.1);
+  --text-primary: #f0f0f0;
+  --text-secondary: rgba(255, 255, 255, 0.68);
+
+  --accent: #a785c7;
+  --accent-hover: #c5a7d9;
+  --accent-deep: #8a66b6;
+  --accent-rgb: 167, 133, 199;
+  --accent-deep-rgb: 138, 102, 182;
+  --accent-pale-rgb: 197, 167, 217;
+  --accent-deep-dark-rgb: 82, 57, 119;
+
+  --gradient-brand: linear-gradient(135deg, var(--mousse-deep) 0%, var(--mousse-mid) 52%, var(--accent-hover) 100%);
+  --gradient-accent: linear-gradient(135deg, var(--mousse-accent) 0%, var(--accent-hover) 100%);
+  --gradient-glow: radial-gradient(ellipse at 20% 0%, rgba(var(--accent-deep-rgb), 0.12) 0%, transparent 55%);
+}
+
+/* ---------- mousse/src/renderer/styles/polish.css :root tokens ---------- */
+:root {
+  --ui-gutter: 8px;
+  --ui-row-x: 8px;
+  --ui-row-height: 30px;
+  --ui-row-radius: 7px;
+  --ui-control-radius: 8px;
+  --ui-card-radius: 12px;
+
+  --ui-hover: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  --ui-pressed: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  --ui-selected: rgba(var(--accent-rgb), 0.15);
+  --ui-line: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  --ui-line-strong: color-mix(in srgb, var(--text-primary) 14%, transparent);
+  --ui-faint: color-mix(in srgb, var(--text-primary) 48%, transparent);
+  --ui-raised: var(--surface-soft);
+  --ui-specular: inset 0 1px 0 rgba(255, 255, 255, 0.16), inset 0 -1px 0 rgba(0, 0, 0, 0.38);
+  --ui-specular-accent: inset 0 1px 0 rgba(255, 255, 255, 0.5), inset 0 -1px 0 rgba(0, 0, 0, 0.32);
+  --ui-glint: rgba(255, 255, 255, 0.42);
+  --ui-sheen: radial-gradient(125% 78% at 50% -8%, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.035) 34%, transparent 64%);
+  --ui-sheen-accent: linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0.08) 24%, transparent 52%);
+  --ui-raised-shadow: var(--ui-specular), 0 10px 32px rgba(0, 0, 0, 0.32);
+  --ui-focus-ring: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+  --ui-aura-strength: 0.12;
+  --ui-on-accent: #15121b;
+
+  --success: #4fd08a;
+  --warning: #f2b84b;
+  --danger: #f26d7d;
+  --status-running: #6ea8ff;
+  --status-waiting: var(--warning);
+  --status-done: var(--success);
+  --status-error: var(--danger);
+
+  --hue-1: #b792f5;
+  --hue-2: #4dcbc2;
+  --hue-3: #7fd28d;
+  --hue-4: #f1b560;
+  --hue-5: #7fa4f8;
+  --hue-6: #f38aa0;
+}
+
+/* ---------- mousse/src/renderer/chat/components/agent-elements/agent-ui.css ---------- */
+:root {
+  --an-border-radius: 16px;
+  --an-message-border-radius: var(--an-border-radius);
+  --an-tool-border-radius: 10px;
+  --an-user-message-bg: #2e3340;
+  --an-foreground-muted: #969696;
+  --an-foreground-subtle: #666666;
+}
+
+/* ---------- mousse/src/renderer/styles/layout-tokens.css (subset) ---------- */
+:root {
+  --theme-radius-sm: 4px;
+  --theme-radius-md: 6px;
+  --theme-radius-lg: 8px;
+  --theme-radius-xl: 12px;
+  --theme-card-radius: 10px;
+  --theme-dialog-radius: 12px;
+  --theme-markdown-pre-radius: 7px;
+
+  /* Phone-only tokens. */
+  --touch-target: 44px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --keyboard-inset: 0px;
+  --chat-font-size: 16.5px;
+  --chat-line-height: 1.55;
+  --composer-radius: 16px;
+  --topbar-height: 52px;
+}
+
+/* ---------- mousse dark: themes/blacksphere-plus.css + themeSurfaces.ts ---------- */
+html[data-theme='blacksphere-plus'] {
+  color-scheme: dark;
+  --surface-base: #000000;
+  --surface-strong: #000000;
+  --surface-soft: #121212;
+  --surface-muted: #050505;
+  --surface-elevated: #1a1a1a;
+  --surface-base-rgb: 0, 0, 0;
+  --surface-strong-rgb: 0, 0, 0;
+  --surface-soft-rgb: 18, 18, 18;
+  --surface-muted-rgb: 5, 5, 5;
+  --surface-elevated-rgb: 26, 26, 26;
+  --glass-bg: var(--surface-base);
+  --glass-bg-strong: var(--surface-strong);
+  --glass-bg-soft: var(--surface-soft);
+  --floating-surface: #121212;
+  --bg-primary: var(--glass-bg);
+  --bg-secondary: var(--glass-bg-strong);
+  --bg-tertiary: var(--glass-bg-soft);
+  --border: #242424;
+  --app-window-bg: var(--surface-base);
+  --text-primary: #e6e6e6;
+  --text-secondary: #a3a3a3;
+
+  --an-user-message-bg: #0d0d0d;
+  --an-foreground-muted: #969696;
+  --an-foreground-subtle: #666666;
+  --an-tool-background: #0d0d0d;
+  --an-code-background: #0d0d0d;
+  --an-input-placeholder-color: #7b7b7b;
+
+  /* polish.css: mousse dark keeps its true-black canvas; depth comes from raised greys. */
+  --ui-raised: #111113;
+  --ui-specular: inset 0 1px 0 rgba(255, 255, 255, 0.22), inset 0 -1px 0 rgba(0, 0, 0, 0.72);
+  --ui-glint: rgba(255, 255, 255, 0.55);
+  --ui-sheen: radial-gradient(125% 80% at 50% -10%, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.04) 36%, transparent 66%);
+  --ui-line: rgba(255, 255, 255, 0.075);
+  --ui-line-strong: rgba(255, 255, 255, 0.13);
+  --ui-aura-strength: 0.16;
+}
+
+/* ---------- themes/light.css + polish.css light overrides ---------- */
+html[data-theme='light'] {
+  color-scheme: light;
+  --glass-bg: var(--surface-light-base);
+  --glass-bg-strong: var(--surface-light-strong);
+  --glass-bg-soft: var(--surface-light-soft);
+  --floating-surface: var(--surface-light-strong);
+  --bg-primary: var(--glass-bg);
+  --bg-secondary: var(--glass-bg-strong);
+  --bg-tertiary: var(--glass-bg-soft);
+  --border: rgba(var(--accent-deep-dark-rgb), 0.1);
+  --app-window-bg: var(--surface-light-base);
+  --text-primary: #1a1a1a;
+  --text-secondary: rgba(0, 0, 0, 0.58);
+  --gradient-glow: radial-gradient(ellipse at 20% 0%, rgba(var(--accent-deep-rgb), 0.08) 0%, transparent 55%);
+
+  --an-user-message-bg: #ffffff;
+  --an-foreground-muted: #6b6b6b;
+  --an-foreground-subtle: #a3a3a3;
+  --an-tool-background: #ffffff;
+  --an-code-background: #f6f2fa;
+  --an-input-placeholder-color: #8a8a8a;
+
+  --ui-raised: #ffffff;
+  --ui-specular: inset 0 1px 0 rgba(255, 255, 255, 0.9), inset 0 -1px 0 rgba(20, 16, 30, 0.06);
+  --ui-specular-accent: inset 0 1px 0 rgba(255, 255, 255, 0.45), inset 0 -1px 0 rgba(0, 0, 0, 0.16);
+  --ui-glint: transparent;
+  --ui-sheen: none;
+  --ui-raised-shadow: 0 1px 2px rgba(20, 16, 30, 0.06), 0 8px 24px rgba(20, 16, 30, 0.08);
+  --ui-aura-strength: 0.1;
+  --success: #1f9d57;
+  --warning: #b9770b;
+  --danger: #d6455d;
+  --status-running: #2f6fe0;
+  --hue-1: #8a55d8;
+  --hue-2: #17958c;
+  --hue-3: #3f9a52;
+  --hue-4: #c07d14;
+  --hue-5: #3f6edb;
+  --hue-6: #d34f6c;
+  --ui-on-accent: #ffffff;
+}
+
+::selection {
+  background: rgba(var(--accent-rgb), 0.34);
+}
