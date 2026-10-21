@@ -24,7 +24,7 @@ export function ComputerScreen({ nodeId, threadId }: { nodeId: string; threadId?
   const computers = useAsync(() => connection.listComputers(), [connection])
   const [titles, setTitles] = useState<Record<string, string>>({})
   const [refreshKey, setRefreshKey] = useState(0)
-  const [ended, setEnded] = useState<{ session: ComputerSession; reason: SessionEndReason }>()
+  const [ended, setEnded] = useState<{ session: ComputerSession; reason: SessionEndReason; message?: string }>()
   const live = session.data
   const reloadComputers = computers.reload
 
@@ -33,7 +33,7 @@ export function ComputerScreen({ nodeId, threadId }: { nodeId: string; threadId?
     if (!live) return undefined
     const check = () => {
       if (live.state() !== 'closed') return
-      setEnded((current) => current?.session === live ? current : { session: live, reason: live.endReason() ?? 'ended' })
+      setEnded((current) => current?.session === live ? current : { session: live, reason: live.endReason() ?? 'ended', message: live.endMessage?.() })
       reloadComputers()
     }
     check()
@@ -89,7 +89,7 @@ export function ComputerScreen({ nodeId, threadId }: { nodeId: string; threadId?
       <main className="m-screen">
         <TopBar leading={back} title={computerName} />
         <div className="m-scroll"><div className="m-content">
-          <Notice>{`Lost the connection to ${computerName}.`}</Notice>
+          <Notice>{ended?.message ? `Lost the connection to ${computerName}: ${ended.message}` : `Lost the connection to ${computerName}.`}</Notice>
           <Button onClick={retry}>Try again</Button>
         </div></div>
       </main>

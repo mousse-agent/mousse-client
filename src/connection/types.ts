@@ -77,6 +77,8 @@ export interface ComputerSession {
   onStateChange(listener: (state: SessionState) => void): () => void
   /** Set when the session closed; read it from an onStateChange listener. */
   endReason(): SessionEndReason | undefined
+  /** A short, plain-text description of why the session closed, when one is known. */
+  endMessage?(): string | undefined
   listProjects(): Promise<Project[]>
   listThreads(filter?: { projectId?: string; query?: string }): Promise<ThreadSummary[]>
   createThread(input: { projectId: string; title?: string }): Promise<ThreadSummary>

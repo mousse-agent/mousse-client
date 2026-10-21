@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { RealComputerSession } from '../../src/connection/computerSession'
 import type { ChatItem } from '../../src/connection/types'
 import { newId } from '../../src/net/canonical'
+import { NetError } from '../../src/net/errors'
 import { generateNodeKeys } from '../../src/net/keys'
 import { LeafSession } from '../../src/net/session'
 import { streamPair } from '../../src/net/stream'
@@ -144,6 +145,17 @@ describe('computer session', () => {
     session.close()
     await until(() => closed() === 1)
     expect(session.state()).toBe('closed')
+  })
+
+  it('keeps the close error message as one short line', async () => {
+    const { session, leaf } = await setup()
+    expect(session.endMessage()).toBeUndefined()
+    leaf.close(new NetError('route_unreachable', `The relay closed\n the connection ${'x'.repeat(300)}`))
+    expect(session.endReason()).toBe('ended')
+    const message = session.endMessage()!
+    expect(message.startsWith('The relay closed the connection x')).toBe(true)
+    expect(message).toHaveLength(160)
+    expect(message.endsWith('…')).toBe(true)
   })
 
   it('throws a send that fails at once', async () => {
