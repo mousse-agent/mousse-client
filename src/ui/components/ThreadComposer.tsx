@@ -177,6 +177,7 @@ export function ThreadComposer({ session, threadId, thread }: { session: Compute
         draftKey={`${session.nodeId}.${threadId}`}
         prefill={prefill}
         controls={controls}
+        speech={session.speech}
         onSend={send}
         onStop={() => void thread.stop()}
         onSteer={(text) => attempt(() => session.steer(threadId, text))}

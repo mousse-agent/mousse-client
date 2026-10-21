@@ -1,0 +1,104 @@
+/* Voice: the desktop's speech.css, read-aloud.css and composer recording styles at phone sizes. */
+
+/* Sound wave (speech-wave). */
+.m-speech-wave { display: inline-flex; align-items: center; gap: 2px; height: 12px; flex-shrink: 0; color: currentColor; }
+.m-speech-wave__bar {
+  width: 2px;
+  height: 100%;
+  border-radius: 1px;
+  background: currentColor;
+  transform: scaleY(0.2);
+  transform-origin: center;
+  transition: transform 80ms linear;
+}
+
+/* Recording and transcribing pills (composer-attachment-pill-recording / -transcribing). */
+.m-attachment--recording {
+  padding-left: 10px;
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.3);
+  animation: m-recording-pulse 1.5s ease-in-out infinite;
+}
+.m-attachment--transcribing { padding-left: 10px; color: var(--text-secondary); }
+.m-attachment--transcribing > span { max-width: 200px; }
+@keyframes m-recording-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.65; } }
+
+.m-speech-spin { animation: m-speech-spin 0.9s linear infinite; }
+@keyframes m-speech-spin { to { transform: rotate(360deg); } }
+
+/* Recording action (composer-action-btn-recording). */
+.m-composer__action--recording {
+  color: #fff;
+  background: #ef4444;
+  background-image: none;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25);
+}
+
+/* Microphone errors (composer-recording-error). */
+.m-composer__voice-error { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 0 4px; font-size: 12.5px; color: var(--danger); }
+.m-composer__voice-error p { flex-basis: 100%; }
+.m-composer__voice-error button { border: 0; background: transparent; padding: 4px 0; font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
+.m-composer__voice-notice { padding: 0 4px; font-size: 12.5px; color: var(--text-secondary); }
+
+/* Read aloud under assistant messages (ReadAloudButton). */
+.m-read-aloud { display: flex; align-items: center; gap: 8px; margin-top: 4px; min-height: 28px; }
+.m-read-aloud__button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  opacity: 0.6;
+  transition: background-color 150ms ease-out, opacity 150ms ease-out, transform 150ms ease-out;
+}
+/* A larger hit area than the icon. */
+.m-read-aloud__button::after { content: ''; position: absolute; inset: -8px; }
+.m-read-aloud__button:active { transform: scale(0.97); background: var(--ui-pressed); }
+.m-read-aloud__button[data-active] { opacity: 1; color: var(--accent); }
+.m-read-aloud__error { font-size: 12.5px; color: var(--danger); }
+
+/* Model chooser (read-aloud-picker). */
+.m-speech-empty { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 14px; }
+.m-speech-empty--text { flex-direction: column; align-items: stretch; gap: 8px; }
+.m-speech-link { border: 0; padding: 0; background: transparent; color: var(--accent); font: inherit; text-decoration: none; }
+.m-speech-model { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: 10px; }
+.m-speech-model__main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  color: inherit;
+}
+.m-speech-model:not([data-downloaded]) .m-option__title { color: var(--text-secondary); }
+.m-speech-model__main .m-option__detail { white-space: normal; }
+.m-speech-model__error { font-size: 12.5px; color: var(--danger); }
+.m-speech-model__actions { display: flex; align-items: center; gap: 10px; min-height: 32px; font-size: 13px; }
+.m-speech-model__actions .m-speech-link { margin-right: auto; }
+.m-speech-model__done { display: inline-flex; align-items: center; gap: 4px; color: var(--text-secondary); }
+.m-speech-model__percent { min-width: 36px; text-align: right; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.m-speech-progress { width: 96px; height: 4px; border-radius: 2px; background: var(--ui-line-strong); overflow: hidden; }
+.m-speech-progress > span { display: block; height: 100%; background: var(--accent); transition: width 200ms linear; }
+.m-speech-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 32px;
+  height: 32px;
+  border: 1px solid var(--ui-line-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.m-speech-icon-button--labelled { padding: 0 10px; }
+.m-speech-sheet__footer { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }

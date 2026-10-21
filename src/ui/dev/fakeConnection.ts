@@ -27,6 +27,7 @@ import type {
   ThreadSummary
 } from '../../connection/types'
 import { SHOWCASE_THREAD_ID, showcaseItems, showcaseQuestions } from './timelineShowcase'
+import { FakeComputerSpeech } from './fakeSpeech'
 
 export interface FakeConnectionOptions {
   /** Start signed in as demo@mousse.dev. */
@@ -170,6 +171,8 @@ export class FakeSession implements ComputerSession {
   private waiting = new Set<string>(['t-voices'])
   private models = new Map<string, ModelSelection>()
   private queues = new Map<string, QueuedMessage[]>()
+  /** The computer's speech models (dictation and read aloud). */
+  readonly speech = new FakeComputerSpeech()
   /** Every send, queued message and steer, with its options, for tests. */
   readonly sent: Array<{ kind: 'send' | 'queue' | 'steer'; threadId: string; text: string; options?: SendOptions }> = []
 

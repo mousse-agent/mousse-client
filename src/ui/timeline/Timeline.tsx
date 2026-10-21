@@ -23,6 +23,7 @@ import {
 } from './format'
 import { Bot, Check, ChevronRight, CircleX, Copy, FileText, Folder, Globe, Image as ImageIcon, Info, Link, Monitor, MessageSquare, Paperclip, VolumeHigh, X } from './icons'
 import { Markdown } from './Markdown'
+import { ReadAloudButton as ComputerReadAloudButton, useComputerSpeech } from '../speech/readAloud'
 import { QuestionPrompt } from './QuestionPrompt'
 import { DiffStat, PlanCard, Shimmer, Spinner, ToolGroup, ToolItem } from './ToolCards'
 
@@ -62,7 +63,17 @@ function plainText(markdown: string): string {
     .trim()
 }
 
-function ReadAloudButton({ text }: { text: string }) {
+/**
+ * Reads a reply aloud with the computer's read aloud model and voice. Without a computer that
+ * offers speech (an older Mousse, the demo), the phone's own voice reads it instead.
+ */
+function ReadAloudButton({ text, speechKey }: { text: string; speechKey: string }) {
+  const speech = useComputerSpeech()
+  if (speech) return <ComputerReadAloudButton speechKey={speechKey} text={text} toolbar />
+  return <DeviceReadAloudButton text={text} />
+}
+
+function DeviceReadAloudButton({ text }: { text: string }) {
   const [speaking, setSpeaking] = useState(false)
   useEffect(() => () => {
     if (speaking) window.speechSynthesis.cancel()
@@ -223,7 +234,7 @@ const AssistantMessage = memo(function AssistantMessage({ item, live }: { item: 
       {showActions && (
         <div className="m-tl-toolbar">
           <CopyButton text={item.text} />
-          <ReadAloudButton text={item.text} />
+          <ReadAloudButton text={item.text} speechKey={item.id} />
           <MetadataButton item={item} />
         </div>
       )}

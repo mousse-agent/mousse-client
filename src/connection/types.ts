@@ -1,6 +1,7 @@
 // The boundary between the phone UI and the connection layer. The UI only
 // talks to MousseConnection; the Net and Mousse ID implementation lives in src/net and
 // src/mousseId. Keep this file small and stable: both sides depend on it.
+import type { ComputerSpeech } from './speech'
 
 export interface Account {
   id: string
@@ -377,6 +378,8 @@ export interface ComputerSession {
   /** Moves a queued message into the running turn. */
   steerQueued(threadId: string, itemId: string): Promise<void>
   contextUsage(threadId: string): Promise<ContextUsage | undefined>
+  /** Dictation and read aloud with the computer's speech models; absent when unavailable. */
+  readonly speech?: ComputerSpeech
   close(): void
 }
 
