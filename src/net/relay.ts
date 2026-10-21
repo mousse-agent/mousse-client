@@ -222,10 +222,11 @@ export function dialRelay(options: RelayDialOptions): Promise<ByteStream> {
       }
     }
     socket.onerror = () => fail(new NetError('route_unreachable', 'Relay connection failed.'))
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       if (state === 'paired') {
         state = 'failed'
-        stream!.end()
+        const code = (event as { code?: unknown } | null)?.code
+        stream!.end(new NetError('route_unreachable', `The relay closed the connection${typeof code === 'number' ? ` (code ${code})` : ''}.`))
       } else fail(new NetError('route_unreachable', 'Relay closed the connection.'))
     }
   })

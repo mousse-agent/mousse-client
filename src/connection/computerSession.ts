@@ -13,6 +13,16 @@ export const SEND_DEADLINE_MS = 6 * 60 * 60 * 1000
 const SEND_EARLY_WINDOW_MS = 1_500
 const SEARCH_LIMIT = 50
 
+/** The longest close message shown to the user. */
+const END_MESSAGE_MAX = 160
+
+/** The close error's message as one short line of plain text. */
+function shortMessage(error?: Error): string | undefined {
+  const text = error?.message?.replace(/\s+/g, ' ').trim()
+  if (!text) return undefined
+  return text.length > END_MESSAGE_MAX ? `${text.slice(0, END_MESSAGE_MAX - 1)}…` : text
+}
+
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
@@ -157,12 +167,14 @@ export class RealComputerSession implements ComputerSession {
   /** Runs this phone started, by thread: the `orchestrator.send` RPC id that `orchestrator.abort` names. */
   private readonly runs = new Map<string, string>()
   private ended?: SessionEndReason
+  private endedWith?: string
 
   constructor(options: RealSessionOptions) {
     this.nodeId = options.nodeId
     this.leaf = options.leaf
     const decide = (error?: Error) => {
       this.ended ??= options.endReason?.(error) ?? 'ended'
+      this.endedWith ??= shortMessage(error)
     }
     // State listeners run before close listeners, so the reason is set on the closing state change.
     this.leaf.onStateChange((state) => {
@@ -185,6 +197,10 @@ export class RealComputerSession implements ComputerSession {
 
   endReason(): SessionEndReason | undefined {
     return this.ended
+  }
+
+  endMessage(): string | undefined {
+    return this.endedWith
   }
 
   async listProjects(): Promise<Project[]> {

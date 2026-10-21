@@ -1,7 +1,7 @@
 // The real MousseConnection: Mousse ID sign-in and inventory, phone enrollment through enrollment
 // requests or QR offers, and sessions with the user's computers over the hosted relay.
 import { MousseIdError, checkedOrigin, type FetchLike, MousseIdHttp } from '../mousseId/http'
-import { MousseIdNet, type ControlIdentity, type InventoryBinding, type InventoryRegistration, type RegistrationGrant } from '../mousseId/net'
+import { MousseIdNet, type ControlIdentity, type InventoryBinding, type InventoryRegistration, type Registration, type RegistrationGrant } from '../mousseId/net'
 import { MOUSSE_ID_ORIGIN } from '../mousseId/origin'
 import { matchCode, openOfferSeal, openRequestSeal, parseJoinQr } from '../mousseId/seal'
 import { MousseIdSession, type AuthBrowser } from '../mousseId/session'
@@ -19,10 +19,23 @@ import { RealComputerSession } from './computerSession'
 import { EnrollmentStore, type LoadedEnrollment } from './enrollmentStore'
 import type { AccountState, Computer, ComputerSession, EnrollmentProgress, MousseConnection, SessionEndReason } from './types'
 
-/** Renew the phone's registration this often while a session is open; the lease is 60 seconds. */
-export const RENEW_INTERVAL_MS = 30_000
-/** Renew before connecting when the lease ends sooner than this. */
-const LEASE_MARGIN_MS = 15_000
+/**
+ * The longest wait between registration renewals while a session is open. A registration lasts 60
+ * seconds. The hosted relay renews the phone's admission every 30 seconds but never past the
+ * registration's end, and closes the circuit when the admission runs out. So the registration must
+ * always outlast the relay's next renewal: like the computer, the phone renews at a third of the
+ * remaining lifetime, and at least this often.
+ */
+export const RENEW_INTERVAL_MS = 20_000
+/** The shortest wait before the next renewal. */
+const RENEW_MIN_MS = 100
+/** The wait before retrying a renewal that failed for a passing reason. */
+const RENEW_RETRY_MS = 2_000
+/**
+ * Renew before connecting when the registration ends sooner than this. The relay fixes the first
+ * admission's end when the phone connects and extends it 30 seconds later at the earliest.
+ */
+const LEASE_MARGIN_MS = 45_000
 const POLL_INTERVAL_MS = 2_000
 const DEFAULT_PHONE_NAME = 'Phone'
 /** Mousse ID errors that mean the registration is gone and the phone must register again. */
@@ -346,24 +359,44 @@ class RealConnection implements MousseConnection {
       }
       throw (await this.confirmRemoved(entry, accountId, error)) ? removedError(name) : connectFailure(error, name)
     }
-    const renewal = setInterval(() => {
-      void this.renewOnce(entry, identity, accountId, net).catch(async (error: unknown) => {
-        const code = codeOf(error) ?? ''
-        if (!REREGISTER.has(code) && !REMOVED.has(code)) return
-        const removed = await this.confirmRemoved(entry, accountId, error).catch(() => false)
-        leaf.close(
-          removed
-            ? new NetError('revoked', `${name} removed this phone.`)
-            : new NetError('forbidden', 'Mousse ID no longer admits this phone.'),
-        )
-      })
-    }, this.deps.renewMs ?? RENEW_INTERVAL_MS)
+    // Keep the registration ahead of the relay's admission renewals for as long as the session is open.
+    let renewal: ReturnType<typeof setTimeout> | undefined
+    let stopped = false
+    let expiresAt = grant.registration.expiresAt
+    const scheduleRenewal = (failed = false) => {
+      if (stopped) return
+      const wait = Math.max(RENEW_MIN_MS, (expiresAt - this.now()) / 3, failed ? RENEW_RETRY_MS : 0)
+      renewal = setTimeout(renew, Math.min(this.deps.renewMs ?? RENEW_INTERVAL_MS, wait))
+    }
+    const renew = () => {
+      void this.renewOnce(entry, identity, accountId, net).then(
+        (registration) => {
+          expiresAt = registration.expiresAt
+          scheduleRenewal()
+        },
+        async (error: unknown) => {
+          const code = codeOf(error) ?? ''
+          if (!REREGISTER.has(code) && !REMOVED.has(code)) return scheduleRenewal(true)
+          const removed = await this.confirmRemoved(entry, accountId, error).catch(() => false)
+          leaf.close(
+            removed
+              ? new NetError('revoked', `${name} removed this phone.`)
+              : new NetError('forbidden', 'Mousse ID no longer admits this phone.'),
+          )
+        },
+      )
+    }
+    scheduleRenewal()
     const endReason = (error?: Error): SessionEndReason => {
       if (!removedByRoster && !(error instanceof NetError && REMOVED.has(error.code))) return 'ended'
       void this.forget(ownNode).catch(() => undefined)
       return 'removed'
     }
-    return new RealComputerSession({ nodeId, leaf, endReason, onClose: () => clearInterval(renewal) })
+    const stopRenewal = () => {
+      stopped = true
+      clearTimeout(renewal)
+    }
+    return new RealComputerSession({ nodeId, leaf, endReason, onClose: stopRenewal })
   }
 
   /** Keeps the newer rosters the user's computers pushed to Mousse ID; each must verify with the pinned root key. */
@@ -437,7 +470,7 @@ class RealConnection implements MousseConnection {
     return run
   }
 
-  private async renewOnce(entry: LoadedEnrollment, identity: ControlIdentity, accountId: string, net: MousseIdNet): Promise<void> {
+  private async renewOnce(entry: LoadedEnrollment, identity: ControlIdentity, accountId: string, net: MousseIdNet): Promise<Registration> {
     const node = identity.node
     const stored = (await this.store.list()).find((row) => row.enrollment.node === node)
     if (!stored?.grant) throw new MousseIdError('unauthorized', 'This phone has no Mousse ID registration.')
@@ -445,6 +478,7 @@ class RealConnection implements MousseConnection {
     const renewed = { ...stored.grant, registration }
     entry.stored.grant = renewed
     await this.store.setGrant(node, renewed)
+    return registration
   }
 
   /** Redeems an invite, stores the enrollment and registers the phone with Mousse ID. */

@@ -107,9 +107,10 @@ function idServer(world: World) {
       const intent = call.body!
       world.phoneNode = String(calls.filter((c) => c.path === '/v1/net/challenges').at(-1)!.body!.nodeId)
       expect(intent.kind).toBe('phone')
+      world.registrationExpiresAt = now + (world.registrationMs ?? 60_000)
       return reply(
         {
-          registration: { id: 'reg_p', accountId: 'acct_1', userId: world.user.user, nodeId: world.phoneNode, generation: registrations, expiresAt: now + 60_000 },
+          registration: { id: 'reg_p', accountId: 'acct_1', userId: world.user.user, nodeId: world.phoneNode, generation: registrations, expiresAt: world.registrationExpiresAt },
           connectorToken: 'c'.repeat(40),
           relayAudience: RELAY,
         },
@@ -118,7 +119,8 @@ function idServer(world: World) {
     }
     if (path === '/v1/net/registrations/reg_p/renew') {
       if (world.renewError) return reply({ error: { code: world.renewError } }, world.renewStatus ?? 403)
-      return reply({ id: 'reg_p', accountId: 'acct_1', userId: world.user.user, nodeId: world.phoneNode, generation: registrations, expiresAt: now + 60_000 })
+      world.registrationExpiresAt = now + (world.registrationMs ?? 60_000)
+      return reply({ id: 'reg_p', accountId: 'acct_1', userId: world.user.user, nodeId: world.phoneNode, generation: registrations, expiresAt: world.registrationExpiresAt })
     }
     return reply({ error: { code: 'not_found' } }, 404)
   }
@@ -138,6 +140,33 @@ interface World {
   hostedRoster?: Signed
   onRequest?: (id: string, body: Record<string, unknown>) => void
   decide?: (id: string, polls: number) => { status?: string; sealedInvite?: string } | undefined
+  /** How long a registration or renewal lasts; Mousse ID uses 60 seconds. */
+  registrationMs?: number
+  /** When the phone's current registration ends, as Mousse ID holds it. */
+  registrationExpiresAt?: number
+}
+
+/**
+ * The hosted relay's lease rule (mousse-plus `NetRelayGateway.scheduleLease`): an admission lasts
+ * until min(now + lease, registration end) and is renewed every `renewalMs`; the expiry timer is
+ * armed before the renewal timer, so an admission that reaches its end before a renewal extends it
+ * closes the circuit.
+ */
+function hostedRelayLease(w: World, close: () => void, timing: { renewalMs: number; leaseMs: number }): () => void {
+  let expiry: ReturnType<typeof setTimeout> | undefined
+  let renewal: ReturnType<typeof setTimeout> | undefined
+  const schedule = () => {
+    clearTimeout(expiry)
+    clearTimeout(renewal)
+    const expiresAt = Math.min(Date.now() + timing.leaseMs, w.registrationExpiresAt ?? 0)
+    expiry = setTimeout(close, expiresAt - Date.now())
+    renewal = setTimeout(schedule, timing.renewalMs)
+  }
+  schedule()
+  return () => {
+    clearTimeout(expiry)
+    clearTimeout(renewal)
+  }
 }
 
 function world(): World {
@@ -207,8 +236,9 @@ async function connect(w: World, extra: Partial<ConnectionDeps> = {}) {
 }
 
 /** A signed-in connection with the phone added to the world's computer by QR code. */
-async function enrolled() {
+async function enrolled(setup: (w: World) => void = () => undefined) {
   const w = world()
+  setup(w)
   const { connection, storage, deps, server } = await connect(w)
   await connection.signInWithPassword('a@b.test', 'pw')
   w.offer = sealForOffer(invite(w), new Uint8Array(32).fill(3))
@@ -341,6 +371,37 @@ describe('real connection', () => {
     expect(session.state()).toBe('closed')
     expect(session.endReason()).toBe('removed')
     expect((await connection.listComputers()).find((c) => c.nodeId === w.computer.node)?.enrolled).toBe(false)
+  })
+
+  it('keeps a session open over the hosted relay for several registration lifetimes', async () => {
+    // Scaled from production: 60 s registrations, a 30 s relay renewal and a 60 s lease cap.
+    const { w, connection, deps } = await enrolled((w) => (w.registrationMs = 600))
+    let relayClosed = false
+    const stops: Array<() => void> = []
+    deps.openChannel = async () => {
+      const [a, b] = streamPair()
+      void fakeComputer(b, w.user, w.computer, roster(w.user, w.computer.node)).handshake()
+      stops.push(
+        hostedRelayLease(
+          w,
+          () => {
+            relayClosed = true
+            b.close()
+          },
+          { renewalMs: 300, leaseMs: 600 },
+        ),
+      )
+      return channelOf(a, w.computer.keys.transport.spki)
+    }
+    const session = await connection.openComputer(w.computer.node)
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 2_000))
+      expect(relayClosed).toBe(false)
+      expect(session.state()).toBe('open')
+    } finally {
+      session.close()
+      for (const stop of stops) stop()
+    }
   })
 
   it('forgets the computer when it refuses this phone as revoked on open', async () => {

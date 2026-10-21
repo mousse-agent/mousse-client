@@ -94,12 +94,15 @@ class FakeSession implements ComputerSession {
   private watchers = new Map<string, Set<(items: ChatItem[]) => void>>()
   private streams = new Map<string, ReturnType<typeof setInterval>>()
   private nextId = 1
+  private endedWith?: string
 
   constructor(readonly nodeId: string, private threads: ThreadSummary[], private opts: Required<Omit<FakeConnectionOptions, 'now' | 'email'>>) {}
 
   state(): SessionState { return this.sessionState }
 
   endReason(): SessionEndReason | undefined { return this.sessionState === 'closed' ? 'ended' : undefined }
+
+  endMessage(): string | undefined { return this.sessionState === 'closed' ? this.endedWith : undefined }
 
   onStateChange(listener: (state: SessionState) => void): () => void {
     this.stateListeners.add(listener)
@@ -178,7 +181,9 @@ class FakeSession implements ComputerSession {
     return this.isActive(threadId)
   }
 
-  close(): void {
+  /** Closes the session; `message` stands in for the close error a real session reports. */
+  close(message?: string): void {
+    this.endedWith = message
     for (const timer of this.streams.values()) clearInterval(timer)
     this.streams.clear()
     this.watchers.clear()
