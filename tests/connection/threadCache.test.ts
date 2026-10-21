@@ -282,7 +282,7 @@ describe('opening threads from the cache', () => {
     const seen: Seen = []
     await session.openThread('t1', (items, state) => seen.push({ items, state }))
     const request = await remote.next('rpc.request')
-    await remote.send({ t: 'rpc.result', id: request.id, error: { code: 'not_found', message: 'No such thread.' } })
+    await remote.send({ t: 'rpc.result', id: request.id, error: { code: 'not_found', message: 'No such thread.', retryable: false } })
     await until(() => seen.at(-1)?.items.length === 3)
     expect(texts(seen)?.slice(0, 2)).toEqual(['Hi', 'Hello'])
     expect(seen.at(-1)?.items[2]).toMatchObject({ role: 'system', status: 'error' })
