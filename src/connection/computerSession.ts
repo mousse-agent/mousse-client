@@ -6,6 +6,7 @@ import { NetError } from '../net/errors'
 import type { SessionLink, StreamHead } from '../net/session'
 import { ListsWatch } from './lists'
 import { ThreadProjection } from './threadProjection'
+import type { CachedThread, ThreadCacheScope } from './threadCache'
 import { LeafComputerSpeech, type ComputerSpeech } from './speech'
 import type {
   ChatItem,
@@ -14,7 +15,9 @@ import type {
   ComputerSession,
   ContextUsage,
   ImageAttachment,
+  ComputerLists,
   ListChat,
+  ListThread,
   ListsHandlers,
   LlmModelOption,
   LlmProviderOption,
@@ -176,31 +179,88 @@ function isHead(value: unknown): value is StreamHead {
 
 type ItemsListener = (items: ChatItem[], state?: ThreadDisplayState) => void
 
+/** Saved copies of this many recent threads are read into memory once the lists arrive. */
+const WARM_THREADS = 8
+/** On a direct path, this many recent threads are brought up to date in the background. */
+export const PREFETCH_THREADS = 3
+/** When to look for a direct path again, after the lists arrive over the relay. */
+const PREFETCH_CHECKS_MS = [5_000, 15_000]
+const PREFETCH_TIMEOUT_MS = 10_000
+
+/** The longest an open waits for the phone's storage before asking the computer instead. */
+const SAVED_READ_TIMEOUT_MS = 400
+/** How long after the last change a followed thread is saved. */
+export const THREAD_SAVE_DELAY_MS = 1_000
+/** Codes that mean the thread is gone from the computer, so its saved copy is too. */
+const GONE = new Set(['not_found', 'stream_unknown'])
+
+const atOrBefore = (record: { epoch: number; seq: number }, head: StreamHead) =>
+  record.epoch < head.epoch || (record.epoch === head.epoch && record.seq <= head.seq)
+
 /** One thread's display stream, shared by every open view of that thread. */
 class ThreadWatch {
   readonly projection: ThreadProjection
+  /** Settles once the thread is current: its snapshot is applied, or the resumed stream caught up. */
+  readonly ready: Promise<void>
+  private markReady!: () => void
   private readonly listeners = new Set<ItemsListener>()
   private stream?: string
+  /** The last record applied; the projection's state is current through it. */
+  private head?: StreamHead
+  /** The saved copy the projection started from, until the stream confirms or replaces it. */
+  private seed?: CachedThread
   private unsubscribe?: () => void
   private resyncing?: Promise<void>
+  private saveTimer?: ReturnType<typeof setTimeout>
+  private dirty = false
   private closed = false
 
   constructor(
     private readonly leaf: SessionLink,
     readonly threadId: string,
+    private readonly cache?: ThreadCacheScope,
   ) {
     this.projection = new ThreadProjection(threadId)
+    this.ready = new Promise<void>((resolve) => (this.markReady = resolve))
   }
 
   get size(): number {
     return this.listeners.size
   }
 
+  /** Starts from a saved copy, so listeners see it before the computer answers. */
+  restore(entry: CachedThread): boolean {
+    if (!this.projection.restore(entry.state)) return false
+    this.seed = entry
+    this.stream = entry.stream
+    this.head = { ...entry.head }
+    return true
+  }
+
   async start(): Promise<void> {
-    const opened = await this.leaf.rpc('bridge.thread.open', { threadId: this.threadId })
+    let opened: unknown
+    try {
+      opened = await this.leaf.rpc('bridge.thread.open', { threadId: this.threadId })
+    } catch (error) {
+      if (error instanceof NetError && GONE.has(error.code)) this.cache?.remove(this.threadId)
+      throw error
+    }
+    if (this.closed) return
     if (!isObject(opened) || !isObject(opened.descriptor) || typeof opened.descriptor.id !== 'string' || !opened.descriptor.id)
       badAnswer('bridge.thread.open')
-    this.stream = opened.descriptor.id as string
+    const stream = opened.descriptor.id as string
+    const head = isHead(opened.head) ? opened.head : undefined
+    const seed = this.seed
+    this.seed = undefined
+    // The saved copy is current through its position. Follow on from there unless the computer
+    // started a new generation of the stream (it restarted) or holds fewer records than the copy.
+    if (seed && seed.stream === stream && this.head && (!head || (head.epoch === this.head.epoch && head.seq >= this.head.seq))) {
+      this.stream = stream
+      this.follow(this.head, true)
+      void this.readQuestions()
+      return
+    }
+    this.stream = stream
     await this.load()
   }
 
@@ -219,8 +279,17 @@ class ThreadWatch {
     for (const listener of this.listeners) listener(items, state)
   }
 
+  /** Shows a phone-only error line, for example when the thread could not be read. */
+  report(text: string): void {
+    this.projection.addLocal({ id: `local-${newId('rpc')}`, role: 'system', text, createdAt: Date.now(), status: 'error' })
+    this.emit()
+  }
+
   close(): void {
+    if (this.closed) return
+    this.save()
     this.closed = true
+    this.markReady()
     this.unsubscribe?.()
     this.unsubscribe = undefined
     this.listeners.clear()
@@ -232,13 +301,34 @@ class ThreadWatch {
     const snapshot = await this.leaf.snapshot(stream)
     if (this.closed) return
     if (!isHead(snapshot.target)) badAnswer('snapshot.get')
-    if (this.projection.apply(snapshot.records)) this.emit()
-    this.unsubscribe = this.leaf.subscribe(stream, snapshot.target, {
+    // A saved copy on screen is replaced in one step: the snapshot's end record swaps every message.
+    const changed = this.projection.apply(snapshot.records)
+    this.head = { epoch: snapshot.target.epoch, seq: snapshot.target.seq }
+    this.changed()
+    if (changed) this.emit()
+    this.markReady()
+    this.follow(this.head, false)
+  }
+
+  private follow(after: StreamHead, resumed: boolean): void {
+    const stream = this.stream!
+    this.unsubscribe = this.leaf.subscribe(stream, after, {
       records: (records) => {
-        if (this.projection.apply(records)) this.emit()
+        // Never apply a record twice, whatever the path replays.
+        const head = this.head
+        const fresh = head ? records.filter((record) => !atOrBefore(record, head)) : records
+        if (!fresh.length) return
+        const changed = this.projection.apply(fresh)
+        const last = fresh[fresh.length - 1]
+        this.head = { epoch: last.epoch, seq: last.seq }
+        this.changed()
+        if (changed) this.emit()
       },
       delta: (data) => {
         if (this.projection.applyDelta(data)) this.emit()
+      },
+      caughtUp: () => {
+        if (resumed) this.markReady()
       },
       snapshotRequired: () => this.resync(),
       ended: () => {
@@ -248,6 +338,19 @@ class ThreadWatch {
     })
   }
 
+  /** A resumed thread missed the snapshot that carries pending questions; ask for them. */
+  private async readQuestions(): Promise<void> {
+    try {
+      const value = await this.leaf.rpc('orchestrator.pendingQuestions', { threadId: this.threadId })
+      const pending = isObject(value) ? pendingQuestionsOf(value.pending, this.threadId) : undefined
+      if (!pending || this.closed) return
+      this.projection.setQuestions(pending)
+      this.emit()
+    } catch {
+      // Older computers refuse; the live questions delta still arrives.
+    }
+  }
+
   private resync(): void {
     if (this.closed || this.resyncing) return
     this.unsubscribe?.()
@@ -255,19 +358,41 @@ class ThreadWatch {
     this.resyncing = this.load()
       .catch((error: unknown) => {
         if (this.closed) return
-        this.projection.addLocal({
-          id: `local-${newId('rpc')}`,
-          role: 'system',
-          text: `This thread stopped updating: ${error instanceof Error ? error.message : 'unknown error'}. Open it again to reload.`,
-          createdAt: Date.now(),
-          status: 'error',
-        })
-        this.emit()
+        this.markReady()
+        this.report(`This thread stopped updating: ${error instanceof Error ? error.message : 'unknown error'}. Open it again to reload.`)
       })
       .finally(() => {
         this.resyncing = undefined
       })
   }
+
+  /** The records moved the state on: save it soon. */
+  private changed(): void {
+    if (!this.cache || this.closed) return
+    this.dirty = true
+    if (this.saveTimer !== undefined) return
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = undefined
+      this.save()
+    }, THREAD_SAVE_DELAY_MS)
+  }
+
+  private save(): void {
+    clearTimeout(this.saveTimer)
+    this.saveTimer = undefined
+    // Half a snapshot is not a state the stream can resume from; the snapshot's end saves again.
+    if (!this.dirty || !this.cache || !this.stream || !this.head || this.projection.midSnapshot) return
+    this.dirty = false
+    this.cache.write(this.threadId, { stream: this.stream, head: { ...this.head }, state: this.projection.settled(), savedAt: Date.now() })
+  }
+}
+
+interface WatchEntry {
+  watch: ThreadWatch
+  /** Until the watch can take listeners: reading the saved copy, or the first snapshot. */
+  opening?: Promise<unknown>
+  /** The watch started from a saved copy. */
+  restored: boolean
 }
 
 export interface RealSessionOptions {
@@ -277,22 +402,32 @@ export interface RealSessionOptions {
   onClose?: () => void
   /** Why the session closed; asked once, before state listeners learn of the close. */
   endReason?: (error?: Error) => SessionEndReason
+  /** Saved thread contents for this account and computer; without it every thread opens from the computer. */
+  threadCache?: ThreadCacheScope
 }
 
 export class RealComputerSession implements ComputerSession {
   readonly nodeId: string
   readonly speech: ComputerSpeech
   private readonly leaf: SessionLink
-  private readonly watches = new Map<string, Promise<ThreadWatch>>()
+  private readonly watches = new Map<string, WatchEntry>()
   /** Runs this phone started, by thread: the `orchestrator.send` RPC id that `orchestrator.abort` names. */
   private readonly runs = new Map<string, string>()
   private ended?: SessionEndReason
   private endedWith?: string
   private lists?: ListsWatch
+  private readonly cache?: ThreadCacheScope
+  private warmed = false
+  private prefetching = false
+  private prefetched = false
+  private prefetchChecks = 0
+  private prefetchTimer?: ReturnType<typeof setTimeout>
+  private prefetchList: ListThread[] = []
 
   constructor(options: RealSessionOptions) {
     this.nodeId = options.nodeId
     this.leaf = options.leaf
+    this.cache = options.threadCache
     this.speech = new LeafComputerSpeech((method, params, rpcOptions) => this.leaf.rpc(method, params, rpcOptions))
     const decide = (error?: Error) => {
       this.ended ??= options.endReason?.(error) ?? 'ended'
@@ -304,7 +439,8 @@ export class RealComputerSession implements ComputerSession {
     })
     this.leaf.onClose(() => {
       this.lists?.close()
-      for (const watch of this.watches.values()) void watch.then((entry) => entry.close(), () => undefined)
+      clearTimeout(this.prefetchTimer)
+      for (const entry of this.watches.values()) entry.watch.close()
       this.watches.clear()
       options.onClose?.()
     })
@@ -369,29 +505,65 @@ export class RealComputerSession implements ComputerSession {
     return thread
   }
 
+  /**
+   * A thread saved on this phone shows at once, before the computer answers, and then follows the
+   * stream from the saved position. Others wait for the computer's snapshot. A thread already open
+   * or kept in memory calls `onItems` before this returns.
+   */
   async openThread(threadId: string, onItems: ItemsListener): Promise<() => void> {
-    let pending = this.watches.get(threadId)
-    if (!pending) {
-      const watch = new ThreadWatch(this.leaf, threadId)
-      pending = watch.start().then(() => watch)
-      this.watches.set(threadId, pending)
-      pending.catch(() => {
-        if (this.watches.get(threadId) === pending) this.watches.delete(threadId)
-        watch.close()
-      })
-    }
-    const watch = await pending
+    const entry = this.watches.get(threadId) ?? this.watchThread(threadId)
+    if (entry.opening) await entry.opening
+    const { watch } = entry
     watch.add(onItems)
     let done = false
     return () => {
       if (done) return
       done = true
       watch.remove(onItems)
-      if (watch.size === 0 && this.watches.get(threadId) === pending) {
+      if (watch.size === 0 && this.watches.get(threadId) === entry) {
         this.watches.delete(threadId)
         watch.close()
       }
     }
+  }
+
+  /** Starts following a thread, from its saved copy when the phone has one. */
+  private watchThread(threadId: string): WatchEntry {
+    const watch = new ThreadWatch(this.leaf, threadId, this.cache)
+    const entry: WatchEntry = { watch, restored: false }
+    this.watches.set(threadId, entry)
+    const fail = (error: unknown) => {
+      if (this.watches.get(threadId) === entry) this.watches.delete(threadId)
+      // A saved copy stays on screen with a note; without one the open itself fails.
+      if (entry.restored && watch.size) watch.report(`Could not update this thread: ${error instanceof Error ? error.message : 'unknown error'}. Open it again to retry.`)
+      watch.close()
+    }
+    const restore = (saved: CachedThread | undefined): boolean => {
+      entry.restored = !!saved && watch.restore(saved)
+      if (entry.restored) watch.start().catch(fail)
+      return entry.restored
+    }
+    // Memory first, without waiting, so a recent thread draws on the first frame.
+    if (restore(this.cache?.peek(threadId))) return entry
+    const opening = this.savedCopy(threadId).then((saved) => (restore(saved) ? undefined : watch.start()))
+    entry.opening = opening
+    opening.then(
+      () => {
+        if (entry.opening === opening) entry.opening = undefined
+      },
+      fail,
+    )
+    return entry
+  }
+
+  /** The saved copy from the phone's storage, unless reading it takes longer than asking the computer would. */
+  private savedCopy(threadId: string): Promise<CachedThread | undefined> {
+    if (!this.cache) return Promise.resolve(undefined)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    return Promise.race([
+      this.cache.read(threadId).catch(() => undefined),
+      new Promise<undefined>((resolve) => (timer = setTimeout(() => resolve(undefined), SAVED_READ_TIMEOUT_MS))),
+    ]).finally(() => clearTimeout(timer))
   }
 
   async send(threadId: string, text: string, options: SendOptions = {}): Promise<void> {
@@ -472,6 +644,7 @@ export class RealComputerSession implements ComputerSession {
     if (!this.lists) {
       this.lists = new ListsWatch(this.leaf)
       this.lists.start()
+      if (this.cache) this.lists.add({ lists: (lists) => this.prefetch(lists), state: () => undefined })
     }
     return this.lists.add({ lists: handlers.lists, state: (state, error) => handlers.state?.(state, error) })
   }
@@ -559,6 +732,54 @@ export class RealComputerSession implements ComputerSession {
     this.leaf.close()
   }
 
+  /**
+   * Gets the most recent threads ready to open at once: saved copies are read into memory, and on a
+   * direct path the newest few are brought up to date from the computer, one at a time.
+   */
+  private prefetch(lists: ComputerLists): void {
+    const recent = [...lists.threads].filter((thread) => thread.started).sort((a, b) => b.updatedAt - a.updatedAt)
+    if (!this.warmed) {
+      this.warmed = true
+      const cache = this.cache!
+      void (async () => {
+        for (const thread of recent.slice(0, WARM_THREADS)) await cache.read(thread.id)
+      })()
+    }
+    this.prefetchList = recent.slice(0, PREFETCH_THREADS)
+    if (this.prefetching || this.prefetched || this.leaf.state !== 'open') return
+    // The path moves to direct a few seconds after opening, when it can; look again then.
+    if ((this.leaf as { path?: string }).path !== 'direct') {
+      if (this.prefetchChecks < PREFETCH_CHECKS_MS.length && this.prefetchTimer === undefined) {
+        this.prefetchTimer = setTimeout(() => {
+          this.prefetchTimer = undefined
+          if (this.lists?.current) this.prefetch(this.lists.current)
+        }, PREFETCH_CHECKS_MS[this.prefetchChecks++])
+      }
+      return
+    }
+    this.prefetching = true
+    void (async () => {
+      for (const thread of this.prefetchList) {
+        if (this.leaf.state !== 'open') break
+        if (this.watches.has(thread.id)) continue
+        const saved = await this.cache!.read(thread.id)
+        if (saved && saved.savedAt >= thread.updatedAt) continue
+        try {
+          const stop = await this.openThread(thread.id, () => undefined)
+          const watch = this.watches.get(thread.id)?.watch
+          let timer: ReturnType<typeof setTimeout> | undefined
+          await Promise.race([watch?.ready, new Promise<void>((resolve) => (timer = setTimeout(resolve, PREFETCH_TIMEOUT_MS)))])
+          clearTimeout(timer)
+          stop()
+        } catch {
+          // Prefetching is a convenience; opening the thread tries again.
+        }
+      }
+      this.prefetched = true
+      this.prefetching = false
+    })()
+  }
+
   /** The agent chat a thread belongs to: its messages are sent and stopped through the chat. */
   private chatOf(threadId: string): ListChat | undefined {
     return this.lists?.current?.chats.find((chat) => chat.threadId === threadId && !chat.network)
@@ -612,8 +833,10 @@ export class RealComputerSession implements ComputerSession {
 
   /** Drops an answered request at once, then reads the thread's pending questions again. */
   private async settleQuestions(threadId: string, requestId: string): Promise<void> {
-    const watch = await this.watches.get(threadId)?.catch(() => undefined)
-    if (!watch) return
+    const entry = this.watches.get(threadId)
+    await entry?.opening?.catch(() => undefined)
+    const watch = entry?.watch
+    if (!watch || this.watches.get(threadId) !== entry) return
     watch.projection.setQuestions(watch.projection.questions.filter((entry) => entry.requestId !== requestId))
     watch.emit()
     try {
@@ -632,11 +855,10 @@ export class RealComputerSession implements ComputerSession {
   private reportLate(threadId: string, error: unknown): void {
     if (error instanceof NetError && error.code === 'cancelled') return
     const message = error instanceof Error ? error.message : 'unknown error'
-    void this.watches.get(threadId)?.then(
-      (watch) => {
-        watch.projection.addLocal({ id: `local-${newId('rpc')}`, role: 'system', text: `The reply failed: ${message}`, createdAt: Date.now(), status: 'error' })
-        watch.emit()
-      },
+    const entry = this.watches.get(threadId)
+    if (!entry) return
+    void (entry.opening ?? Promise.resolve()).then(
+      () => entry.watch.report(`The reply failed: ${message}`),
       () => undefined,
     )
   }

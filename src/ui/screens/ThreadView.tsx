@@ -57,7 +57,7 @@ export function ThreadView({ session, threadId, onActivityChange }: ThreadViewPr
         }}
       >
         <div className="m-transcript" role="log" aria-live="polite" aria-busy={thread.active || undefined}>
-          {thread.loading && <div className="m-loading"><Spinner label="Loading thread" /></div>}
+          {thread.loading && <div className="m-loading m-loading--late"><Spinner label="Loading thread" /></div>}
           {!thread.loading && thread.items.length === 0 && (
             <EmptyState title="What should we work on?" body="Your message goes to the computer, which runs the work and streams the reply here." />
           )}

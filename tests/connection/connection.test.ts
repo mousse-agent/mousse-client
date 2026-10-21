@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMousseConnection, type ConnectionDeps } from '../../src/connection'
 import { manualNetworkSignals } from '../../src/connection/networkSignals'
+import { memoryThreadCacheBackend, ThreadCache, type CachedThread } from '../../src/connection/threadCache'
 import type { EnrollmentProgress } from '../../src/connection/types'
 import type { FetchLike } from '../../src/mousseId/http'
 import { sealForOffer, sealForRequest } from '../../src/mousseId/seal'
@@ -247,10 +248,10 @@ async function connect(w: World, extra: Partial<ConnectionDeps> = {}) {
 }
 
 /** A signed-in connection with the phone added to the world's computer by QR code. */
-async function enrolled(setup: (w: World) => void = () => undefined) {
+async function enrolled(setup: (w: World) => void = () => undefined, extra: Partial<ConnectionDeps> = {}) {
   const w = world()
   setup(w)
-  const { connection, storage, deps, server } = await connect(w)
+  const { connection, storage, deps, server } = await connect(w, extra)
   await connection.signInWithPassword('a@b.test', 'pw')
   w.offer = sealForOffer(invite(w), new Uint8Array(32).fill(3))
   await connection.enrollFromQr(`mousse://net/join?v=1&plus=${encodeURIComponent(ORIGIN)}&offer=off_1&key=${b64url(new Uint8Array(32).fill(3))}`, () => undefined)
@@ -265,6 +266,8 @@ async function stored(storage: MemoryKeyStorage): Promise<unknown[]> {
 afterEach(() => {
   vi.useRealTimers()
 })
+
+const SAVED: CachedThread = { stream: 'str_t1', head: { epoch: 1, seq: 3 }, state: { messages: [], active: false }, savedAt: 1 }
 
 describe('real connection without a Mousse ID server', () => {
   it('loads signed out and explains every sign-in attempt', async () => {
@@ -558,6 +561,57 @@ describe('real connection', () => {
       connection.enrollFromQr(`mousse://net/join?v=1&plus=${encodeURIComponent('https://other.test')}&offer=off_1&key=${key}`, (p) => progress.push(p)),
     ).rejects.toThrow(/another Mousse ID server/)
     expect(progress).toEqual([{ stage: 'error', message: expect.stringMatching(/another Mousse ID server/) }])
+  })
+
+  it('clears saved threads of a computer that removed this phone', async () => {
+    const backend = memoryThreadCacheBackend()
+    const threadCache = new ThreadCache(backend)
+    const { w, connection, deps } = await enrolled(() => undefined, { threadCache })
+    threadCache.scope('acct_1', w.computer.node).write('t1', SAVED)
+    threadCache.scope('acct_1', 'nod_other').write('t1', SAVED)
+    await threadCache.settle()
+    deps.openChannel = async () => {
+      throw new NetError('revoked', 'This device was revoked.')
+    }
+    await expect(connection.openComputer(w.computer.node)).rejects.toThrow(/removed this phone/)
+    await threadCache.settle()
+    expect([...backend.index.values()].map((row) => row.nodeId)).toEqual(['nod_other'])
+  })
+
+  it('clears saved threads when a roster removing this phone ends an open session', async () => {
+    const backend = memoryThreadCacheBackend()
+    const threadCache = new ThreadCache(backend)
+    const { w, connection, deps } = await enrolled(() => undefined, { threadCache })
+    let remote: ReturnType<typeof fakeComputer> | undefined
+    deps.openChannel = async () => {
+      const [a, b] = streamPair()
+      remote = fakeComputer(b, w.user, w.computer, roster(w.user, w.computer.node))
+      void remote.handshake()
+      return channelOf(a, w.computer.keys.transport.spki)
+    }
+    const session = await connection.openComputer(w.computer.node)
+    threadCache.scope('acct_1', w.computer.node).write('t1', SAVED)
+    await threadCache.settle()
+    expect(backend.data.size).toBe(1)
+    w.user.revoked.push({ subject: w.phoneNode!, throughKeyEpoch: 1, revokedAt: Date.now() - 500 })
+    await remote!.send({ t: 'rosterUpdate', roster: roster(w.user, w.computer.node) })
+    await until(() => session.state() === 'closed')
+    expect(session.endReason()).toBe('removed')
+    await threadCache.settle()
+    expect(backend.data.size).toBe(0)
+    expect(threadCache.scope('acct_1', w.computer.node).peek('t1')).toBeUndefined()
+  })
+
+  it('clears saved threads on sign-out', async () => {
+    const backend = memoryThreadCacheBackend()
+    const threadCache = new ThreadCache(backend)
+    const { w, connection } = await enrolled(() => undefined, { threadCache })
+    threadCache.scope('acct_1', w.computer.node).write('t1', SAVED)
+    threadCache.scope('acct_other', w.computer.node).write('t1', SAVED)
+    await threadCache.settle()
+    await connection.signOut()
+    await threadCache.settle()
+    expect([...backend.index.values()].map((row) => row.accountId)).toEqual(['acct_other'])
   })
 
   it('forgets relay credentials but keeps enrollments on sign-out', async () => {

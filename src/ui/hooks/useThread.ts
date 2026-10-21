@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import type { ChatItem, ComputerSession, QuestionAnswers, SendOptions, ThreadDisplayState } from '../../connection/types'
 import { errorMessage } from './useAsync'
 
@@ -55,7 +55,8 @@ export function useThread(session: ComputerSession | undefined, threadId: string
     }, delay)
   }, [session, threadId])
 
-  useEffect(() => {
+  // A layout effect: a thread the session holds in memory draws on the first frame, with no spinner.
+  useLayoutEffect(() => {
     alive.current = true
     if (!session) return
     let unsubscribe: (() => void) | undefined

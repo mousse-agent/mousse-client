@@ -17,6 +17,7 @@ import { dialRelay, type RelaySocketFactory } from '../net/relay'
 import { LeafSession, type LeafIdentity } from '../net/session'
 import { connectTls, type SecureChannel } from '../net/tls13/client'
 import { RealComputerSession } from './computerSession'
+import { indexedDbThreadCacheBackend, ThreadCache } from './threadCache'
 import { EnrollmentStore, type LoadedEnrollment } from './enrollmentStore'
 import type { NetworkSignals } from './networkSignals'
 import { DIRECT_OPEN_TIMEOUT_MS, DIRECT_PING_INTERVAL_MS, PathSession, type PathSessionOptions } from './pathSession'
@@ -88,6 +89,8 @@ export interface ConnectionDeps {
   redeem?: (options: RedeemOptions) => Promise<Enrollment>
   pollMs?: number
   renewMs?: number
+  /** Saved thread contents; defaults to one in the webview's IndexedDB. */
+  threadCache?: ThreadCache
 }
 
 const defaultOpenBrowser: AuthBrowser = async (url) => (await import('../authBrowser')).openAuthBrowser(url)
@@ -142,6 +145,9 @@ class RealConnection implements MousseConnection {
   private readonly grantLocks = new Map<string, Promise<unknown>>()
   /** Phone nodes forgotten in this run, kept out of the device list until Mousse ID drops them. */
   private readonly forgotten = new Set<string>()
+  private readonly threads: ThreadCache
+  /** The signed-in account, to clear its saved threads once it signs out. */
+  private signedInAs?: string
 
   constructor(
     private readonly deps: ConnectionDeps,
@@ -150,10 +156,14 @@ class RealConnection implements MousseConnection {
     this.now = deps.now ?? Date.now
     const storage = deps.storage ?? new SecureKeyStorage()
     this.store = new EnrollmentStore(storage)
+    this.threads = deps.threadCache ?? new ThreadCache(indexedDbThreadCacheBackend())
     if (configError) return
     this.session = new MousseIdSession(new MousseIdHttp(deps.origin ?? MOUSSE_ID_ORIGIN!, deps.fetcher), storage, this.now)
     this.net = new MousseIdNet(this.session, this.now)
     this.session.onChange((current) => {
+      // Saved threads belong to the account: a signed-out phone keeps none of them.
+      if (this.signedInAs && this.signedInAs !== current?.account.id) void this.threads.clearAccount(this.signedInAs)
+      this.signedInAs = current?.account.id
       if (!current) this.devices = undefined
       this.emit()
       if (current) void this.refreshDevices()
@@ -162,6 +172,7 @@ class RealConnection implements MousseConnection {
 
   async load(): Promise<void> {
     await this.session?.load()
+    this.signedInAs = this.session?.current()?.account.id
   }
 
   /** The same object until the state changes: React's useSyncExternalStore re-renders forever otherwise. */
@@ -441,6 +452,7 @@ class RealConnection implements MousseConnection {
     scheduleRenewal()
     const endReason = (error?: Error): SessionEndReason => {
       if (!removedByRoster && !(error instanceof NetError && REMOVED.has(error.code))) return 'ended'
+      void this.threads.clearComputer(accountId, nodeId)
       void this.forget(ownNode).catch(() => undefined)
       return 'removed'
     }
@@ -448,7 +460,7 @@ class RealConnection implements MousseConnection {
       stopped = true
       clearTimeout(renewal)
     }
-    return new RealComputerSession({ nodeId, leaf, endReason, onClose: stopRenewal })
+    return new RealComputerSession({ nodeId, leaf, endReason, onClose: stopRenewal, threadCache: this.threads.scope(accountId, nodeId) })
   }
 
   /** Keeps the newer rosters the user's computers pushed to Mousse ID; each must verify with the pinned root key. */
@@ -465,7 +477,25 @@ class RealConnection implements MousseConnection {
 
   private async forget(node: string): Promise<void> {
     this.forgotten.add(node)
+    await this.forgetThreads(node).catch(() => undefined)
     await this.store.forget(node)
+  }
+
+  /** Clears the saved threads of every computer the forgotten enrollment reached. */
+  private async forgetThreads(node: string): Promise<void> {
+    const accountId = this.session?.current()?.account.id
+    if (!accountId) return
+    const entry = (await this.store.loaded(accountId)).find((row) => row.stored.enrollment.node === node)
+    if (!entry) return
+    for (const signed of entry.roster.nodes) {
+      let subject: string
+      try {
+        subject = verifyDelegation(signed, entry.roster.rootKey).subject
+      } catch {
+        continue
+      }
+      if (subject !== node) await this.threads.clearComputer(accountId, subject)
+    }
   }
 
   /**
