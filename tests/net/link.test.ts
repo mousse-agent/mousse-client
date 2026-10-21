@@ -223,7 +223,7 @@ describe('leaf session', () => {
 
   async function open(ctx: ReturnType<typeof setup>) {
     const hello = await ctx.remote.next('hello')
-    expect(hello).toMatchObject({ node: ctx.phone, caps: ['streams.v1', 'rpc.v1'], protoMajor: 1 })
+    expect(hello).toMatchObject({ node: ctx.phone, caps: ['streams.v1', 'rpc.v1', 'presence.v1'], protoMajor: 1 })
     await ctx.remote.send({
       t: 'hello',
       protoMajor: 1,
@@ -235,8 +235,8 @@ describe('leaf session', () => {
       now: Date.now(),
     })
     const ack = await ctx.remote.next('helloAck')
-    expect(ack.caps).toEqual(['streams.v1', 'rpc.v1'])
-    await ctx.remote.send({ t: 'helloAck', protoMinor: 0, caps: ['streams.v1', 'rpc.v1'], now: Date.now() })
+    expect(ack.caps).toEqual(['streams.v1', 'rpc.v1', 'presence.v1'])
+    await ctx.remote.send({ t: 'helloAck', protoMinor: 0, caps: ['streams.v1', 'rpc.v1', 'presence.v1'], now: Date.now() })
     await ctx.session.opened
   }
 

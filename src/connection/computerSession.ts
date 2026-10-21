@@ -19,13 +19,16 @@ import type {
   LlmProviderOption,
   ModelSelection,
   Project,
+  QuestionAnswers,
   QueuedMessage,
   SendOptions,
   SessionEndReason,
   SessionState,
   ThreadDetails,
+  ThreadDisplayState,
   ThreadSummary,
 } from './types'
+import { pendingQuestionsOf } from './timelineItems'
 
 /** How long a reply may run before the phone stops waiting for its result. */
 export const SEND_DEADLINE_MS = 6 * 60 * 60 * 1000
@@ -170,10 +173,12 @@ function isHead(value: unknown): value is StreamHead {
   return isObject(value) && Number.isSafeInteger(value.epoch) && Number.isSafeInteger(value.seq)
 }
 
+type ItemsListener = (items: ChatItem[], state?: ThreadDisplayState) => void
+
 /** One thread's display stream, shared by every open view of that thread. */
 class ThreadWatch {
   readonly projection: ThreadProjection
-  private readonly listeners = new Set<(items: ChatItem[]) => void>()
+  private readonly listeners = new Set<ItemsListener>()
   private stream?: string
   private unsubscribe?: () => void
   private resyncing?: Promise<void>
@@ -198,18 +203,19 @@ class ThreadWatch {
     await this.load()
   }
 
-  add(listener: (items: ChatItem[]) => void): void {
+  add(listener: ItemsListener): void {
     this.listeners.add(listener)
-    listener(this.projection.items())
+    listener(this.projection.items(), this.projection.state())
   }
 
-  remove(listener: (items: ChatItem[]) => void): void {
+  remove(listener: ItemsListener): void {
     this.listeners.delete(listener)
   }
 
   emit(): void {
     const items = this.projection.items()
-    for (const listener of this.listeners) listener(items)
+    const state = this.projection.state()
+    for (const listener of this.listeners) listener(items, state)
   }
 
   close(): void {
@@ -229,6 +235,9 @@ class ThreadWatch {
     this.unsubscribe = this.leaf.subscribe(stream, snapshot.target, {
       records: (records) => {
         if (this.projection.apply(records)) this.emit()
+      },
+      delta: (data) => {
+        if (this.projection.applyDelta(data)) this.emit()
       },
       snapshotRequired: () => this.resync(),
       ended: () => {
@@ -357,7 +366,7 @@ export class RealComputerSession implements ComputerSession {
     return thread
   }
 
-  async openThread(threadId: string, onItems: (items: ChatItem[]) => void): Promise<() => void> {
+  async openThread(threadId: string, onItems: ItemsListener): Promise<() => void> {
     let pending = this.watches.get(threadId)
     if (!pending) {
       const watch = new ThreadWatch(this.leaf, threadId)
@@ -432,6 +441,20 @@ export class RealComputerSession implements ComputerSession {
     const run = this.runs.get(threadId)
     if (!run) throw new Error('This reply was started on another device. Stop it there.')
     await this.leaf.rpc('orchestrator.abort', { threadId, run }, { idem: crypto.randomUUID() })
+  }
+
+  async answerQuestions(threadId: string, requestId: string, answers: QuestionAnswers): Promise<boolean> {
+    const value = await this.leaf.rpc('orchestrator.answerQuestions', { threadId, requestId, answers }, { idem: crypto.randomUUID() })
+    if (!isObject(value) || typeof value.ok !== 'boolean') return badAnswer('orchestrator.answerQuestions')
+    await this.settleQuestions(threadId, requestId)
+    return value.ok
+  }
+
+  async dismissQuestions(threadId: string, requestId: string): Promise<boolean> {
+    const value = await this.leaf.rpc('orchestrator.dismissQuestions', { threadId, requestId }, { idem: crypto.randomUUID() })
+    if (!isObject(value) || typeof value.ok !== 'boolean') return badAnswer('orchestrator.dismissQuestions')
+    await this.settleQuestions(threadId, requestId)
+    return value.ok
   }
 
   async isTurnActive(threadId: string): Promise<boolean> {
@@ -582,6 +605,24 @@ export class RealComputerSession implements ComputerSession {
       refusal(value)
     }
     return upload
+  }
+
+  /** Drops an answered request at once, then reads the thread's pending questions again. */
+  private async settleQuestions(threadId: string, requestId: string): Promise<void> {
+    const watch = await this.watches.get(threadId)?.catch(() => undefined)
+    if (!watch) return
+    watch.projection.setQuestions(watch.projection.questions.filter((entry) => entry.requestId !== requestId))
+    watch.emit()
+    try {
+      const value = await this.leaf.rpc('orchestrator.pendingQuestions', { threadId })
+      const pending = isObject(value) ? pendingQuestionsOf(value.pending, threadId) : undefined
+      if (pending) {
+        watch.projection.setQuestions(pending)
+        watch.emit()
+      }
+    } catch {
+      // The live questions delta keeps the list current.
+    }
   }
 
   /** A send that failed after the phone stopped waiting: show it in the thread instead of dropping it. */

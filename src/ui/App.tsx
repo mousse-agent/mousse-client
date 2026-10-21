@@ -10,6 +10,7 @@ import { SettingsScreen } from './screens/SettingsScreen'
 import './theme/fonts.css'
 import './theme/tokens.css'
 import './theme/app.css'
+import './theme/timeline.css'
 
 function Screen() {
   const { route } = useRouter()

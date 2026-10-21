@@ -125,6 +125,50 @@ export interface ListsHandlers {
 
 export type ChatRole = 'user' | 'assistant' | 'tool' | 'system'
 
+/**
+ * What a timeline row shows, after the desktop's ChatMessage `kind`. Plain user and assistant
+ * text is `message`; the rest mirror the desktop's timeline rows.
+ */
+export type ChatItemKind = 'message' | 'thinking' | 'tool' | 'plan' | 'progress' | 'warning' | 'compaction' | 'handoff'
+
+/** A tool call, with the desktop's normalized name (Read, Edit, Write, Bash, Grep, Glob, Task, Mcp, Generic…). */
+export interface ChatToolCall {
+  name: string
+  /** The provider's own name for the tool, when known. */
+  rawName?: string
+  /** The MCP server, for MCP tools. */
+  server?: string
+  title: string
+  summary: string
+  details: string[]
+  /** Structured arguments (JSON object). */
+  input?: Record<string, unknown>
+  /** The result: text, or parsed JSON when the result is JSON. */
+  output?: unknown
+}
+
+export interface ChatImage {
+  name: string
+  mimeType: string
+  /** Base64 without a `data:` prefix. Missing on old messages saved without the image. */
+  data?: string
+}
+
+/** A desktop reference pill in a user message (a file, thread, project, terminal, browser tab or agent). */
+export interface ChatReference {
+  kind: string
+  title: string
+  path?: string
+  url?: string
+}
+
+export interface ChatResponseMeta {
+  modelName?: string
+  totalResponseTimeMs?: number
+  tokensUsed?: number
+  tokensPerSecond?: number
+}
+
 export interface ChatItem {
   id: string
   role: ChatRole
@@ -132,6 +176,70 @@ export interface ChatItem {
   createdAt: number
   status?: 'streaming' | 'done' | 'error'
   toolName?: string
+  /** Missing on items made by older code paths; read as `message`. */
+  kind?: ChatItemKind
+  turnId?: string
+  tool?: ChatToolCall
+  /** A plan card: the plan's title and markdown. */
+  plan?: { title: string; markdown: string; request?: string }
+  images?: ChatImage[]
+  /** Names of attached files that are not images. */
+  files?: string[]
+  references?: ChatReference[]
+  /** The error the computer reported for this message. */
+  error?: { message: string; code?: string }
+  meta?: ChatResponseMeta
+  /** A context handoff between models: "provider/model" labels. */
+  handoff?: { from: string; to: string }
+  /** The reply stopped before it finished. */
+  incomplete?: boolean
+}
+
+/** The desktop's turn phase (shared/types.ts TurnPhase). */
+export type TurnPhase =
+  | 'idle'
+  | 'queued'
+  | 'thinking'
+  | 'streaming'
+  | 'tool_running'
+  | 'awaiting_input'
+  | 'finalizing'
+  | 'completed'
+  | 'stopped'
+  | 'failed'
+
+export interface PendingQuestionOption {
+  id: string
+  label: string
+}
+
+export interface PendingQuestion {
+  id: string
+  prompt: string
+  options: PendingQuestionOption[]
+  allowMultiple?: boolean
+}
+
+/** Questions or an approval the computer is waiting on. Approvals are one question with id `approval`. */
+export interface PendingQuestions {
+  requestId: string
+  questions: PendingQuestion[]
+}
+
+/** Answers by question id: an option id or typed text, or a list of them for multiple choice. */
+export type QuestionAnswers = Record<string, string | string[]>
+
+/** Thread state beside the items. */
+export interface ThreadDisplayState {
+  /** The latest turn phase the computer reported. */
+  phase?: TurnPhase
+  /** When the current turn started, from the computer. */
+  turnStartedAt?: number
+  /** The turn's error, when the phase is `failed`. */
+  turnError?: string
+  questions: PendingQuestions[]
+  /** The computer could not reach its model provider. */
+  connectionFailed?: string
 }
 
 /** A computer's model choice for a thread. The effort is a `:<effort>` suffix on `model`. */
@@ -237,8 +345,15 @@ export interface ComputerSession {
   listProjects(): Promise<Project[]>
   listThreads(filter?: { projectId?: string; query?: string }): Promise<ThreadSummary[]>
   createThread(input: { projectId: string; title?: string }): Promise<ThreadSummary>
-  /** Calls onItems with the full item list on open and after every change. Returns an unsubscribe. */
-  openThread(threadId: string, onItems: (items: ChatItem[]) => void): Promise<() => void>
+  /**
+   * Calls onItems with the full item list, and the thread's display state when the session knows
+   * it, on open and after every change. Returns an unsubscribe.
+   */
+  openThread(threadId: string, onItems: (items: ChatItem[], state?: ThreadDisplayState) => void): Promise<() => void>
+  /** Answers questions the computer is waiting on. False when they are no longer pending. */
+  answerQuestions?(threadId: string, requestId: string, answers: QuestionAnswers): Promise<boolean>
+  /** Dismisses questions the computer is waiting on. False when they are no longer pending. */
+  dismissQuestions?(threadId: string, requestId: string): Promise<boolean>
   send(threadId: string, text: string, options?: SendOptions): Promise<void>
   abort(threadId: string): Promise<void>
   isTurnActive(threadId: string): Promise<boolean>

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
 import { RealComputerSession } from '../../src/connection/computerSession'
-import type { ChatItem } from '../../src/connection/types'
+import type { ChatItem, ThreadDisplayState } from '../../src/connection/types'
 import { newId } from '../../src/net/canonical'
 import { NetError } from '../../src/net/errors'
 import { generateNodeKeys } from '../../src/net/keys'
@@ -115,6 +115,45 @@ describe('computer session', () => {
 
     unsubscribe()
     expect(await remote.next('unsubscribe')).toEqual({ t: 'unsubscribe', stream: 'str_t1' })
+    session.close()
+  })
+
+  it('streams live deltas and answers pending questions', async () => {
+    const { session, remote, leaf } = await setup()
+    expect(leaf.caps).toBeDefined()
+    const seen: Array<{ items: ChatItem[]; state?: ThreadDisplayState }> = []
+    const opening = session.openThread('t1', (items, state) => seen.push({ items, state }))
+    await remote.answer('bridge.thread.open', { descriptor: { id: 'str_t1' }, head: { epoch: 1, seq: 3 } })
+    await remote.next('snapshot.get')
+    const pending = [{ requestId: 'q1', threadId: 't1', questions: [{ id: 'pick', prompt: 'Which?', options: [{ id: 'a', label: 'A' }] }] }]
+    await remote.snapshotChunk(
+      'str_t1',
+      snapshotBodies('t1', { messages: [message('m1', 'user', 'Hi')], pendingQuestions: pending }).map((entry) => remote.record('str_t1', entry.type, entry.body)),
+    )
+    await opening
+    await remote.next('subscribe')
+    expect(seen.at(-1)?.state?.questions.map((entry) => entry.requestId)).toEqual(['q1'])
+
+    // Presence is ignored; a delta for the subscribed stream shows the reply as it is written.
+    await remote.presence('str_t1')
+    await remote.delta('str_t1', { threadId: 't1', type: 'thread.message', data: { threadId: 't1', message: message('m2', 'assistant', 'Wor', 2_000, { streaming: true }) } })
+    await until(() => seen.at(-1)?.items.length === 2)
+    expect(seen.at(-1)?.items[1]).toMatchObject({ id: 'm2', text: 'Wor', status: 'streaming' })
+    expect(session.state()).toBe('open')
+
+    const answering = session.answerQuestions('t1', 'q1', { pick: 'a' })
+    const call = await remote.answer('orchestrator.answerQuestions', { ok: true })
+    expect(call.params).toEqual({ threadId: 't1', requestId: 'q1', answers: { pick: 'a' } })
+    expect(call.idem).toBeTruthy()
+    await remote.answer('orchestrator.pendingQuestions', { pending: [] })
+    expect(await answering).toBe(true)
+    expect(seen.at(-1)?.state?.questions).toEqual([])
+
+    const dismissing = session.dismissQuestions('t1', 'q2')
+    const dismiss = await remote.answer('orchestrator.dismissQuestions', { ok: false })
+    expect(dismiss.params).toEqual({ threadId: 't1', requestId: 'q2' })
+    await remote.answer('orchestrator.pendingQuestions', { pending: [] })
+    expect(await dismissing).toBe(false)
     session.close()
   })
 
