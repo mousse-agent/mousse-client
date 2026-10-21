@@ -4,8 +4,10 @@ import { RealComputerSession } from '../../src/connection/computerSession'
 import { memoryThreadCacheBackend, ThreadCache, THREAD_CACHE_FORMAT, type CachedThread, type ThreadCacheScope } from '../../src/connection/threadCache'
 import type { ChatItem, ThreadDisplayState } from '../../src/connection/types'
 import { newId } from '../../src/net/canonical'
+import { utf8 } from '../../src/net/bytes'
+import { NetError } from '../../src/net/errors'
 import { generateNodeKeys } from '../../src/net/keys'
-import { LeafSession } from '../../src/net/session'
+import { LeafSession, type SessionLink, type StreamRecord, type SubscriptionHandlers } from '../../src/net/session'
 import { streamPair } from '../../src/net/stream'
 import { delegate, roster, testComputer, testUser } from '../net/fixtures'
 import { channelOf, fakeComputer, message, snapshotBodies, until } from './helpers'
@@ -287,6 +289,74 @@ describe('opening threads from the cache', () => {
     expect(texts(seen)?.slice(0, 2)).toEqual(['Hi', 'Hello'])
     expect(seen.at(-1)?.items[2]).toMatchObject({ role: 'system', status: 'error' })
     expect(scope.peek('t1')).toBeUndefined()
+    session.close()
+  })
+})
+
+/** A computer link with no wire: lists from the old polling methods, and one snapshot per thread. */
+function scriptedLink(path: 'relay' | 'direct', threads: Array<{ id: string; updatedAt: number }>) {
+  const snapshots: string[] = []
+  const record = (stream: string, seq: number, type: string, body: unknown): StreamRecord => {
+    const envelope = { v: 1, minor: 0, id: `e${seq}`, stream, type, crit: false, author: { user: 'u', node: 'n', keyEpoch: 1 }, ts: 0, body }
+    return { seq, epoch: 1, recvTs: 0, bytes: utf8(JSON.stringify(envelope)), envelope }
+  }
+  const link = {
+    path,
+    state: 'open',
+    closeReason: undefined,
+    onStateChange: () => () => undefined,
+    onClose: () => () => undefined,
+    close: () => undefined,
+    async rpc(method: string, params: { threadId?: string }) {
+      if (method === 'bridge.lists.open') throw new NetError('forbidden', 'Old desktop.')
+      if (method === 'projects.list') return { projects: [] }
+      if (method === 'threads.list') return { threads: threads.map((thread) => ({ id: thread.id, name: `Thread ${thread.id}`, updatedAt: new Date(thread.updatedAt).toISOString() })) }
+      if (method === 'bridge.thread.open') return { descriptor: { id: `str_${params.threadId}` }, head: { epoch: 1, seq: 3 } }
+      return {}
+    },
+    async snapshot(stream: string) {
+      snapshots.push(stream)
+      const threadId = stream.slice(4)
+      const bodies = snapshotBodies(threadId, { messages: [message('m1', 'user', `Hi from ${threadId}`)] })
+      return { target: { epoch: 1, seq: 3 }, records: bodies.map((body, index) => record(stream, index + 1, body.type, body.body)) }
+    },
+    subscribe(_stream: string, _after: unknown, handlers: SubscriptionHandlers) {
+      setTimeout(() => handlers.caughtUp?.(), 0)
+      return () => undefined
+    },
+  }
+  return { link: link as unknown as SessionLink, snapshots }
+}
+
+describe('prefetching recent threads', () => {
+  const threads = [1, 5, 3, 4, 2].map((n) => ({ id: `t${n}`, updatedAt: Date.now() - (10 - n) * 60_000 }))
+
+  it('brings the three most recent threads up to date on a direct path', async () => {
+    const cache = new ThreadCache(memoryThreadCacheBackend())
+    const scope = cache.scope('acct', 'studio')
+    const { link, snapshots } = scriptedLink('direct', threads)
+    const session = new RealComputerSession({ nodeId: 'studio', leaf: link, threadCache: scope })
+    const stop = session.watchLists({ lists: () => undefined })
+    await until(() => snapshots.length === 3 && !!scope.peek('t3'), 200)
+    expect(snapshots).toEqual(['str_t5', 'str_t4', 'str_t3'])
+    expect(scope.peek('t5')?.state.messages[0].content).toBe('Hi from t5')
+    expect(scope.peek('t1')).toBeUndefined()
+    // Opening a prefetched thread draws it at once.
+    const seen: Seen = []
+    void session.openThread('t4', (items) => seen.push({ items }))
+    expect(texts(seen)).toEqual(['Hi from t4'])
+    stop()
+    session.close()
+  })
+
+  it('leaves threads alone on the relay', async () => {
+    const cache = new ThreadCache(memoryThreadCacheBackend())
+    const { link, snapshots } = scriptedLink('relay', threads)
+    const session = new RealComputerSession({ nodeId: 'studio', leaf: link, threadCache: cache.scope('acct', 'studio') })
+    const stop = session.watchLists({ lists: () => undefined })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(snapshots).toEqual([])
+    stop()
     session.close()
   })
 })

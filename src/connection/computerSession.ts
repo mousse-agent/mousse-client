@@ -187,6 +187,8 @@ export const PREFETCH_THREADS = 3
 const PREFETCH_CHECKS_MS = [5_000, 15_000]
 const PREFETCH_TIMEOUT_MS = 10_000
 
+/** The longest an open waits for the phone's storage before asking the computer instead. */
+const SAVED_READ_TIMEOUT_MS = 400
 /** How long after the last change a followed thread is saved. */
 export const THREAD_SAVE_DELAY_MS = 1_000
 /** Codes that mean the thread is gone from the computer, so its saved copy is too. */
@@ -543,7 +545,7 @@ export class RealComputerSession implements ComputerSession {
     }
     // Memory first, without waiting, so a recent thread draws on the first frame.
     if (restore(this.cache?.peek(threadId))) return entry
-    const opening = (this.cache ? this.cache.read(threadId) : Promise.resolve(undefined)).then((saved) => (restore(saved) ? undefined : watch.start()))
+    const opening = this.savedCopy(threadId).then((saved) => (restore(saved) ? undefined : watch.start()))
     entry.opening = opening
     opening.then(
       () => {
@@ -552,6 +554,16 @@ export class RealComputerSession implements ComputerSession {
       fail,
     )
     return entry
+  }
+
+  /** The saved copy from the phone's storage, unless reading it takes longer than asking the computer would. */
+  private savedCopy(threadId: string): Promise<CachedThread | undefined> {
+    if (!this.cache) return Promise.resolve(undefined)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    return Promise.race([
+      this.cache.read(threadId).catch(() => undefined),
+      new Promise<undefined>((resolve) => (timer = setTimeout(() => resolve(undefined), SAVED_READ_TIMEOUT_MS))),
+    ]).finally(() => clearTimeout(timer))
   }
 
   async send(threadId: string, text: string, options: SendOptions = {}): Promise<void> {
