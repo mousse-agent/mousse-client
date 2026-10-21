@@ -233,6 +233,24 @@ async function signedIn(fetcher: FetchLike) {
 }
 
 describe('Mousse ID Net routes', () => {
+  it('reads the STUN servers and the WebRTC switch from the configuration', async () => {
+    const read = async (extra: Record<string, unknown>) => {
+      const server = fakeServer((call) => {
+        if (call.path === '/v1/app/session/password') return { body: appSession(1) }
+        if (call.path === '/v1/net/config') return { body: { ...CONFIG, ...extra } }
+        return { status: 404, body: { error: { code: 'not_found' } } }
+      })
+      return (await signedIn(server.fetcher)).configuration()
+    }
+    // An older Mousse ID has neither field: no STUN, and the direct path stays on.
+    expect(await read({})).toMatchObject({ stun: [], directWebrtc: true })
+    expect(await read({ stun: ['stun:api.mousse.work:3478', 'turn:x.test'], directWebrtc: false })).toMatchObject({
+      stun: ['stun:api.mousse.work:3478'],
+      directWebrtc: false,
+    })
+    expect(await read({ stun: 'stun:x.test', directWebrtc: 'no' })).toMatchObject({ stun: [], directWebrtc: true })
+  })
+
   it('registers the phone with a signed register challenge whose intent carries kind phone', async () => {
     const identity = phoneIdentity()
     const server = controlServer(identity)

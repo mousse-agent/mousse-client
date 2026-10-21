@@ -4,6 +4,7 @@
 import { b64url } from '../net/bytes'
 import { canonicalJson } from '../net/canonical'
 import { sha256, signBytes, type Signed } from '../net/crypto'
+import { stunServers } from '../net/webrtc'
 import { MousseIdError, badResponse, isObject, type MousseIdHttp } from './http'
 import type { MousseIdSession } from './session'
 
@@ -22,6 +23,10 @@ export interface MousseIdConfig {
   gatewayId: string
   relayAudience: string
   approvalOrigin?: string
+  /** STUN servers for the WebRTC direct path; empty means host candidates only. Never TURN. */
+  stun: string[]
+  /** False switches the WebRTC direct path off; absent means on. */
+  directWebrtc: boolean
 }
 
 /** The node identity Mousse ID checks challenges against. `signSecret` is the node's Ed25519 key. */
@@ -118,6 +123,9 @@ function checkedConfig(value: unknown): MousseIdConfig {
     gatewayId: value.gatewayId,
     relayAudience: value.relayAudience,
     ...(value.approvalOrigin ? { approvalOrigin: value.approvalOrigin } : {}),
+    // A malformed field never takes the relay down with it: only an explicit false switches WebRTC off.
+    stun: stunServers(value.stun),
+    directWebrtc: value.directWebrtc !== false,
   }
 }
 

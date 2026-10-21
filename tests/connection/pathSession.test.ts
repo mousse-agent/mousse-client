@@ -1,17 +1,18 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
 import { manualNetworkSignals } from '../../src/connection/networkSignals'
-import { ENDPOINTS_METHOD, PathSession, type PathOpeners } from '../../src/connection/pathSession'
+import { DIRECT_OPEN_TIMEOUT_MS, ENDPOINTS_METHOD, PathSession, type DirectLink, type PathOpeners } from '../../src/connection/pathSession'
 import { newId } from '../../src/net/canonical'
-import type { DirectEndpoint } from '../../src/net/direct'
 import { NetError } from '../../src/net/errors'
 import { generateNodeKeys } from '../../src/net/keys'
 import { LeafSession, type StreamRecord } from '../../src/net/session'
 import { streamPair, type StreamEndpoint } from '../../src/net/stream'
+import { WEBRTC_OFFER_METHOD } from '../../src/net/webrtc'
 import { delegate, roster, testComputer, testUser } from '../net/fixtures'
 import { channelOf, fakeComputer, until, type Record } from './helpers'
 
-const LAN: DirectEndpoint = { url: 'ws://192.168.1.5:41234/mousse-net', kind: 'lan' }
+/** What a computer that takes WebRTC offers answers to the endpoints request. */
+const WEBRTC = { endpoints: [], webrtc: { v: 1 } }
 
 type Remote = ReturnType<typeof fakeComputer>
 
@@ -65,7 +66,9 @@ async function events(remote: Remote, stream: string, records: Record[]) {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** A session on the relay whose direct path opens on demand. */
-async function setup(options: { relayPong?: number; directPong?: number | false } = {}) {
+async function setup(
+  options: { relayPong?: number; directPong?: number | false; allowed?: boolean; timeoutMs?: number; hang?: boolean; signal?: boolean } = {},
+) {
   const w = world()
   const relay = await w.path({ pong: options.relayPong ?? 30 })
   const relays = [relay]
@@ -74,6 +77,8 @@ async function setup(options: { relayPong?: number; directPong?: number | false 
   const opened: string[] = []
   let relayFailure: Error | undefined
   let directFailure: Error | undefined
+  const links: DirectLink[] = []
+  const signals: AbortSignal[] = []
   const open: PathOpeners = {
     relay: async () => {
       opened.push('relay')
@@ -82,13 +87,20 @@ async function setup(options: { relayPong?: number; directPong?: number | false 
       relays.push(next)
       return next.leaf
     },
-    direct: async (endpoint) => {
-      opened.push(endpoint.url)
+    direct: async (endpoint, signal, link) => {
+      opened.push(endpoint.kind)
+      links.push(link)
+      signals.push(signal)
       if (directFailure) throw directFailure
+      if (options.hang)
+        return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new NetError('cancelled')), { once: true }))
+      if (options.signal) await link.rpc(WEBRTC_OFFER_METHOD, { sdp: 'v=0 offer', v: 1 })
       const next = await w.path({ pong: options.directPong ?? 0, pingIntervalMs: 60_000 })
       directs.push(next)
       return next.leaf
     },
+    ...(options.allowed === undefined ? {} : { directAllowed: async () => options.allowed! }),
+    ...(options.timeoutMs === undefined ? {} : { directTimeoutMs: () => options.timeoutMs! }),
   }
   const session = new PathSession({ first: relay.leaf, open, network, autoProbe: false, livenessTimeoutMs: 200, settleMs: 5 })
   const states: string[] = []
@@ -101,6 +113,8 @@ async function setup(options: { relayPong?: number; directPong?: number | false 
     directs,
     network,
     opened,
+    links,
+    signals,
     states,
     failRelay: (error: Error) => (relayFailure = error),
     failDirect: (error: Error) => (directFailure = error),
@@ -108,29 +122,26 @@ async function setup(options: { relayPong?: number; directPong?: number | false 
 }
 
 /** Runs a probe and answers the endpoints request on the relay. */
-async function upgrade(t: Awaited<ReturnType<typeof setup>>, endpoints: unknown[] = [LAN]) {
+async function upgrade(t: Awaited<ReturnType<typeof setup>>, answer: unknown = WEBRTC) {
   const probing = t.session.probe()
   const relay = t.relays.at(-1)!
-  await relay.remote.answer(ENDPOINTS_METHOD, { endpoints })
+  await relay.remote.answer(ENDPOINTS_METHOD, answer)
   await probing
 }
 
 describe('path session', () => {
-  it('learns the endpoints over the relay and moves to a direct path that answers faster', async () => {
-    const t = await setup()
+  it('learns over the relay that the computer takes WebRTC and moves to a direct path that answers faster', async () => {
+    const t = await setup({ signal: true })
     expect(t.session.path).toBe('relay')
-    await upgrade(t, [
-      { url: 'ws://8.8.8.8:41234/mousse-net', kind: 'lan' },
-      { url: 'ws://studio.local:41234/mousse-net', kind: 'lan' },
-      { url: 'ws://100.101.1.2:41234/mousse-net', kind: 'tailscale' },
-      LAN,
-    ])
-    // Public addresses and host names are never dialed; LAN comes first.
-    expect(t.opened.slice(0, 2)).toEqual([LAN.url, 'ws://100.101.1.2:41234/mousse-net'])
+    const probing = t.session.probe()
+    await t.relay.remote.answer(ENDPOINTS_METHOD, WEBRTC)
+    // The offer travels inside the relay session.
+    const offer = await t.relay.remote.answer(WEBRTC_OFFER_METHOD, { sdp: 'v=0 answer' })
+    expect(offer.params).toEqual({ sdp: 'v=0 offer', v: 1 })
+    await probing
+    expect(t.opened).toEqual(['webrtc'])
     expect(t.session.path).toBe('direct')
-    // Both private endpoints answered; the first to open carries the session, the other is closed.
-    await until(() => t.directs.filter((path) => path.leaf.state === 'open').length === 1)
-    const carrier = t.directs.find((path) => path.leaf.state === 'open')!
+    const carrier = t.directs[0]
     const listing = t.session.rpc('projects.list', {})
     const request = await carrier.remote.answer('projects.list', { projects: [] })
     expect(await listing).toEqual({ projects: [] })
@@ -147,10 +158,51 @@ describe('path session', () => {
     expect(slow.session.path).toBe('relay')
     await until(() => slow.directs[0]?.leaf.state === 'closed')
 
-    const none = await setup()
-    await upgrade(none, [])
-    expect(none.session.path).toBe('relay')
-    expect(none.opened).toEqual([])
+    // An older desktop answers without `webrtc` (its ws endpoints are ignored); the phone never dials.
+    for (const answer of [{ endpoints: [] }, { endpoints: [{ url: 'ws://192.168.1.5:41234/mousse-net', kind: 'lan' }] }, { webrtc: { v: 2 } }]) {
+      const none = await setup()
+      await upgrade(none, answer)
+      expect(none.session.path).toBe('relay')
+      expect(none.opened).toEqual([])
+    }
+  })
+
+  it('does not ask the computer when direct paths are switched off', async () => {
+    const t = await setup({ allowed: false })
+    let asked = false
+    void t.relay.remote.next('rpc.request').then(() => (asked = true))
+    await t.session.probe()
+    await sleep(20)
+    expect(asked).toBe(false)
+    expect(t.opened).toEqual([])
+  })
+
+  it('gives each attempt the timeout of its kind and closes it when the time is up', async () => {
+    expect(DIRECT_OPEN_TIMEOUT_MS.webrtc).toEqual({ sameNetwork: 8_000, stun: 10_000 })
+    const t = await setup({ hang: true, timeoutMs: 40 })
+    const started = Date.now()
+    await upgrade(t)
+    expect(t.signals[0].aborted).toBe(true)
+    expect(Date.now() - started).toBeGreaterThanOrEqual(35)
+    expect(t.session.path).toBe('relay')
+  })
+
+  it('only checks the path when ICE reports a disconnect, and stays when it still answers', async () => {
+    const t = await setup()
+    await upgrade(t)
+    const direct = t.directs[0]
+    let probes = 0
+    const probe = direct.leaf.probe.bind(direct.leaf)
+    direct.leaf.probe = (timeoutMs) => {
+      probes++
+      return probe(timeoutMs)
+    }
+    t.links[0].checkPath()
+    await until(() => probes === 1)
+    await sleep(20)
+    expect(t.session.path).toBe('direct')
+    expect(direct.leaf.state).toBe('open')
+    expect(t.relays).toHaveLength(1)
   })
 
   it('stops looking for a direct path on a computer without the endpoints method', async () => {
@@ -267,7 +319,7 @@ describe('path session', () => {
     t.network.fire()
     const request = await t.relay.remote.next('rpc.request')
     expect(request.method).toBe(ENDPOINTS_METHOD)
-    await t.relay.remote.send({ t: 'rpc.result', id: request.id, result: { endpoints: [LAN] } })
+    await t.relay.remote.send({ t: 'rpc.result', id: request.id, result: WEBRTC })
     await until(() => t.session.path === 'direct', 400)
   })
 

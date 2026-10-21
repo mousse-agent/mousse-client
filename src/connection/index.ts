@@ -1,5 +1,6 @@
 // The real MousseConnection: Mousse ID sign-in and inventory, phone enrollment through enrollment
 // requests or QR offers, and sessions with the user's computers over the hosted relay.
+import { Capacitor } from '@capacitor/core'
 import { MousseIdError, checkedOrigin, type FetchLike, MousseIdHttp } from '../mousseId/http'
 import { MousseIdNet, type ControlIdentity, type InventoryBinding, type InventoryRegistration, type Registration, type RegistrationGrant } from '../mousseId/net'
 import { MOUSSE_ID_ORIGIN } from '../mousseId/origin'
@@ -12,15 +13,15 @@ import { parseInvite, redeemInvite, type Enrollment, type RedeemOptions } from '
 import { NetError } from '../net/errors'
 import { currentNode, removesNode, verifyDelegation, verifyRoster, type Roster } from '../net/identity'
 import { generateNodeKeys, SecureKeyStorage, serializeNodeKeys, type KeyStorage, type NodeKeys } from '../net/keys'
-import { dialDirect } from '../net/direct'
 import { dialRelay, type RelaySocketFactory } from '../net/relay'
 import { LeafSession, type LeafIdentity } from '../net/session'
+import { browserPeerConnectionFactory, dialWebRtc, type PeerConnectionFactory } from '../net/webrtc'
 import { connectTls, type SecureChannel } from '../net/tls13/client'
 import { RealComputerSession } from './computerSession'
 import { indexedDbThreadCacheBackend, ThreadCache } from './threadCache'
 import { EnrollmentStore, type LoadedEnrollment } from './enrollmentStore'
 import type { NetworkSignals } from './networkSignals'
-import { DIRECT_OPEN_TIMEOUT_MS, DIRECT_PING_INTERVAL_MS, PathSession, type PathSessionOptions } from './pathSession'
+import { DIRECT_OPEN_TIMEOUT_MS, DIRECT_PING_INTERVAL_MS, PathSession, type DirectLink, type PathSessionOptions } from './pathSession'
 import type { AccountState, Computer, ComputerSession, EnrollmentProgress, MousseConnection, SessionEndReason } from './types'
 
 /**
@@ -77,10 +78,12 @@ export interface ConnectionDeps {
   socketFactory?: RelaySocketFactory
   /** Tests replace the relay and TLS layers for computer sessions. */
   openChannel?: (target: { route: string; nodeId: string; expectedSpki: Uint8Array; grant: RegistrationGrant }) => Promise<SecureChannel>
-  /** Tests replace the WebSocket and TLS layers of a direct path to a computer. */
-  openDirectChannel?: (target: { url: string; nodeId: string; expectedSpki: Uint8Array; signal: AbortSignal }) => Promise<SecureChannel>
-  /** Opens the WebSocket of a direct path; defaults to the webview's WebSocket. */
-  directSocketFactory?: RelaySocketFactory
+  /** Tests replace the WebRTC and TLS layers of a direct path to a computer. */
+  openDirectChannel?: (target: { nodeId: string; expectedSpki: Uint8Array; signal: AbortSignal; link: DirectLink }) => Promise<SecureChannel>
+  /** Creates the peer connection of a direct path; defaults to the webview's RTCPeerConnection. */
+  peerConnectionFactory?: PeerConnectionFactory
+  /** The device's platform; WebRTC direct paths run on Android and the web, never on iOS. */
+  platform?: string
   /** Network changes and app resumes; defaults to the device's. */
   network?: NetworkSignals
   /** Tests tune or switch off the background search for a direct path. */
@@ -306,6 +309,21 @@ class RealConnection implements MousseConnection {
     })
   }
 
+  /**
+   * STUN servers and a peer connection factory when the WebRTC direct path may run here: Mousse ID
+   * has not switched it off, the device is not iOS (local network access there needs a prompt),
+   * and the webview has WebRTC.
+   */
+  private async directSettings(net: MousseIdNet): Promise<{ stun: string[]; factory?: PeerConnectionFactory } | undefined> {
+    const platform = this.deps.platform ?? Capacitor.getPlatform()
+    if (platform === 'ios') return undefined
+    const factory = this.deps.peerConnectionFactory ?? browserPeerConnectionFactory()
+    if (!factory && !this.deps.openDirectChannel) return undefined
+    const config = await net.configuration().catch(() => undefined)
+    if (!config || !config.directWebrtc) return undefined
+    return { stun: config.stun, factory }
+  }
+
   async openComputer(nodeId: string): Promise<ComputerSession> {
     const { net } = this.signedIn()
     const accountId = this.accountId()
@@ -398,26 +416,53 @@ class RealConnection implements MousseConnection {
       }
       return next
     }
-    // The session moves between the relay and the computer's direct endpoints on its own.
+    // The session moves between the relay and a WebRTC path to the computer on its own. The
+    // configuration is already cached from registering; a failed fetch only means no direct path.
+    const direct = this.directSettings(net).catch(() => undefined)
+    let stun: string[] | undefined
+    void direct.then((settings) => (stun = settings?.stun))
     const leaf = new PathSession({
       first,
       network: this.deps.network,
       ...this.deps.paths,
       open: {
         relay: async () => openLeaf(await relayChannel(await this.ensureGrant(entry, identity, accountId))),
-        direct: async (endpoint, signal) => {
-          const opened = this.deps.openDirectChannel
-            ? await this.deps.openDirectChannel({ url: endpoint.url, nodeId, expectedSpki, signal })
-            : await connectTls(await dialDirect({ url: endpoint.url, socketFactory: this.deps.directSocketFactory, signal }), {
+        directAllowed: async () => !!(await direct),
+        directTimeoutMs: (endpoint) => DIRECT_OPEN_TIMEOUT_MS[endpoint.kind][stun?.length === 0 ? 'sameNetwork' : 'stun'],
+        direct: async (_endpoint, signal, link) => {
+          const settings = await direct
+          if (!settings) throw new NetError('unavailable', 'Direct paths are off.')
+          // Until the session is open, aborting the race closes the peer connection under it.
+          let opening: { close(error?: Error): void } | undefined
+          const abort = () => opening?.close(new NetError('cancelled'))
+          signal.addEventListener('abort', abort, { once: true })
+          try {
+            let raw: SecureChannel
+            if (this.deps.openDirectChannel) raw = await this.deps.openDirectChannel({ nodeId, expectedSpki, signal, link })
+            else {
+              const bytes = await dialWebRtc({
+                stun: settings.stun,
+                rpc: (method, params, options) => link.rpc(method, params, options),
+                onDisconnected: () => link.checkPath(),
+                peerConnectionFactory: settings.factory,
+                signal,
+              })
+              opening = bytes
+              raw = await connectTls(bytes, {
                 transport: entry.keys.transport,
                 expectedServerSpki: expectedSpki,
-                timeoutMs: DIRECT_OPEN_TIMEOUT_MS,
+                timeoutMs: DIRECT_OPEN_TIMEOUT_MS.webrtc.stun,
               })
-          if (signal.aborted) {
-            opened.close?.()
-            throw new NetError('cancelled')
+            }
+            opening = raw
+            if (signal.aborted) {
+              raw.close()
+              throw new NetError('cancelled')
+            }
+            return await openLeaf(raw, DIRECT_PING_INTERVAL_MS)
+          } finally {
+            signal.removeEventListener('abort', abort)
           }
-          return openLeaf(opened, DIRECT_PING_INTERVAL_MS)
         },
       },
     })

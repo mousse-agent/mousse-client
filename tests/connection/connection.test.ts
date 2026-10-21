@@ -48,7 +48,7 @@ function idServer(world: World) {
     if (path === '/v1/app/session/password')
       return reply({ accessToken: 'access-1', refreshToken: 'refresh-1', expiresAt: now + 3_600_000, account: { id: 'acct_1', email: 'a@b.test' } })
     if (path === '/v1/app/session/logout') return reply(undefined, 204)
-    if (path === '/v1/net/config') return reply(CONFIG)
+    if (path === '/v1/net/config') return reply({ ...CONFIG, ...world.config })
     if (path === '/v1/net/inventory')
       return reply({
         registrations: [
@@ -144,6 +144,8 @@ interface World {
   decide?: (id: string, polls: number) => { status?: string; sealedInvite?: string } | undefined
   /** How long a registration or renewal lasts; Mousse ID uses 60 seconds. */
   registrationMs?: number
+  /** Extra fields in the Mousse ID configuration. */
+  config?: Record<string, unknown>
   /** When the phone's current registration ends, as Mousse ID holds it. */
   registrationExpiresAt?: number
 }
@@ -410,10 +412,10 @@ describe('real connection', () => {
       answerPings(relay, 30)
       return channelOf(a, w.computer.keys.transport.spki)
     }
-    const url = 'ws://192.168.1.5:41234/mousse-net'
     deps.openDirectChannel = async (target) => {
-      expect(target.url).toBe(url)
       expect(target.expectedSpki).toEqual(w.computer.keys.transport.spki)
+      // The offer goes to the computer over the relay session.
+      expect(await target.link.rpc('net.direct.webrtc.offer', { sdp: 'v=0 offer', v: 1 })).toEqual({ sdp: 'v=0 answer' })
       const [a, b] = streamPair()
       direct = fakeComputer(b, w.user, w.computer, roster(w.user, w.computer.node))
       void direct.handshake()
@@ -425,7 +427,8 @@ describe('real connection', () => {
     session.onStateChange((state) => states.push(state))
     // The phone joins a network: it checks its path and asks the computer for direct endpoints.
     network.fire()
-    await relay.answer('net.direct.endpoints', { endpoints: [{ url, kind: 'lan' }] })
+    await relay.answer('net.direct.endpoints', { endpoints: [], webrtc: { v: 1 } })
+    expect((await relay.answer('net.direct.webrtc.offer', { sdp: 'v=0 answer' })).params).toEqual({ sdp: 'v=0 offer', v: 1 })
     await until(() => !!direct, 200)
     const renewalsBefore = () => server.calls.filter((call) => call.path === '/v1/net/registrations/reg_p/renew').length
     await new Promise((resolve) => setTimeout(resolve, 100))
@@ -438,6 +441,39 @@ describe('real connection', () => {
     expect(session.state()).toBe('open')
     expect(states).toEqual([])
     session.close()
+  })
+
+  it('never looks for a direct path when Mousse ID switches WebRTC off, or on iOS', async () => {
+    for (const setup of [{ config: { directWebrtc: false } }, { platform: 'ios' }]) {
+      const w = world()
+      if (setup.config) w.config = setup.config
+      const network = manualNetworkSignals()
+      const { connection, deps } = await connect(w, { network, paths: { autoProbe: false, settleMs: 1 }, ...(setup.platform ? { platform: setup.platform } : {}) })
+      await connection.signInWithPassword('a@b.test', 'pw')
+      w.offer = sealForOffer(invite(w), new Uint8Array(32).fill(3))
+      await connection.enrollFromQr(`mousse://net/join?v=1&plus=${encodeURIComponent(ORIGIN)}&offer=off_1&key=${b64url(new Uint8Array(32).fill(3))}`, () => undefined)
+      let relay!: ReturnType<typeof fakeComputer>
+      deps.openChannel = async () => {
+        const [a, b] = streamPair()
+        relay = fakeComputer(b, w.user, w.computer, roster(w.user, w.computer.node))
+        void relay.handshake()
+        return channelOf(a, w.computer.keys.transport.spki)
+      }
+      let dialed = false
+      deps.openDirectChannel = async () => {
+        dialed = true
+        throw new NetError('route_unreachable')
+      }
+      const session = await connection.openComputer(w.computer.node)
+      network.fire()
+      // The first request the computer sees is the caller's, not the endpoints question.
+      await new Promise((resolve) => setTimeout(resolve, 40))
+      const projects = session.listProjects()
+      expect((await relay.answer('projects.list', { projects: [] })).method).toBe('projects.list')
+      await projects
+      expect(dialed).toBe(false)
+      session.close()
+    }
   })
 
   it('keeps a session open over the hosted relay for several registration lifetimes', async () => {

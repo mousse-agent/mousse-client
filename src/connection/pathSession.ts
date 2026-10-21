@@ -1,11 +1,10 @@
 // One computer session that moves between network paths without the screens noticing. It starts on
-// the Mousse ID relay. When the computer reports direct endpoints (its private LAN or Tailscale
-// addresses) and one of them answers faster than the relay, a full second session opens there and
+// the Mousse ID relay. When the computer reports that it takes WebRTC offers and a peer-to-peer path
+// opens and answers faster than the relay, a full second session opens there and
 // streams and new requests move onto it; the relay session closes once its requests in flight
 // finish. When the direct path stops answering, the session falls back to the relay. Callers see
 // one open session the whole time and never learn which path carries it.
 import { newId } from '../net/canonical'
-import { parseDirectEndpoints, type DirectEndpoint } from '../net/direct'
 import { NetError } from '../net/errors'
 import type {
   LeafSession,
@@ -17,14 +16,21 @@ import type {
   StreamSnapshot,
   SubscriptionHandlers,
 } from '../net/session'
+import { parseDirectEndpoints, type DirectEndpoint } from '../net/webrtc'
 import { deviceNetworkSignals, type NetworkSignals } from './networkSignals'
 
-/** The computer's RPC that lists its direct endpoints for a phone that came through Mousse ID. */
+/** The computer's RPC that says which direct paths it takes, for a phone that came through Mousse ID. */
 export const ENDPOINTS_METHOD = 'net.direct.endpoints'
 /** How often a session on the relay tries the direct path again. */
 export const PROBE_INTERVAL_MS = 30_000
-/** How long one attempt to open a direct session may take. */
-export const DIRECT_OPEN_TIMEOUT_MS = 3_000
+/**
+ * How long one attempt to open a direct session may take, per kind: gathering, the offer through
+ * the relay, ICE, DTLS, the inner TLS and the session hello. With STUN, gathering waits for a
+ * round trip to the STUN server and ICE has more pairs to check.
+ */
+export const DIRECT_OPEN_TIMEOUT_MS: Record<DirectEndpoint['kind'], { sameNetwork: number; stun: number }> = {
+  webrtc: { sameNetwork: 8_000, stun: 10_000 },
+}
 /** How long a direct path may take to answer a ping after the network changed. */
 export const LIVENESS_TIMEOUT_MS = 2_500
 /** The relay crosses the internet and may sit on a slow mobile network; it gets longer. */
@@ -36,11 +42,23 @@ const MAX_ATTEMPTS = 3
 
 export type PathKind = 'relay' | 'direct'
 
+/** What a direct opener may use of the session it is opened from. */
+export interface DirectLink {
+  /** Sends a request (the offer) on the path the attempt started from. */
+  rpc(method: string, params: unknown, options?: RpcOptions): Promise<unknown>
+  /** The direct path may have stalled (ICE `disconnected`); checks the current path. */
+  checkPath(): void
+}
+
 export interface PathOpeners {
   /** Opens a session over the Mousse ID relay; resolves once it is open. */
   relay(): Promise<LeafSession>
-  /** Opens a session on one direct endpoint; resolves once it is open. */
-  direct(endpoint: DirectEndpoint, signal: AbortSignal): Promise<LeafSession>
+  /** Opens a session on one direct endpoint; resolves once it is open. Aborting closes it. */
+  direct(endpoint: DirectEndpoint, signal: AbortSignal, link: DirectLink): Promise<LeafSession>
+  /** False when direct paths are switched off (Mousse ID's kill switch, no WebRTC on the device). */
+  directAllowed?(): Promise<boolean>
+  /** How long an attempt on `endpoint` may take; defaults to the STUN timeout. */
+  directTimeoutMs?(endpoint: DirectEndpoint): number
 }
 
 export interface PathSessionOptions {
@@ -196,12 +214,14 @@ export class PathSession implements SessionLink {
     clearTimeout(this.probeTimer)
     try {
       const relay = this.active
+      if (this.options.open.directAllowed && !(await this.options.open.directAllowed().catch(() => false))) return
+      if (this.stateValue !== 'open' || this.recovering || this.active !== relay) return
       await this.discover(relay)
       if (!this.endpoints.length) return
-      const next = await this.openDirect()
+      const next = await this.openDirect(relay)
       if (!next) return
       if (this.stateValue !== 'open' || this.recovering || this.active !== relay) return this.retire(next)
-      // Move only when the direct path is quicker: a Tailscale path through a distant relay may not be.
+      // Move only when the direct path is quicker: a peer-to-peer route across networks may not be.
       const [direct, relayed] = await Promise.all([this.roundTrip(next.leaf), this.roundTrip(relay.leaf)])
       if (direct === undefined || (relayed !== undefined && direct >= relayed)) return this.retire(next)
       if (this.stateValue !== 'open' || this.recovering || this.active !== relay || next.leaf.state !== 'open') return this.retire(next)
@@ -256,13 +276,33 @@ export class PathSession implements SessionLink {
     }
   }
 
-  /** Tries every endpoint at once; the first session to open wins and the rest are closed. */
-  private async openDirect(): Promise<Path | undefined> {
+  /** How long an attempt on `endpoint` may take. */
+  private timeoutFor(endpoint: DirectEndpoint): number {
+    return this.options.directTimeoutMs ?? this.options.open.directTimeoutMs?.(endpoint) ?? DIRECT_OPEN_TIMEOUT_MS[endpoint.kind].stun
+  }
+
+  /**
+   * Tries every endpoint at once, signaling over `via`; the first session to open wins and the
+   * rest are closed.
+   */
+  private async openDirect(via: Path): Promise<Path | undefined> {
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), this.options.directTimeoutMs ?? DIRECT_OPEN_TIMEOUT_MS)
+    const timer = setTimeout(() => controller.abort(), Math.max(...this.endpoints.map((endpoint) => this.timeoutFor(endpoint))))
+    const link: DirectLink = {
+      rpc: async (method, params, options) => {
+        via.busy++
+        try {
+          return await via.leaf.rpc(method, params, options)
+        } finally {
+          via.busy--
+          this.retireIfIdle(via)
+        }
+      },
+      checkPath: () => void this.checkPath(),
+    }
     let winner: LeafSession | undefined
     const attempts = this.endpoints.map((endpoint) =>
-      this.options.open.direct(endpoint, controller.signal).then(
+      this.options.open.direct(endpoint, controller.signal, link).then(
         (leaf) => {
           if (winner || controller.signal.aborted) leaf.close()
           else {
@@ -398,23 +438,18 @@ export class PathSession implements SessionLink {
   }
 
   /**
-   * Opens the next path after the current one was lost. After a relay loss a known direct endpoint
-   * is tried alongside a new relay session and wins when it opens; after a direct loss the relay
-   * takes over.
+   * Opens the next path after the current one was lost: always the relay, since a direct path is
+   * signaled through an open session. After a relay loss on a computer with a direct path, the
+   * direct path is tried again from the new relay session at once.
    */
   private async recover(dead: Path, reason: Error): Promise<void> {
     let next: Path | undefined
     let failure: unknown
-    const relay = this.options.open.relay()
-    relay.catch(() => undefined)
-    if (dead.kind === 'relay' && this.endpoints.length) next = await this.openDirect().catch(() => undefined)
-    if (next) void relay.then((leaf) => leaf.close(), () => undefined)
-    else
-      try {
-        next = this.track('relay', await relay)
-      } catch (error) {
-        failure = error
-      }
+    try {
+      next = this.track('relay', await this.options.open.relay())
+    } catch (error) {
+      failure = error
+    }
     if (this.stateValue !== 'open') {
       if (next) this.retire(next)
       return
@@ -425,6 +460,7 @@ export class PathSession implements SessionLink {
       return this.fail(code && !PATH_LOST.has(code) && code !== 'cancelled' ? (failure as Error) : reason)
     }
     this.adopt(next)
+    if (dead.kind === 'relay' && this.endpoints.length) this.probeSoon(0)
   }
 
   private closedError(): Error {
