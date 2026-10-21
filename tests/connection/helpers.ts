@@ -79,14 +79,15 @@ export function fakeComputer(stream: StreamEndpoint, user: TestUser, computer: T
         t: 'hello',
         protoMajor: 1,
         protoMinor: 0,
-        caps: ['streams.v1', 'rpc.v1'],
+        caps: ['streams.v1', 'blobs.v1', 'rpc.v1', 'presence.v1'],
         node: computer.node,
         delegation: computer.delegation,
         roster: signedRoster,
         now: Date.now(),
       })
-      await next('helloAck')
-      await send({ t: 'helloAck', protoMinor: 0, caps: ['streams.v1', 'rpc.v1'], now: Date.now() })
+      // The phone acknowledges what it shares with the computer; the computer echoes that set.
+      const ack = await next('helloAck')
+      await send({ t: 'helloAck', protoMinor: 0, caps: ack.caps, now: Date.now() })
     },
     async answer(method: string, result: unknown) {
       const request = await next('rpc.request')
@@ -97,6 +98,12 @@ export function fakeComputer(stream: StreamEndpoint, user: TestUser, computer: T
     async snapshotChunk(streamId: string, records: Record[]) {
       const { headers, parts, lengths } = batch(records)
       await send({ t: 'snapshot.chunk', stream: streamId, epoch: 1, throughSeq: seq, records: headers, done: true, parts: lengths }, parts)
+    },
+    async delta(streamId: string, data: unknown) {
+      await send({ t: 'ephemeral', stream: streamId, kind: 'delta', data })
+    },
+    async presence(streamId: string) {
+      await send({ t: 'presence', stream: streamId } as WireMessage)
     },
     async events(streamId: string, records: Record[]) {
       const { headers, parts, lengths } = batch(records)

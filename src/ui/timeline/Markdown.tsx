@@ -1,0 +1,223 @@
+// Markdown for replies, thoughts and plans, styled like the desktop's `an-md-*` rules
+// (agent-elements/markdown.tsx). marked only tokenizes; every token renders as a React element,
+// so raw HTML in a reply shows as text and never runs.
+import { memo, useMemo, useState, type ReactNode } from 'react'
+import { marked, type Token, type Tokens } from 'marked'
+import { stripApplets } from '../../connection/timelineItems'
+import { copyText, openLink, safeHref } from './actions'
+import { useHighlight } from './useHighlight'
+import { Check, Copy } from './icons'
+
+const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'" }
+
+/** marked keeps entities as written; show them as the characters they name. */
+function decode(text: string): string {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+\d*);/gi, (match, name: string) => {
+    if (name[0] === '#') {
+      const code = name[1] === 'x' || name[1] === 'X' ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10)
+      return Number.isFinite(code) && code > 0 && code < 0x110000 ? String.fromCodePoint(code) : match
+    }
+    return ENTITIES[name.toLowerCase()] ?? match
+  })
+}
+
+/** The desktop's list clean-ups: "1." lines split by blank lines stay one list; 3+ newlines collapse. */
+function prepare(source: string): string {
+  const parts = source.split(/(^(?:`{3,}|~{3,})[^\n]*\n[\s\S]*?^(?:`{3,}|~{3,})[ \t]*$)/m)
+  return parts
+    .map((part, index) => (index % 2 ? part : part.replace(/\n{3,}/g, '\n\n').replace(/^(\s*\d+\.\s[^\n]*)\n\n(?=\s*\d+\.\s)/gm, '$1\n')))
+    .join('')
+}
+
+export function CodeBlock({ code, language }: { code: string; language?: string }) {
+  const [copied, setCopied] = useState(false)
+  const html = useHighlight(code, language)
+  return (
+    <div className="m-code">
+      <div className="m-code__header">
+        <span className="m-code__lang">{language || 'text'}</span>
+        <button
+          type="button"
+          className="m-code__copy"
+          aria-label={copied ? 'Copied' : 'Copy code'}
+          onClick={() => {
+            void copyText(code).then((ok) => {
+              if (!ok) return
+              setCopied(true)
+              setTimeout(() => setCopied(false), 2000)
+            })
+          }}
+        >
+          {copied ? <Check size={14} /> : <Copy size={14} />}
+        </button>
+      </div>
+      {html !== undefined ? (
+        <pre className="m-code__body hljs"><code dangerouslySetInnerHTML={{ __html: html }} /></pre>
+      ) : (
+        <pre className="m-code__body"><code>{code}</code></pre>
+      )}
+    </div>
+  )
+}
+
+function inline(tokens: Token[] | undefined, key = ''): ReactNode[] {
+  return (tokens ?? []).map((token, index) => inlineToken(token, `${key}${index}`))
+}
+
+function inlineToken(token: Token, key: string): ReactNode {
+  switch (token.type) {
+    case 'text': {
+      const text = token as Tokens.Text
+      return text.tokens?.length ? <span key={key}>{inline(text.tokens, key)}</span> : decode(text.text)
+    }
+    case 'escape':
+      return (token as Tokens.Escape).text
+    case 'strong':
+      return <strong key={key} className="m-md-strong">{inline((token as Tokens.Strong).tokens, key)}</strong>
+    case 'em':
+      return <em key={key}>{inline((token as Tokens.Em).tokens, key)}</em>
+    case 'del':
+      return <del key={key}>{inline((token as Tokens.Del).tokens, key)}</del>
+    case 'codespan':
+      return <code key={key} className="m-md-code">{decode((token as Tokens.Codespan).text)}</code>
+    case 'br':
+      return <br key={key} />
+    case 'link': {
+      const link = token as Tokens.Link
+      if (link.href.toLowerCase().startsWith('mousse-file://')) {
+        let path = link.text
+        try {
+          path = new URL(link.href).searchParams.get('path') ?? link.text
+        } catch {
+          // Keep the link text.
+        }
+        return <code key={key} className="m-md-code m-md-file" title={path}>{inline(link.tokens, key)}</code>
+      }
+      const href = safeHref(link.href)
+      if (!href) return <span key={key}>{inline(link.tokens, key)}</span>
+      return (
+        <a
+          key={key}
+          className="m-md-link"
+          href={href}
+          title={link.title ?? undefined}
+          onClick={(event) => {
+            event.preventDefault()
+            openLink(href)
+          }}
+        >
+          {inline(link.tokens, key)}
+        </a>
+      )
+    }
+    case 'image': {
+      const image = token as Tokens.Image
+      const src = safeHref(image.href)
+      return src && !src.startsWith('mailto:') ? <img key={key} className="m-md-img" src={src} alt={image.text} loading="lazy" /> : image.text
+    }
+    case 'html': {
+      const text = (token as Tokens.HTML).text
+      return /^<br\s*\/?>$/i.test(text.trim()) ? <br key={key} /> : text
+    }
+    default:
+      return 'text' in token && typeof token.text === 'string' ? decode(token.text) : null
+  }
+}
+
+function block(token: Token, key: string): ReactNode {
+  switch (token.type) {
+    case 'space':
+      return null
+    case 'heading': {
+      const heading = token as Tokens.Heading
+      const level = Math.min(Math.max(heading.depth, 1), 4)
+      const Tag = `h${level}` as 'h1' | 'h2' | 'h3' | 'h4'
+      return <Tag key={key} className={`m-md-h m-md-h${level}`}>{inline(heading.tokens, key)}</Tag>
+    }
+    case 'paragraph':
+      return <p key={key} className="m-md-p">{inline((token as Tokens.Paragraph).tokens, key)}</p>
+    case 'text': {
+      const text = token as Tokens.Text
+      return <p key={key} className="m-md-p">{text.tokens ? inline(text.tokens, key) : decode(text.text)}</p>
+    }
+    case 'code': {
+      const code = token as Tokens.Code
+      return <CodeBlock key={key} code={code.text} language={code.lang || undefined} />
+    }
+    case 'blockquote':
+      return <blockquote key={key} className="m-md-quote">{blocks((token as Tokens.Blockquote).tokens, key)}</blockquote>
+    case 'hr':
+      return <hr key={key} className="m-md-hr" />
+    case 'list': {
+      const list = token as Tokens.List
+      const items = list.items.map((item, index) => (
+        <li key={`${key}-${index}`} className={`m-md-li${item.task ? ' m-md-li--task' : ''}`}>
+          {item.task && <input type="checkbox" checked={!!item.checked} readOnly disabled className="m-md-check" />}
+          {item.loose ? blocks(item.tokens, `${key}-${index}`) : item.tokens.map((child, childIndex) => listChild(child, `${key}-${index}-${childIndex}`))}
+        </li>
+      ))
+      return list.ordered ? (
+        <ol key={key} className="m-md-ol" start={typeof list.start === 'number' && list.start !== 1 ? list.start : undefined}>{items}</ol>
+      ) : (
+        <ul key={key} className="m-md-ul">{items}</ul>
+      )
+    }
+    case 'table': {
+      const table = token as Tokens.Table
+      const align = (index: number) => table.align[index] ?? undefined
+      return (
+        <div key={key} className="m-md-table-wrap">
+          <table className="m-md-table">
+            <thead>
+              <tr>{table.header.map((cell, index) => <th key={index} style={{ textAlign: align(index) }}>{inline(cell.tokens, `${key}h${index}`)}</th>)}</tr>
+            </thead>
+            <tbody>
+              {table.rows.map((row, rowIndex) => (
+                <tr key={rowIndex}>{row.map((cell, index) => <td key={index} style={{ textAlign: align(index) }}>{inline(cell.tokens, `${key}r${rowIndex}c${index}`)}</td>)}</tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )
+    }
+    case 'html':
+      return <p key={key} className="m-md-p m-md-raw">{(token as Tokens.HTML).text}</p>
+    default:
+      return 'text' in token && typeof token.text === 'string' ? <p key={key} className="m-md-p">{decode(token.text)}</p> : null
+  }
+}
+
+/** Tight list items hold `text` tokens with inline children; render them without paragraph spacing. */
+function listChild(token: Token, key: string): ReactNode {
+  if (token.type === 'text') {
+    const text = token as Tokens.Text
+    return <span key={key}>{text.tokens ? inline(text.tokens, key) : decode(text.text)}</span>
+  }
+  return block(token, key)
+}
+
+function blocks(tokens: Token[], key = 'b'): ReactNode[] {
+  return tokens.map((token, index) => block(token, `${key}.${index}`))
+}
+
+export interface MarkdownProps {
+  text: string
+  className?: string
+  /** Shows a note in place of interactive applets, which only run on the computer. */
+  applets?: boolean
+}
+
+export const Markdown = memo(function Markdown({ text, className = '', applets = false }: MarkdownProps) {
+  const { tokens, appletCount } = useMemo(() => {
+    const stripped = applets ? stripApplets(text) : { text, applets: 0 }
+    return { tokens: marked.lexer(prepare(stripped.text), { gfm: true, breaks: false }), appletCount: stripped.applets }
+  }, [text, applets])
+  return (
+    <div className={`m-md ${className}`.trim()}>
+      {blocks(tokens)}
+      {appletCount > 0 && (
+        <div className="m-md-applet">{appletCount === 1 ? 'An interactive applet' : `${appletCount} interactive applets`} — open this thread on the computer to use {appletCount === 1 ? 'it' : 'them'}.</div>
+      )}
+    </div>
+  )
+})

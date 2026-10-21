@@ -20,9 +20,13 @@ import type {
   MousseConnection,
   Project,
   SessionEndReason,
+  PendingQuestions,
+  QuestionAnswers,
   SessionState,
+  ThreadDisplayState,
   ThreadSummary
 } from '../../connection/types'
+import { SHOWCASE_THREAD_ID, showcaseItems, showcaseQuestions } from './timelineShowcase'
 
 export interface FakeConnectionOptions {
   /** Start signed in as demo@mousse.dev. */
@@ -72,7 +76,8 @@ function initialThreads(): ThreadSummary[] {
     { id: 't-relay', projectId: 'p-mousse', title: 'Relay reconnect backoff', updatedAt: BASE_TIME - 40 * 60_000, pinned: true },
     { id: 't-voices', projectId: 'p-mousse', title: 'Fetch extra Kokoro voices on first use', updatedAt: BASE_TIME - 3 * 3_600_000 },
     { id: 't-landing', projectId: 'p-site', title: 'Landing page copy', updatedAt: BASE_TIME - 26 * 3_600_000 },
-    { id: 't-icons', projectId: 'p-client', title: 'Swap lucide for Hugeicons', updatedAt: BASE_TIME - 50 * 3_600_000, settled: true }
+    { id: 't-icons', projectId: 'p-client', title: 'Swap lucide for Hugeicons', updatedAt: BASE_TIME - 50 * 3_600_000, settled: true },
+    { id: SHOWCASE_THREAD_ID, projectId: 'p-mousse', title: 'Timeline showcase', updatedAt: BASE_TIME - 80 * 3_600_000 }
   ]
 }
 
@@ -85,6 +90,7 @@ function initialChats(): ListChat[] {
 }
 
 function initialItems(threadId: string, title: string): ChatItem[] {
+  if (threadId === SHOWCASE_THREAD_ID) return showcaseItems(BASE_TIME)
   if (threadId === 't-redesign') {
     return [
       { id: 'i1', role: 'user', text: 'Make the phone app look like the desktop: same tokens, Geist, Hugeicons.', createdAt: BASE_TIME - 9 * 60_000, status: 'done' },
@@ -152,7 +158,8 @@ export class FakeSession implements ComputerSession {
   private sessionState: SessionState = 'open'
   private stateListeners = new Set<(state: SessionState) => void>()
   private items = new Map<string, ChatItem[]>()
-  private watchers = new Map<string, Set<(items: ChatItem[]) => void>>()
+  private watchers = new Map<string, Set<(items: ChatItem[], state?: ThreadDisplayState) => void>>()
+  private questions = new Map<string, PendingQuestions[]>([[SHOWCASE_THREAD_ID, showcaseQuestions()]])
   private streams = new Map<string, ReturnType<typeof setInterval>>()
   private nextId = 1
   private endedWith?: string
@@ -254,13 +261,13 @@ export class FakeSession implements ComputerSession {
     return { ...thread }
   }
 
-  async openThread(threadId: string, onItems: (items: ChatItem[]) => void): Promise<() => void> {
+  async openThread(threadId: string, onItems: (items: ChatItem[], state?: ThreadDisplayState) => void): Promise<() => void> {
     await sleep(this.opts.latencyMs)
     const list = this.itemsFor(threadId)
     let set = this.watchers.get(threadId)
     if (!set) this.watchers.set(threadId, (set = new Set()))
     set.add(onItems)
-    onItems(list.map((item) => ({ ...item })))
+    onItems(list.map((item) => ({ ...item })), this.displayFor(threadId))
     // The demo thread is mid-turn when first opened.
     const last = list[list.length - 1]
     if (last?.status === 'streaming' && !this.streams.has(threadId)) {
@@ -380,6 +387,33 @@ export class FakeSession implements ComputerSession {
     }
   }
 
+  async answerQuestions(threadId: string, requestId: string, answers: QuestionAnswers): Promise<boolean> {
+    await sleep(this.opts.latencyMs)
+    if (!this.takeQuestions(threadId, requestId)) return false
+    const text = Object.entries(answers).map(([id, value]) => `${id}: ${Array.isArray(value) ? value.join(', ') : value}`).join('\n')
+    this.itemsFor(threadId).push({ id: `u${this.nextId++}`, role: 'user', kind: 'message', text, createdAt: Date.now(), status: 'done' })
+    this.emit(threadId)
+    return true
+  }
+
+  async dismissQuestions(threadId: string, requestId: string): Promise<boolean> {
+    await sleep(this.opts.latencyMs)
+    const taken = this.takeQuestions(threadId, requestId)
+    this.emit(threadId)
+    return taken
+  }
+
+  private takeQuestions(threadId: string, requestId: string): boolean {
+    const pending = this.questions.get(threadId) ?? []
+    const rest = pending.filter((entry) => entry.requestId !== requestId)
+    this.questions.set(threadId, rest)
+    return rest.length !== pending.length
+  }
+
+  private displayFor(threadId: string): ThreadDisplayState {
+    return { questions: this.questions.get(threadId) ?? [] }
+  }
+
   /** Closes the session; `message` stands in for the close error a real session reports. */
   close(message?: string): void {
     this.endedWith = message
@@ -423,7 +457,7 @@ export class FakeSession implements ComputerSession {
 
   private emit(threadId: string): void {
     const list = this.itemsFor(threadId)
-    for (const watcher of this.watchers.get(threadId) ?? []) watcher(list.map((item) => ({ ...item })))
+    for (const watcher of this.watchers.get(threadId) ?? []) watcher(list.map((item) => ({ ...item })), this.displayFor(threadId))
   }
 
   private stream(threadId: string, itemId: string, fullText: string): void {

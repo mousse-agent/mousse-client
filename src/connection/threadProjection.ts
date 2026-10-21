@@ -5,22 +5,33 @@
 import { equalBytes, fromB64url, fromUtf8 } from '../net/bytes'
 import { sha256 } from '../net/crypto'
 import type { StreamRecord } from '../net/session'
-import type { ChatItem } from './types'
+import type { ChatItem, PendingQuestions, ThreadDisplayState, TurnPhase } from './types'
+import { foldItems, pendingQuestionsOf, toChatItem } from './timelineItems'
 
+const KNOWN_PHASES = new Set<TurnPhase>(['idle', 'queued', 'thinking', 'streaming', 'tool_running', 'awaiting_input', 'finalizing', 'completed', 'stopped', 'failed'])
+const ACTIVE_PHASES = new Set<TurnPhase>(['queued', 'thinking', 'streaming', 'tool_running', 'finalizing'])
 const CHUNK_BYTES = 32 * 1024
 const SNAPSHOT_MAX_BYTES = 32 * 1024 * 1024
 
-/** The desktop's ChatMessage, as far as the phone reads it. */
+/** The desktop's ChatMessage (shared/types.ts), as far as the phone reads it. Every field is untrusted. */
 export interface DesktopMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: string
+  turnId?: unknown
+  kind?: unknown
   hidden?: boolean
   streaming?: boolean
   incomplete?: boolean
   error?: unknown
-  toolCall?: { title?: string; summary?: string; toolName?: string; status?: string; details?: unknown }
+  images?: unknown
+  thinking?: unknown
+  planCard?: unknown
+  contextHandoff?: unknown
+  responseMetadata?: unknown
+  presentationParts?: unknown
+  toolCall?: { title?: string; summary?: string; toolName?: string; status?: string; details?: unknown; response?: unknown; input?: unknown }
 }
 
 interface PendingSnapshot {
@@ -49,35 +60,24 @@ function messagesOf(value: unknown): DesktopMessage[] | undefined {
   return Array.isArray(value) ? value.filter(isMessage) : undefined
 }
 
-function toolText(tool: NonNullable<DesktopMessage['toolCall']>): string {
-  return [tool.title, tool.summary].filter((part): part is string => typeof part === 'string' && !!part.trim()).join('\n')
-}
-
 /** Maps one desktop message to a chat item; hidden or empty messages map to nothing. */
 export function chatItem(message: DesktopMessage): ChatItem | undefined {
-  if (message.hidden) return undefined
-  const tool = isObject(message.toolCall) ? message.toolCall : undefined
-  const error = typeof message.error === 'string' ? message.error : message.error ? 'The computer reported an error.' : undefined
-  const text = message.content.trim() ? message.content : tool ? toolText(tool) : (error ?? '')
-  if (!text.trim()) return undefined
-  const createdAt = Date.parse(message.timestamp)
-  const running = message.streaming === true || (tool && (tool.status === 'running' || tool.status === 'pending'))
-  return {
-    id: message.id,
-    role: tool ? 'tool' : message.role,
-    text,
-    createdAt: Number.isFinite(createdAt) ? createdAt : 0,
-    status: error || tool?.status === 'error' || tool?.status === 'failed' ? 'error' : running ? 'streaming' : 'done',
-    ...(tool ? { toolName: tool.toolName || tool.title || 'tool' } : {}),
-  }
+  return toChatItem(message)
 }
 
 export class ThreadProjection {
   private messages: DesktopMessage[] = []
   private pending?: PendingSnapshot
   private localItems: ChatItem[] = []
+  /** Items by message object, so unchanged messages keep the same item between updates. */
+  private mapped = new WeakMap<DesktopMessage, ChatItem | null>()
   /** Whether the computer reports a running turn, as far as the stream has told us. */
   active = false
+  phase?: TurnPhase
+  turnStartedAt?: number
+  turnError?: string
+  questions: PendingQuestions[] = []
+  connectionFailed?: string
 
   constructor(readonly threadId: string) {}
 
@@ -94,9 +94,61 @@ export class ThreadProjection {
   }
 
   items(): ChatItem[] {
-    const items = this.messages.map(chatItem).filter((item): item is ChatItem => !!item)
-    if (!this.localItems.length) return items
-    return [...items, ...this.localItems].sort((a, b) => a.createdAt - b.createdAt)
+    const items: ChatItem[] = []
+    for (const message of this.messages) {
+      let item = this.mapped.get(message)
+      if (item === undefined) {
+        item = toChatItem(message) ?? null
+        this.mapped.set(message, item)
+      }
+      if (item) items.push(item)
+    }
+    const folded = foldItems(items)
+    if (!this.localItems.length) return folded
+    return [...folded, ...this.localItems].sort((a, b) => a.createdAt - b.createdAt)
+  }
+
+  state(): ThreadDisplayState {
+    return {
+      ...(this.phase ? { phase: this.phase } : {}),
+      ...(this.turnStartedAt !== undefined ? { turnStartedAt: this.turnStartedAt } : {}),
+      ...(this.turnError ? { turnError: this.turnError } : {}),
+      questions: this.questions,
+      ...(this.connectionFailed ? { connectionFailed: this.connectionFailed } : {}),
+    }
+  }
+
+  /**
+   * Applies a live delta the computer sent outside the signed stream: a reply still being written,
+   * or the thread's pending questions. A streaming delta never replaces a finished message.
+   * Returns whether anything visible changed.
+   */
+  applyDelta(value: unknown): boolean {
+    if (!isObject(value) || value.threadId !== this.threadId || typeof value.type !== 'string' || !isObject(value.data)) return false
+    const data = value.data
+    if (data.threadId !== undefined && data.threadId !== this.threadId) return false
+    switch (value.type) {
+      case 'thread.message':
+      case 'thread.message-updated': {
+        if (!isMessage(data.message) || data.message.streaming !== true) return false
+        const known = this.messages.find((entry) => entry.id === (data.message as DesktopMessage).id)
+        if (known && known.streaming !== true) return false
+        return this.upsert(data.message)
+      }
+      case 'questions.updated': {
+        const questions = pendingQuestionsOf(data.pending, this.threadId)
+        if (!questions) return false
+        this.questions = questions
+        return true
+      }
+      default:
+        return false
+    }
+  }
+
+  /** Replaces the pending questions, for example after reading them again from the computer. */
+  setQuestions(questions: PendingQuestions[]): void {
+    this.questions = questions
   }
 
   private accept(type: string, body: unknown): boolean {
@@ -181,6 +233,8 @@ export class ThreadProjection {
     this.messages = messages
     this.localItems = []
     if (isObject(value.activeTurn)) this.active = value.activeTurn.active === true
+    this.questions = pendingQuestionsOf(value.pendingQuestions, this.threadId) ?? []
+    if (!this.active && this.phase && ACTIVE_PHASES.has(this.phase)) this.phase = undefined
     return true
   }
 
@@ -198,15 +252,33 @@ export class ThreadProjection {
       }
       case 'turn.started':
         this.active = true
-        return false
+        this.connectionFailed = undefined
+        this.turnError = undefined
+        return true
       case 'turn.completed':
+        this.active = false
+        this.phase = 'completed'
+        return true
       case 'turn.interrupted':
       case 'turn.aborted':
         this.active = false
-        return false
-      case 'turn.state':
-        this.active = typeof data.phase === 'string' && !['idle', 'failed', 'completed', 'interrupted'].includes(data.phase)
-        return false
+        this.phase = 'stopped'
+        return true
+      case 'turn.state': {
+        if (typeof data.phase !== 'string') return false
+        const phase = data.phase as TurnPhase
+        this.phase = KNOWN_PHASES.has(phase) ? phase : undefined
+        this.active = ACTIVE_PHASES.has(phase) || phase === 'awaiting_input'
+        const started = typeof data.startedAt === 'string' ? Date.parse(data.startedAt) : NaN
+        this.turnStartedAt = this.active && Number.isFinite(started) ? started : undefined
+        this.turnError = phase === 'failed' && typeof data.error === 'string' ? data.error : undefined
+        return true
+      }
+      case 'connection.failed': {
+        const error = isObject(data.error) && typeof data.error.message === 'string' ? data.error.message : ''
+        this.connectionFailed = error || 'The computer could not reach its model provider.'
+        return true
+      }
       default:
         return false
     }

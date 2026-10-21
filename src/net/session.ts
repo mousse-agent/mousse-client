@@ -23,7 +23,8 @@ import { newId } from './canonical'
 import type { SecureChannel } from './tls13/client'
 import { b64url } from './bytes'
 
-export const SESSION_CAPS = ['streams.v1', 'rpc.v1'] as const
+// presence.v1 lets the computer send ephemeral messages: live reply deltas and pending questions.
+export const SESSION_CAPS = ['streams.v1', 'rpc.v1', 'presence.v1'] as const
 export const SESSION_PING_INTERVAL_MS = 20_000
 export const PREAUTH_DEADLINE_MS = 10_000
 export const PREAUTH_MAX_BYTES = 16 * 1024
@@ -79,6 +80,8 @@ export interface SubscriptionHandlers {
   snapshotRequired?(reason: string, head: StreamHead): void
   /** The subscription ended: an error from the computer, or the session closed. */
   ended?(error: Error): void
+  /** An unsigned, never-stored `delta` the computer sent over this authenticated session for the stream. */
+  delta?(data: unknown): void
 }
 
 export interface RpcOptions {
@@ -383,6 +386,9 @@ export class LeafSession {
       case 'snapshot.chunk':
         return this.snapshotChunk(h, message.parts)
       case 'ephemeral':
+        if (h.kind === 'delta') this.subscriptions.get(h.stream)?.delta?.(h.data)
+        return
+      case 'presence':
         return
       default:
         throw new NetError('forbidden', `Unexpected ${h.t} from the computer.`)

@@ -53,6 +53,7 @@ export type WireMessage =
   | { t: 'rpc.cancel'; id: string }
   | { t: 'rpc.result.get'; id: string }
   | { t: 'ephemeral'; stream: string; kind: 'typing' | 'delta'; data: unknown }
+  | { t: 'presence'; stream: string }
   | { t: 'revoked'; subject: string }
   | { t: 'rosterUpdate'; roster: Signed }
   | { t: 'enroll.request'; invite: string; node: string; keys: NodePublicKeys; name: string; proof: string }

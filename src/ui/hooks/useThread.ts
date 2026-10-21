@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ChatItem, ComputerSession, SendOptions } from '../../connection/types'
+import type { ChatItem, ComputerSession, QuestionAnswers, SendOptions, ThreadDisplayState } from '../../connection/types'
 import { errorMessage } from './useAsync'
 
 export interface ThreadState {
@@ -9,8 +9,24 @@ export interface ThreadState {
   /** True while the computer is working on a turn in this thread. */
   active: boolean
   sending: boolean
+  /** Turn phase, pending questions and provider failures, when the computer reports them. */
+  display: ThreadDisplayState
   send(text: string, options?: SendOptions): Promise<boolean>
   stop(): Promise<void>
+  /** Answers pending questions; undefined when this computer cannot take answers from the phone. */
+  answer?: (requestId: string, answers: QuestionAnswers) => Promise<void>
+  dismiss?: (requestId: string) => Promise<void>
+}
+
+const NO_DISPLAY: ThreadDisplayState = { questions: [] }
+const WORKING_PHASES = new Set(['queued', 'thinking', 'streaming', 'tool_running', 'finalizing'])
+
+/** An older computer refuses the answer methods; say where to answer instead. */
+function questionError(cause: unknown): string {
+  const code = (cause as { code?: unknown } | undefined)?.code
+  if (code === 'forbidden' || code === 'not_found' || code === 'unknown_method')
+    return 'This computer does not take answers from the phone yet. Answer on the computer.'
+  return errorMessage(cause)
 }
 
 /**
@@ -20,6 +36,7 @@ export interface ThreadState {
  */
 export function useThread(session: ComputerSession | undefined, threadId: string): ThreadState {
   const [items, setItems] = useState<ChatItem[]>([])
+  const [display, setDisplay] = useState<ThreadDisplayState>(NO_DISPLAY)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
   const [remoteActive, setRemoteActive] = useState(false)
@@ -46,9 +63,11 @@ export function useThread(session: ComputerSession | undefined, threadId: string
     setLoading(true)
     setError(undefined)
     setItems([])
-    session.openThread(threadId, (next) => {
+    setDisplay(NO_DISPLAY)
+    session.openThread(threadId, (next, state) => {
       if (cancelled) return
       setItems(next)
+      if (state) setDisplay(state)
       setLoading(false)
       // The optimistic flag ends once the computer answers with anything.
       if (baseline.current !== null && next.slice(baseline.current).some((item) => item.role !== 'user')) {
@@ -72,7 +91,8 @@ export function useThread(session: ComputerSession | undefined, threadId: string
   const itemCount = useRef(0)
   itemCount.current = items.length
   const streaming = items.some((item) => item.status === 'streaming')
-  const active = pending || streaming || remoteActive
+  const working = display.phase !== undefined && WORKING_PHASES.has(display.phase)
+  const active = pending || streaming || remoteActive || working
 
   const send = useCallback(async (text: string, options?: SendOptions) => {
     const trimmed = text.trim()
@@ -108,5 +128,35 @@ export function useThread(session: ComputerSession | undefined, threadId: string
     }
   }, [session, threadId, askActive])
 
-  return { items, loading, error, active, sending, send, stop }
+  const answer = useCallback(async (requestId: string, answers: QuestionAnswers) => {
+    if (!session?.answerQuestions) return
+    setError(undefined)
+    try {
+      if (!(await session.answerQuestions(threadId, requestId, answers))) setError('These questions were already answered or expired.')
+    } catch (cause) {
+      setError(questionError(cause))
+    }
+  }, [session, threadId])
+  const dismiss = useCallback(async (requestId: string) => {
+    if (!session?.dismissQuestions) return
+    setError(undefined)
+    try {
+      await session.dismissQuestions(threadId, requestId)
+    } catch (cause) {
+      setError(questionError(cause))
+    }
+  }, [session, threadId])
+
+  return {
+    items,
+    loading,
+    error,
+    active,
+    sending,
+    display,
+    send,
+    stop,
+    ...(session?.answerQuestions ? { answer } : {}),
+    ...(session?.dismissQuestions ? { dismiss } : {}),
+  }
 }
