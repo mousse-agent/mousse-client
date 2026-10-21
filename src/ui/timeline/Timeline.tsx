@@ -279,7 +279,9 @@ function withTool(item: ChatItem): ChatItem {
   if (item.tool || item.role !== 'tool') return item
   const name = item.toolName || 'tool'
   const [title = '', ...rest] = item.text.split('\n')
-  return { ...item, kind: 'tool', tool: { name: normalizeToolName(name), rawName: name, title: name, summary: title, details: [], output: [title, ...rest].join('\n') } }
+  const subject = title.replace(/^\$\s*/, '')
+  const input = { file_path: subject, command: subject, pattern: subject }
+  return { ...item, kind: 'tool', tool: { name: normalizeToolName(name), rawName: name, title: name, summary: title, details: [], input, output: [title, ...rest].join('\n') } }
 }
 
 function ReplyItem({ item: raw, live, nested }: { item: ChatItem; live: boolean; nested?: ChatItem[] }) {
