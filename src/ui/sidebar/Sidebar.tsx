@@ -1,0 +1,371 @@
+// The phone's version of the desktop sidebar: the Projects / Threads / Chats tab pill and the three
+// lists, drawn from a computer's live lists. Rows, status icons and colours follow
+// mousse/src/renderer/components/ThreadsSidebar.tsx and chats/ChatsSidebar.tsx.
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import type { ComputerLists, ListChat, ListProject, ListThread, ThreadStatus } from '../../connection/types'
+import {
+  ChevronDown,
+  CircleAlert,
+  CircleCheck,
+  Folder,
+  FolderKanban,
+  FolderOpen,
+  GitBranch,
+  ListTree,
+  Loader2,
+  MessageSquarePlus,
+  MessagesSquare,
+  Pin,
+  type IconComponent,
+} from '../components/icons'
+import { SearchField, SectionHeading } from '../components/primitives'
+import {
+  chatColor,
+  chatPreview,
+  PROJECT_PREVIEW_LIMIT,
+  projectHue,
+  projectInitials,
+  SIDEBAR_TABS,
+  sidebarModel,
+  threadAge,
+  type SidebarTab,
+} from './model'
+import './sidebar.css'
+
+const TAB_META: Record<SidebarTab, { label: string; icon: IconComponent }> = {
+  projects: { label: 'Projects', icon: FolderKanban },
+  threads: { label: 'Threads', icon: ListTree },
+  chats: { label: 'Chats', icon: MessagesSquare },
+}
+
+/** The desktop's segmented tab pill: icon-only tabs, the active one raised with its label. */
+export function SidebarTabs({ value, onChange }: { value: SidebarTab; onChange(tab: SidebarTab): void }) {
+  const refs = useRef<Record<string, HTMLButtonElement | null>>({})
+  const move = (event: KeyboardEvent<HTMLDivElement>) => {
+    const index = SIDEBAR_TABS.indexOf(value)
+    const next =
+      event.key === 'ArrowRight' ? SIDEBAR_TABS[(index + 1) % SIDEBAR_TABS.length]
+      : event.key === 'ArrowLeft' ? SIDEBAR_TABS[(index + SIDEBAR_TABS.length - 1) % SIDEBAR_TABS.length]
+      : event.key === 'Home' ? SIDEBAR_TABS[0]
+      : event.key === 'End' ? SIDEBAR_TABS[SIDEBAR_TABS.length - 1]
+      : undefined
+    if (!next) return
+    event.preventDefault()
+    onChange(next)
+    refs.current[next]?.focus()
+  }
+  return (
+    <div className="m-sidebar-tabs" role="tablist" aria-label="Sidebar view" onKeyDown={move}>
+      {SIDEBAR_TABS.map((tab) => {
+        const { label, icon: Icon } = TAB_META[tab]
+        const active = tab === value
+        return (
+          <button
+            key={tab}
+            ref={(element) => { refs.current[tab] = element }}
+            type="button"
+            role="tab"
+            id={`m-sidebar-tab-${tab}`}
+            aria-selected={active}
+            aria-controls={`m-sidebar-panel-${tab}`}
+            aria-label={label}
+            title={label}
+            tabIndex={active ? 0 : -1}
+            className={`m-sidebar-tab${active ? ' is-active' : ''}`}
+            onClick={() => onChange(tab)}
+          >
+            <Icon size={17} strokeWidth={1.8} />
+            {active && <span>{label}</span>}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/** The status icon of a compact row (Projects tab). Idle threads show nothing. */
+export function StatusIcon({ status }: { status?: ThreadStatus }) {
+  switch (status?.state) {
+    case 'processing':
+      return <Loader2 size={15} className="m-sb-status m-sb-status--running m-sb-spin" aria-label="Working" />
+    case 'awaiting_input':
+      return <CircleAlert size={15} className="m-sb-status m-sb-status--waiting" aria-label="Agent has a question" />
+    case 'completed':
+      return <CircleCheck size={15} className="m-sb-status m-sb-status--done" aria-label="Agent finished" />
+    case 'failed':
+      return <CircleAlert size={15} className="m-sb-status m-sb-status--error" aria-label={status.error ? `Failed: ${status.error}` : 'Failed'} />
+    default:
+      return null
+  }
+}
+
+/** The right side of a card's meta line: Working 3m, Waiting, Done, Failed, or the age. */
+function CardStatus({ thread, status, now }: { thread: ListThread; status?: ThreadStatus; now: number }) {
+  switch (status?.state) {
+    case 'processing': {
+      const age = threadAge(status.since ?? thread.updatedAt, now)
+      return (
+        <span className="m-sb-card__status m-sb-card__status--working">
+          <Loader2 size={12} strokeWidth={2} className="m-sb-spin" aria-hidden="true" />
+          Working{age && age !== 'now' ? ` ${age}` : ''}
+        </span>
+      )
+    }
+    case 'awaiting_input':
+      return <span className="m-sb-card__status m-sb-card__status--waiting"><CircleAlert size={12} strokeWidth={2} aria-hidden="true" />Waiting</span>
+    case 'completed':
+      return <span className="m-sb-card__status m-sb-card__status--done"><CircleCheck size={12} strokeWidth={2} aria-hidden="true" />Done</span>
+    case 'failed':
+      return <span className="m-sb-card__status m-sb-card__status--error" title={status.error}><CircleAlert size={12} strokeWidth={2} aria-hidden="true" />Failed</span>
+    default:
+      return <span className="m-sb-card__age">{threadAge(thread.updatedAt, now)}</span>
+  }
+}
+
+function ThreadCard({ thread, projectName, status, active, now, onOpen }: {
+  thread: ListThread
+  projectName?: string
+  status?: ThreadStatus
+  active: boolean
+  now: number
+  onOpen(): void
+}) {
+  return (
+    <button type="button" className={`m-sb-card${active ? ' is-active' : ''}${thread.settled ? ' is-settled' : ''}`} aria-current={active ? 'true' : undefined} onClick={onOpen}>
+      {projectName && thread.projectId ? (
+        <span className="m-sb-card__mark" style={{ color: `var(--hue-${projectHue(thread.projectId)})` }} aria-hidden="true">{projectInitials(projectName)}</span>
+      ) : (
+        <span className="m-sb-card__mark m-sb-card__mark--empty" aria-hidden="true"><Folder size={13} strokeWidth={1.8} /></span>
+      )}
+      <span className="m-sb-card__body">
+        <span className="m-sb-card__meta">
+          <span className="m-sb-card__project">{projectName ?? 'No project'}</span>
+          <CardStatus thread={thread} status={status} now={now} />
+        </span>
+        <span className="m-sb-card__title">
+          {thread.pinned && <Pin size={11} strokeWidth={2} aria-label="Pinned" />}
+          {thread.title}
+        </span>
+        {thread.worktree && <span className="m-sb-card__sub"><GitBranch size={11} strokeWidth={2} aria-hidden="true" />Worktree</span>}
+      </span>
+    </button>
+  )
+}
+
+function ThreadRow({ thread, status, active, onOpen }: { thread: ListThread; status?: ThreadStatus; active: boolean; onOpen(): void }) {
+  return (
+    <button type="button" className={`m-sb-row${active ? ' is-active' : ''}`} aria-current={active ? 'true' : undefined} onClick={onOpen}>
+      {thread.pinned && <Pin size={12} strokeWidth={2} className="m-sb-row__pin" aria-label="Pinned" />}
+      <span className="m-sb-row__title">{thread.title}</span>
+      <span className="m-sb-row__trailing">
+        <StatusIcon status={status} />
+        {thread.worktree && <GitBranch size={13} className="m-faint" aria-label="Worktree" />}
+      </span>
+    </button>
+  )
+}
+
+function Collapsible({ title, count, open, onToggle, children }: { title: string; count: number; open: boolean; onToggle(): void; children: ReactNode }) {
+  return (
+    <section className="m-sb-section">
+      <button type="button" className="m-sb-section__toggle" aria-expanded={open} onClick={onToggle}>
+        <ChevronDown size={14} className={`m-sb-chevron${open ? ' is-open' : ''}`} aria-hidden="true" />
+        <span>{title}</span>
+        <span className="m-sb-section__count">{count}</span>
+      </button>
+      {open && children}
+    </section>
+  )
+}
+
+function ProjectGroup({ project, threads, lists, selectedId, expanded, onToggle, onOpen, onNewThread }: {
+  project: ListProject
+  threads: ListThread[]
+  lists: ComputerLists
+  selectedId?: string
+  expanded: boolean
+  onToggle(): void
+  onOpen(thread: ListThread): void
+  onNewThread?(project: ListProject): void
+}) {
+  const [all, setAll] = useState(false)
+  const shown = all ? threads : threads.slice(0, PROJECT_PREVIEW_LIMIT)
+  const busy = threads.some((thread) => lists.status[thread.id]?.state === 'processing')
+  return (
+    <div className="m-sb-project" style={{ ['--project-hue' as string]: `var(--hue-${projectHue(project.id)})` }}>
+      <div className="m-sb-project__head">
+        <button type="button" className="m-sb-project__row" aria-expanded={expanded} onClick={onToggle}>
+          {expanded ? <FolderOpen size={17} className="m-sb-project__icon" aria-hidden="true" /> : <Folder size={17} className="m-sb-project__icon" aria-hidden="true" />}
+          <span className="m-sb-project__name">{project.name}</span>
+          {!expanded && busy && <Loader2 size={14} className="m-sb-status m-sb-status--running m-sb-spin" aria-label="Working" />}
+          {!expanded && threads.length > 0 && <span className="m-sb-project__count">{threads.length}</span>}
+        </button>
+        {onNewThread && (
+          <button type="button" className="m-sb-project__new" aria-label={`New thread in ${project.name}`} title="New thread" onClick={() => onNewThread(project)}>
+            <MessageSquarePlus size={17} />
+          </button>
+        )}
+      </div>
+      {expanded && (
+        <div className="m-sb-children">
+          {threads.length === 0 && <p className="m-sb-empty">No threads yet.</p>}
+          {shown.map((thread) => (
+            <ThreadRow key={thread.id} thread={thread} status={lists.status[thread.id]} active={thread.id === selectedId} onOpen={() => onOpen(thread)} />
+          ))}
+          {threads.length > PROJECT_PREVIEW_LIMIT && (
+            <button type="button" className="m-sb-more" onClick={() => setAll((value) => !value)}>{all ? 'Show less' : `Show ${threads.length - PROJECT_PREVIEW_LIMIT} more`}</button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function ChatAvatar({ chat }: { chat: ListChat }) {
+  const group = chat.kind === 'group'
+  return <span className={`m-chat-avatar m-chat-color-${chatColor(chat.name)}${group ? ' is-group' : ''}`} aria-hidden="true">{group ? '#' : chat.name.slice(0, 1).toUpperCase()}</span>
+}
+
+function ChatRow({ chat, active, onOpen }: { chat: ListChat; active: boolean; onOpen(): void }) {
+  const working = chat.run?.state === 'running'
+  return (
+    <button type="button" className={`m-chat-row${active ? ' is-active' : ''}${chat.network ? ' is-network' : ''}`} aria-current={active ? 'true' : undefined} onClick={onOpen}>
+      <ChatAvatar chat={chat} />
+      <span className="m-chat-row__text">
+        <span className="m-chat-row__name">{chat.name}</span>
+        <span className="m-chat-row__preview">{chatPreview(chat)}</span>
+      </span>
+      {working && <span className="m-chat-working-dot" role="img" aria-label="Working" />}
+      {!working && chat.run?.state === 'failed' && <CircleAlert size={14} className="m-sb-status m-sb-status--error" aria-label="Failed" />}
+    </button>
+  )
+}
+
+export interface SidebarProps {
+  lists: ComputerLists
+  tab: SidebarTab
+  onTab(tab: SidebarTab): void
+  selectedId?: string
+  onOpenThread(thread: ListThread): void
+  onOpenChat(chat: ListChat): void
+  onNewThread?(project: ListProject): void
+  /** Shown above the list, under the tabs: connection notices and the like. */
+  banner?: ReactNode
+}
+
+function useNow(ms = 30_000): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), ms)
+    return () => clearInterval(timer)
+  }, [ms])
+  return now
+}
+
+export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenChat, onNewThread, banner }: SidebarProps) {
+  const [query, setQuery] = useState('')
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
+  const [settledOpen, setSettledOpen] = useState(false)
+  const [standaloneOpen, setStandaloneOpen] = useState(false)
+  const now = useNow()
+  const model = useMemo(() => sidebarModel(lists, query), [lists, query])
+
+  // Like the desktop, the project holding the open thread starts expanded.
+  const selectedProject = lists.threads.find((thread) => thread.id === selectedId)?.projectId
+  useEffect(() => {
+    if (selectedProject) setExpanded((current) => (current.has(selectedProject) ? current : new Set(current).add(selectedProject)))
+  }, [selectedProject])
+  const toggle = (id: string) => setExpanded((current) => {
+    const next = new Set(current)
+    if (!next.delete(id)) next.add(id)
+    return next
+  })
+  const searching = !!query.trim()
+  const projects = [...lists.projects].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
+  const card = (thread: ListThread) => (
+    <ThreadCard
+      key={thread.id}
+      thread={thread}
+      projectName={thread.projectId ? model.projectNames.get(thread.projectId) : undefined}
+      status={lists.status[thread.id]}
+      active={thread.id === selectedId}
+      now={now}
+      onOpen={() => onOpenThread(thread)}
+    />
+  )
+
+  return (
+    <div className="m-sidebar">
+      <div className="m-sidebar__top">
+        <SidebarTabs value={tab} onChange={onTab} />
+        <SearchField value={query} onChange={setQuery} placeholder={tab === 'chats' ? 'Search chats' : 'Search threads'} />
+      </div>
+      {banner}
+      <div className="m-sidebar__panel" role="tabpanel" id={`m-sidebar-panel-${tab}`} aria-labelledby={`m-sidebar-tab-${tab}`}>
+        {tab === 'projects' && (
+          <>
+            {projects.length === 0 && <p className="m-sb-empty">No projects on this computer yet.</p>}
+            {projects.map((project) => {
+              const threads = model.byProject.get(project.id) ?? []
+              if (searching && !threads.length && !project.name.toLowerCase().includes(query.trim().toLowerCase())) return null
+              return (
+                <ProjectGroup
+                  key={project.id}
+                  project={project}
+                  threads={threads}
+                  lists={lists}
+                  selectedId={selectedId}
+                  expanded={searching || expanded.has(project.id)}
+                  onToggle={() => toggle(project.id)}
+                  onOpen={onOpenThread}
+                  onNewThread={onNewThread}
+                />
+              )
+            })}
+            {model.standalone.length > 0 && (
+              <Collapsible title="Recent chats" count={model.standalone.length} open={searching || standaloneOpen} onToggle={() => setStandaloneOpen((value) => !value)}>
+                <div className="m-sb-children m-sb-children--flat">
+                  {model.standalone.map((thread) => (
+                    <ThreadRow key={thread.id} thread={thread} status={lists.status[thread.id]} active={thread.id === selectedId} onOpen={() => onOpenThread(thread)} />
+                  ))}
+                </div>
+              </Collapsible>
+            )}
+          </>
+        )}
+
+        {tab === 'threads' && (
+          <>
+            {model.threads.length === 0 && <p className="m-sb-empty">{searching ? `No threads match “${query.trim()}”.` : 'No threads yet.'}</p>}
+            <div className="m-sb-feed">{model.threads.map(card)}</div>
+            {model.settled.length > 0 && (
+              <Collapsible title="Settled" count={model.settled.length} open={settledOpen} onToggle={() => setSettledOpen((value) => !value)}>
+                <div className="m-sb-feed">{model.settled.map(card)}</div>
+              </Collapsible>
+            )}
+          </>
+        )}
+
+        {tab === 'chats' && (
+          <>
+            {model.groups.length + model.direct.length === 0 && (
+              <p className="m-sb-empty">{searching ? `No chats match “${query.trim()}”.` : 'No chats yet. Start one with an agent on the computer.'}</p>
+            )}
+            {model.groups.length > 0 && (
+              <>
+                <SectionHeading>Groups</SectionHeading>
+                <div className="m-chat-list">{model.groups.map((chat) => <ChatRow key={chat.id} chat={chat} active={!!chat.threadId && chat.threadId === selectedId} onOpen={() => onOpenChat(chat)} />)}</div>
+              </>
+            )}
+            {model.direct.length > 0 && (
+              <>
+                <SectionHeading>Recent</SectionHeading>
+                <div className="m-chat-list">{model.direct.map((chat) => <ChatRow key={chat.id} chat={chat} active={!!chat.threadId && chat.threadId === selectedId} onOpen={() => onOpenChat(chat)} />)}</div>
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}

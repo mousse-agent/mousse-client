@@ -4,8 +4,9 @@
 import { newId } from '../net/canonical'
 import { NetError } from '../net/errors'
 import type { LeafSession, StreamHead } from '../net/session'
+import { ListsWatch } from './lists'
 import { ThreadProjection } from './threadProjection'
-import type { ChatItem, ComputerSession, Project, SessionEndReason, SessionState, ThreadSummary } from './types'
+import type { ChatItem, ComputerSession, ListChat, ListsHandlers, Project, SessionEndReason, SessionState, ThreadSummary } from './types'
 
 /** How long a reply may run before the phone stops waiting for its result. */
 export const SEND_DEADLINE_MS = 6 * 60 * 60 * 1000
@@ -168,6 +169,7 @@ export class RealComputerSession implements ComputerSession {
   private readonly runs = new Map<string, string>()
   private ended?: SessionEndReason
   private endedWith?: string
+  private lists?: ListsWatch
 
   constructor(options: RealSessionOptions) {
     this.nodeId = options.nodeId
@@ -181,6 +183,7 @@ export class RealComputerSession implements ComputerSession {
       if (state === 'closed') decide(this.leaf.closeReason)
     })
     this.leaf.onClose(() => {
+      this.lists?.close()
       for (const watch of this.watches.values()) void watch.then((entry) => entry.close(), () => undefined)
       this.watches.clear()
       options.onClose?.()
@@ -274,6 +277,8 @@ export class RealComputerSession implements ComputerSession {
   async send(threadId: string, text: string): Promise<void> {
     const content = text.trim()
     if (!content) throw new Error('Write a message first.')
+    const chat = this.chatOf(threadId)
+    if (chat) return this.sendChat(chat, content)
     if (this.runs.has(threadId)) throw new Error('A reply is already running in this thread.')
     const id = newId('rpc')
     this.runs.set(threadId, id)
@@ -301,19 +306,46 @@ export class RealComputerSession implements ComputerSession {
   }
 
   async abort(threadId: string): Promise<void> {
+    const chat = this.chatOf(threadId)
+    if (chat) return this.stopChat(chat)
     const run = this.runs.get(threadId)
     if (!run) throw new Error('This reply was started on another device. Stop it there.')
     await this.leaf.rpc('orchestrator.abort', { threadId, run }, { idem: crypto.randomUUID() })
   }
 
   async isTurnActive(threadId: string): Promise<boolean> {
+    const chat = this.chatOf(threadId)
+    if (chat) return chat.run?.state === 'running'
     const value = await this.leaf.rpc('orchestrator.isTurnActive', { threadId })
     if (!isObject(value) || typeof value.active !== 'boolean') return badAnswer('orchestrator.isTurnActive')
     return value.active
   }
 
+  watchLists(handlers: ListsHandlers): () => void {
+    if (!this.lists) {
+      this.lists = new ListsWatch(this.leaf)
+      this.lists.start()
+    }
+    return this.lists.add({ lists: handlers.lists, state: (state, error) => handlers.state?.(state, error) })
+  }
+
   close(): void {
     this.leaf.close()
+  }
+
+  /** The agent chat a thread belongs to: its messages are sent and stopped through the chat. */
+  private chatOf(threadId: string): ListChat | undefined {
+    return this.lists?.current?.chats.find((chat) => chat.threadId === threadId && !chat.network)
+  }
+
+  private async sendChat(chat: ListChat, text: string): Promise<void> {
+    if (chat.run?.state === 'running') throw new Error('Wait for this reply, or stop it first.')
+    await this.leaf.rpc('chats.send', { chatId: chat.id, text }, { idem: crypto.randomUUID() })
+  }
+
+  private async stopChat(chat: ListChat): Promise<void> {
+    if (!chat.run || chat.run.state !== 'running') return
+    await this.leaf.rpc('chats.cancel', { chatId: chat.id, runId: chat.run.id }, { idem: crypto.randomUUID() })
   }
 
   /** A send that failed after the phone stopped waiting: show it in the thread instead of dropping it. */

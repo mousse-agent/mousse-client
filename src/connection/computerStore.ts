@@ -1,0 +1,279 @@
+// One computer as the phone's screens see it: the shared session, its connection state, and the
+// lists (projects, threads, chats, run status). Lists come from memory first, then from what the
+// phone saved last time, and then live from the computer, so screens never wait to draw them.
+import type { ComputerLists, ComputerSession, ListsState } from './types'
+
+export type LinkState = 'idle' | 'connecting' | 'open' | 'closed' | 'removed' | 'error'
+
+export interface ComputerView {
+  nodeId: string
+  link: LinkState
+  /** Set while the link is open. */
+  session?: ComputerSession
+  /** Why the link failed or dropped, when known. */
+  error?: string
+  lists?: ComputerLists
+  /** Where the shown lists come from: none yet, saved on this phone, or the computer. */
+  listsState: ListsState | 'none' | 'saved'
+}
+
+/** Last-known lists, kept per account and computer between app starts. */
+export interface ListsCache {
+  read(accountId: string, nodeId: string): ComputerLists | undefined
+  write(accountId: string, nodeId: string, lists: ComputerLists): void
+  remove(accountId: string, nodeId: string): void
+  clearAccount(accountId: string): void
+}
+
+const PREFIX = 'mousse.lists.v1'
+const keyOf = (accountId: string, nodeId: string) => `${PREFIX}:${accountId}:${nodeId}`
+
+function validLists(value: unknown): value is ComputerLists {
+  if (typeof value !== 'object' || value === null) return false
+  const lists = value as Record<string, unknown>
+  return (
+    Array.isArray(lists.projects) &&
+    Array.isArray(lists.threads) &&
+    Array.isArray(lists.chats) &&
+    typeof lists.status === 'object' &&
+    lists.status !== null &&
+    typeof lists.receivedAt === 'number'
+  )
+}
+
+/** A cache in the webview's localStorage, which Capacitor keeps across app starts. Never throws. */
+export function storageListsCache(storage: Storage | undefined = safeLocalStorage()): ListsCache {
+  return {
+    read(accountId, nodeId) {
+      try {
+        const text = storage?.getItem(keyOf(accountId, nodeId))
+        if (!text) return undefined
+        const value: unknown = JSON.parse(text)
+        return validLists(value) ? value : undefined
+      } catch {
+        return undefined
+      }
+    },
+    write(accountId, nodeId, lists) {
+      try {
+        storage?.setItem(keyOf(accountId, nodeId), JSON.stringify(lists))
+      } catch {
+        // Full or unavailable storage only costs the next cold start its instant lists.
+      }
+    },
+    remove(accountId, nodeId) {
+      try {
+        storage?.removeItem(keyOf(accountId, nodeId))
+      } catch {
+        // Nothing to clean up.
+      }
+    },
+    clearAccount(accountId) {
+      try {
+        if (!storage) return
+        const prefix = `${PREFIX}:${accountId}:`
+        const keys: string[] = []
+        for (let index = 0; index < storage.length; index++) {
+          const key = storage.key(index)
+          if (key?.startsWith(prefix)) keys.push(key)
+        }
+        for (const key of keys) storage.removeItem(key)
+      } catch {
+        // Nothing to clean up.
+      }
+    },
+  }
+}
+
+function safeLocalStorage(): Storage | undefined {
+  try {
+    return typeof localStorage === 'undefined' ? undefined : localStorage
+  } catch {
+    return undefined
+  }
+}
+
+/** A cache that forgets on reload, for tests and for when storage is unavailable. */
+export function memoryListsCache(): ListsCache {
+  const entries = new Map<string, ComputerLists>()
+  return {
+    read: (accountId, nodeId) => entries.get(keyOf(accountId, nodeId)),
+    write: (accountId, nodeId, lists) => void entries.set(keyOf(accountId, nodeId), lists),
+    remove: (accountId, nodeId) => void entries.delete(keyOf(accountId, nodeId)),
+    clearAccount: (accountId) => {
+      for (const key of [...entries.keys()]) if (key.startsWith(`${PREFIX}:${accountId}:`)) entries.delete(key)
+    },
+  }
+}
+
+/** Waits before each automatic reconnect; after the last one the phone waits for "Try again" or the app's return. */
+export const RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000]
+const SAVE_DELAY_MS = 500
+
+export interface ComputerStoreOptions {
+  nodeId: string
+  accountId: string
+  cache: ListsCache
+  /** Opens or reuses the session to the computer. */
+  open(): Promise<ComputerSession>
+  /** Closes and forgets the shared session, so the next open starts a new one. */
+  drop(): void
+  reconnectDelaysMs?: number[]
+}
+
+export class ComputerStore {
+  private current: ComputerView
+  private readonly listeners = new Set<() => void>()
+  private attached?: { session: ComputerSession; stop: () => void }
+  private retryTimer?: ReturnType<typeof setTimeout>
+  private saveTimer?: ReturnType<typeof setTimeout>
+  private attempts = 0
+  private opening = 0
+  private disposed = false
+
+  constructor(private readonly options: ComputerStoreOptions) {
+    const saved = options.cache.read(options.accountId, options.nodeId)
+    this.current = { nodeId: options.nodeId, link: 'idle', listsState: saved ? 'saved' : 'none', ...(saved ? { lists: saved } : {}) }
+  }
+
+  /** The same object until something changes, for useSyncExternalStore. */
+  view(): ComputerView {
+    return this.current
+  }
+
+  /** The first listener connects; the link and lists then stay up while the app runs. */
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener)
+    this.connect()
+    return () => {
+      this.listeners.delete(listener)
+    }
+  }
+
+  /** Connects unless connected, connecting, or removed from the computer. */
+  connect(): void {
+    if (this.disposed || ['open', 'connecting', 'removed'].includes(this.current.link)) return
+    clearTimeout(this.retryTimer)
+    this.retryTimer = undefined
+    const attempt = ++this.opening
+    this.set({ link: 'connecting', error: undefined })
+    this.options.open().then(
+      (session) => {
+        if (this.disposed || attempt !== this.opening) return
+        this.attach(session)
+      },
+      (error: unknown) => {
+        if (this.disposed || attempt !== this.opening) return
+        this.set({ link: 'error', error: error instanceof Error && error.message ? error.message : 'Could not connect.' })
+        this.scheduleRetry()
+      },
+    )
+  }
+
+  /** Starts over now, with a new session. */
+  retry(): void {
+    if (this.disposed) return
+    this.detach()
+    this.options.drop()
+    this.attempts = 0
+    this.set({ link: 'idle', session: undefined })
+    this.connect()
+  }
+
+  /** Called when the app returns to the foreground: reconnect at once if the link dropped. */
+  resume(): void {
+    if (this.current.link === 'closed' || this.current.link === 'error') {
+      this.attempts = 0
+      this.connect()
+    }
+  }
+
+  dispose(): void {
+    this.disposed = true
+    clearTimeout(this.retryTimer)
+    this.flushSave()
+    this.detach()
+    this.listeners.clear()
+  }
+
+  private attach(session: ComputerSession): void {
+    this.detach()
+    if (session.state() === 'closed') {
+      this.closed(session.endReason() ?? 'ended', session.endMessage?.())
+      return
+    }
+    const stopLists = session.watchLists({
+      lists: (lists) => {
+        if (this.attached?.session !== session) return
+        this.set({ lists, listsState: this.current.listsState === 'polling' ? 'polling' : 'live' })
+        this.save(lists)
+      },
+      state: (state, error) => {
+        if (this.attached?.session !== session) return
+        // Keep showing the lists already on screen while the computer is read again.
+        if (state === 'loading') return
+        this.set({ listsState: state === 'error' && this.current.lists ? this.current.listsState : state, error: state === 'error' ? error?.message : undefined })
+      },
+    })
+    const stopState = session.onStateChange((state) => {
+      if (state === 'closed' && this.attached?.session === session) this.closed(session.endReason() ?? 'ended', session.endMessage?.())
+    })
+    this.attached = { session, stop: () => { stopLists(); stopState() } }
+    this.attempts = 0
+    this.set({ link: 'open', session, error: undefined })
+  }
+
+  private detach(): void {
+    const attached = this.attached
+    this.attached = undefined
+    attached?.stop()
+  }
+
+  /** `message` says why the link dropped, when the session knows. */
+  private closed(reason: 'removed' | 'ended', message?: string): void {
+    this.detach()
+    if (reason === 'removed') {
+      clearTimeout(this.saveTimer)
+      this.options.cache.remove(this.options.accountId, this.options.nodeId)
+      this.set({ link: 'removed', session: undefined, lists: undefined, listsState: 'none' })
+      return
+    }
+    this.set({ link: 'closed', session: undefined, error: message, listsState: this.current.lists ? 'saved' : 'none' })
+    this.scheduleRetry()
+  }
+
+  private scheduleRetry(): void {
+    const delays = this.options.reconnectDelaysMs ?? RECONNECT_DELAYS_MS
+    if (this.disposed || !this.listeners.size || this.attempts >= delays.length) return
+    const delay = delays[this.attempts++]
+    clearTimeout(this.retryTimer)
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = undefined
+      this.connect()
+    }, delay)
+  }
+
+  private save(lists: ComputerLists): void {
+    clearTimeout(this.saveTimer)
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = undefined
+      this.options.cache.write(this.options.accountId, this.options.nodeId, lists)
+    }, SAVE_DELAY_MS)
+  }
+
+  private flushSave(): void {
+    if (this.saveTimer === undefined) return
+    clearTimeout(this.saveTimer)
+    this.saveTimer = undefined
+    if (this.current.lists) this.options.cache.write(this.options.accountId, this.options.nodeId, this.current.lists)
+  }
+
+  private set(patch: Partial<ComputerView>): void {
+    const next = { ...this.current, ...patch }
+    for (const key of Object.keys(next) as Array<keyof ComputerView>) if (next[key] === undefined) delete next[key]
+    const changed = (Object.keys({ ...this.current, ...next }) as Array<keyof ComputerView>).some((key) => this.current[key] !== next[key])
+    if (!changed) return
+    this.current = next
+    for (const listener of this.listeners) listener()
+  }
+}

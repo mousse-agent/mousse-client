@@ -1,0 +1,129 @@
+// What the phone's Projects, Threads and Chats tabs show, computed from a computer's lists the way
+// the desktop sidebar computes it (mousse/src/renderer/components/ThreadsSidebar.tsx, ChatsSidebar.tsx).
+import type { ComputerLists, ListChat, ListThread, RunState } from '../../connection/types'
+
+export const SIDEBAR_TABS = ['projects', 'threads', 'chats'] as const
+export type SidebarTab = (typeof SIDEBAR_TABS)[number]
+
+/** Rows a project shows before "Show more", as on the desktop. */
+export const PROJECT_PREVIEW_LIMIT = 5
+
+/** Desktop sidebar order: the persisted position, then the id. */
+export function compareThreads(a: ListThread, b: ListThread): number {
+  if (a.order !== b.order) return a.order - b.order
+  return a.id.localeCompare(b.id)
+}
+
+/** Threads that back an agent chat; they appear under Chats, never under Threads or Projects. */
+export function chatThreadIds(lists: ComputerLists): Set<string> {
+  return new Set(lists.chats.map((chat) => chat.threadId).filter((id): id is string => !!id))
+}
+
+export interface SidebarModel {
+  /** Started, unsettled threads that are not chats, in sidebar order. */
+  threads: ListThread[]
+  settled: ListThread[]
+  byProject: Map<string, ListThread[]>
+  /** Started threads with no project (the Projects tab's "Recent chats"). */
+  standalone: ListThread[]
+  projectNames: Map<string, string>
+  groups: ListChat[]
+  direct: ListChat[]
+}
+
+export function sidebarModel(lists: ComputerLists, query = ''): SidebarModel {
+  const hidden = chatThreadIds(lists)
+  const needle = query.trim().toLowerCase()
+  const projectNames = new Map(lists.projects.map((project) => [project.id, project.name]))
+  const matches = (thread: ListThread) =>
+    !needle || thread.title.toLowerCase().includes(needle) || (projectNames.get(thread.projectId ?? '') ?? '').toLowerCase().includes(needle)
+  const visible = lists.threads.filter((thread) => thread.started && !hidden.has(thread.id) && matches(thread)).sort(compareThreads)
+  const threads = visible.filter((thread) => !thread.settled)
+  const byProject = new Map<string, ListThread[]>()
+  const standalone: ListThread[] = []
+  for (const thread of threads) {
+    if (thread.projectId && projectNames.has(thread.projectId)) {
+      const list = byProject.get(thread.projectId) ?? []
+      list.push(thread)
+      byProject.set(thread.projectId, list)
+    } else standalone.push(thread)
+  }
+  const chats = lists.chats
+    .filter((chat) => !needle || chat.name.toLowerCase().includes(needle) || (chat.preview ?? '').toLowerCase().includes(needle))
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+  return {
+    threads,
+    settled: visible.filter((thread) => thread.settled),
+    byProject,
+    standalone,
+    projectNames,
+    groups: chats.filter((chat) => chat.kind === 'group'),
+    direct: chats.filter((chat) => chat.kind === 'direct'),
+  }
+}
+
+/** The status a row shows; a run in the chat counts for its backing thread. */
+export function runState(lists: ComputerLists, threadId: string): RunState | undefined {
+  return lists.status[threadId]?.state
+}
+
+/** "now", "5m", "3h" (under 36 hours), then days: the desktop's threadAge. */
+export function threadAge(at: number | undefined, now = Date.now()): string {
+  if (!at) return ''
+  const delta = now - at
+  if (!Number.isFinite(delta) || delta < 45_000) return 'now'
+  const minutes = Math.round(delta / 60_000)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.round(minutes / 60)
+  if (hours < 36) return `${hours}h`
+  return `${Math.round(hours / 24)}d`
+}
+
+export function projectInitials(name: string): string {
+  const parts = name.split(/[\s/._-]+/).filter(Boolean)
+  const letters = `${parts[0]?.[0] ?? ''}${parts[1]?.[0] ?? parts[0]?.[1] ?? ''}`
+  return letters.toUpperCase() || '•'
+}
+
+function hashText(value: string): number {
+  let hash = 0
+  for (let index = 0; index < value.length; index += 1) hash = (hash * 31 + value.charCodeAt(index)) | 0
+  return hash
+}
+
+/** The project's colour, 1 to 6 (var(--hue-N)), stable across devices. */
+export function projectHue(projectId: string): number {
+  return (Math.abs(hashText(projectId)) % 6) + 1
+}
+
+/** The chat avatar's colour, 0 to 4 (.m-chat-color-N). */
+export function chatColor(name: string): number {
+  return [...name].reduce((value, char) => value + char.charCodeAt(0), 0) % 5
+}
+
+/** The line under a chat's name, as on the desktop. */
+export function chatPreview(chat: ListChat): string {
+  if (chat.network) return 'Space conversation'
+  if (chat.run?.state === 'running') return 'Working…'
+  if (chat.preview) return chat.preview
+  return chat.agents.length === 1 ? '1 agent' : `${chat.agents.length} agents`
+}
+
+const TAB_KEY = 'mousse.sidebar.tab'
+
+export function savedTab(): SidebarTab {
+  try {
+    const value = localStorage.getItem(TAB_KEY)
+    return (SIDEBAR_TABS as readonly string[]).includes(value ?? '') ? (value as SidebarTab) : 'threads'
+  } catch {
+    return 'threads'
+  }
+}
+
+export function saveTab(tab: SidebarTab): void {
+  try {
+    localStorage.setItem(TAB_KEY, tab)
+  } catch {
+    // The tab simply resets to Threads on the next start.
+  }
+}
