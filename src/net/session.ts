@@ -120,6 +120,9 @@ type Pending = {
 
 export type LeafSessionState = 'connecting' | 'open' | 'closed'
 
+/** What the phone's computer view needs from a session: a LeafSession, or a session that moves between paths. */
+export type SessionLink = Pick<LeafSession, 'state' | 'closeReason' | 'onStateChange' | 'onClose' | 'rpc' | 'subscribe' | 'snapshot' | 'close'>
+
 export class LeafSession {
   private readonly mux: StreamMux
   private readonly now: () => number
@@ -143,6 +146,9 @@ export class LeafSession {
   private expiryTimer?: ReturnType<typeof setTimeout>
   private unanswered = 0
   private pingNumber = 0
+  /** The number of the last scheduled ping; a pong for it or a later probe proves liveness. */
+  private scheduledPing = 0
+  private readonly probes = new Map<number, () => void>()
   private closeError?: Error
   readonly opened: Promise<void>
   private openResolve!: () => void
@@ -299,6 +305,29 @@ export class LeafSession {
     this.fail(error ?? new NetError('cancelled', 'Session closed.'))
   }
 
+  /**
+   * Pings the computer now and resolves with the round trip in milliseconds, or rejects with
+   * `deadline_exceeded` when no answer comes within `timeoutMs`. The session stays open either way.
+   */
+  probe(timeoutMs: number): Promise<number> {
+    if (this.stateValue !== 'open') return Promise.reject(this.closedError())
+    const n = ++this.pingNumber
+    const started = performance.now()
+    return new Promise<number>((resolve, reject) => {
+      const done = (error?: Error) => {
+        clearTimeout(timer)
+        this.probes.delete(n)
+        offClose()
+        if (error) reject(error)
+        else resolve(performance.now() - started)
+      }
+      const timer = setTimeout(() => done(new NetError('deadline_exceeded', 'The computer did not answer the ping.')), timeoutMs)
+      const offClose = this.onClose((error) => done(error ?? this.closedError()))
+      this.probes.set(n, () => done())
+      void this.send({ t: 'ping', n, now: this.now() }).catch((error: Error) => done(error))
+    })
+  }
+
   private closedError(): Error {
     return this.closeError ?? new NetError('route_unreachable', 'The session is not open.')
   }
@@ -347,7 +376,8 @@ export class LeafSession {
         void this.send({ t: 'pong', n: h.n, now: this.now() }).catch((error) => this.fail(error))
         return
       case 'pong':
-        if (h.n === this.pingNumber) this.unanswered = 0
+        if (h.n >= this.scheduledPing) this.unanswered = 0
+        this.probes.get(h.n)?.()
         return
       case 'rosterUpdate':
         this.adoptRoster(h.roster)
@@ -550,7 +580,7 @@ export class LeafSession {
         return
       }
       this.unanswered++
-      this.pingNumber++
+      this.scheduledPing = ++this.pingNumber
       void this.send({ t: 'ping', n: this.pingNumber, now: this.now() }).catch((error) => this.fail(error))
       this.schedulePing()
     }, this.options.pingIntervalMs ?? SESSION_PING_INTERVAL_MS)

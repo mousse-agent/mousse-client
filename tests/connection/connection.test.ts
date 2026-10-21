@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMousseConnection, type ConnectionDeps } from '../../src/connection'
+import { manualNetworkSignals } from '../../src/connection/networkSignals'
 import type { EnrollmentProgress } from '../../src/connection/types'
 import type { FetchLike } from '../../src/mousseId/http'
 import { sealForOffer, sealForRequest } from '../../src/mousseId/seal'
@@ -230,7 +231,17 @@ async function connect(w: World, extra: Partial<ConnectionDeps> = {}) {
   const server = idServer(w)
   const storage = new MemoryKeyStorage()
   const redeemed: RedeemOptions[] = []
-  const deps: ConnectionDeps = { origin: ORIGIN, storage, fetcher: server.fetcher, redeem: fakeRedeem(w, redeemed), pollMs: 1, ...extra }
+  // These tests script the computer's answers in order; the direct path search has its own tests.
+  const deps: ConnectionDeps = {
+    origin: ORIGIN,
+    storage,
+    fetcher: server.fetcher,
+    redeem: fakeRedeem(w, redeemed),
+    pollMs: 1,
+    network: manualNetworkSignals(),
+    paths: { autoProbe: false },
+    ...extra,
+  }
   const connection = await createMousseConnection(deps)
   return { connection, server, storage, redeemed, deps }
 }
@@ -371,6 +382,59 @@ describe('real connection', () => {
     expect(session.state()).toBe('closed')
     expect(session.endReason()).toBe('removed')
     expect((await connection.listComputers()).find((c) => c.nodeId === w.computer.node)?.enrolled).toBe(false)
+  })
+
+  it('moves the session to the computer\'s direct path and keeps renewing the registration there', async () => {
+    const w = world()
+    const network = manualNetworkSignals()
+    const { connection, server, deps } = await connect(w, { renewMs: 20, network, paths: { autoProbe: false, settleMs: 1 } })
+    await connection.signInWithPassword('a@b.test', 'pw')
+    w.offer = sealForOffer(invite(w), new Uint8Array(32).fill(3))
+    await connection.enrollFromQr(`mousse://net/join?v=1&plus=${encodeURIComponent(ORIGIN)}&offer=off_1&key=${b64url(new Uint8Array(32).fill(3))}`, () => undefined)
+    const answerPings = (remote: ReturnType<typeof fakeComputer>, delayMs: number) =>
+      void (async () => {
+        for (;;) {
+          const ping = await remote.next('ping')
+          setTimeout(() => void remote.send({ t: 'pong', n: ping.n, now: Date.now() }).catch(() => undefined), delayMs)
+        }
+      })()
+    let relay!: ReturnType<typeof fakeComputer>
+    let direct!: ReturnType<typeof fakeComputer>
+    deps.openChannel = async () => {
+      const [a, b] = streamPair()
+      relay = fakeComputer(b, w.user, w.computer, roster(w.user, w.computer.node))
+      void relay.handshake()
+      answerPings(relay, 30)
+      return channelOf(a, w.computer.keys.transport.spki)
+    }
+    const url = 'ws://192.168.1.5:41234/mousse-net'
+    deps.openDirectChannel = async (target) => {
+      expect(target.url).toBe(url)
+      expect(target.expectedSpki).toEqual(w.computer.keys.transport.spki)
+      const [a, b] = streamPair()
+      direct = fakeComputer(b, w.user, w.computer, roster(w.user, w.computer.node))
+      void direct.handshake()
+      answerPings(direct, 0)
+      return channelOf(a, w.computer.keys.transport.spki)
+    }
+    const session = await connection.openComputer(w.computer.node)
+    const states: string[] = []
+    session.onStateChange((state) => states.push(state))
+    // The phone joins a network: it checks its path and asks the computer for direct endpoints.
+    network.fire()
+    await relay.answer('net.direct.endpoints', { endpoints: [{ url, kind: 'lan' }] })
+    await until(() => !!direct, 200)
+    const renewalsBefore = () => server.calls.filter((call) => call.path === '/v1/net/registrations/reg_p/renew').length
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const projects = session.listProjects()
+    await direct.answer('projects.list', { projects: [{ id: 'p1', name: 'Site' }] })
+    expect(await projects).toEqual([{ id: 'p1', name: 'Site' }])
+    const renewed = renewalsBefore()
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    expect(renewalsBefore()).toBeGreaterThan(renewed)
+    expect(session.state()).toBe('open')
+    expect(states).toEqual([])
+    session.close()
   })
 
   it('keeps a session open over the hosted relay for several registration lifetimes', async () => {

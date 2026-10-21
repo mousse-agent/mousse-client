@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The app talks to Mousse ID and its relay over https and wss. The one plain connection is the
+  direct path to the user's own computer on the same network or tailnet: a ws:// WebSocket to a
+  private address whose bytes are TLS 1.3 pinned to the computer's key inside the app. Android has
+  no rule for IP address ranges, so plain traffic is allowed at the base; the app never sends
+  anything readable over it.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
