@@ -120,6 +120,23 @@ export function isRevoked(roster: Roster, node: string, keyEpoch: number): boole
   return (roster.revoked.find((row) => row.subject === node)?.throughKeyEpoch ?? 0) >= keyEpoch
 }
 
+/**
+ * Whether the roster removed `node`: it revokes the newest key epoch the roster or the caller
+ * (`knownKeyEpoch`, from the node's own delegation) knows for it.
+ */
+export function removesNode(roster: Roster, node: string, knownKeyEpoch = 1): boolean {
+  let keyEpoch = knownKeyEpoch
+  for (const signed of roster.nodes) {
+    try {
+      const delegation = verifyDelegation(signed, roster.rootKey)
+      if (delegation.subject === node && delegation.keyEpoch > keyEpoch) keyEpoch = delegation.keyEpoch
+    } catch {
+      // A damaged row says nothing about this node.
+    }
+  }
+  return isRevoked(roster, node, keyEpoch)
+}
+
 /** Orders rosters of one lineage: positive when `a` is newer than `b`. */
 export function rosterPosition(a: Roster, b: Roster): number {
   return a.recoveryEpoch - b.recoveryEpoch || a.version - b.version

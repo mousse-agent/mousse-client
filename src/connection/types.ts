@@ -68,10 +68,15 @@ export interface ChatItem {
 
 export type SessionState = 'connecting' | 'open' | 'closed'
 
+/** Why a session closed: the user's computers removed this phone, or anything else (network, timeout, the app). */
+export type SessionEndReason = 'removed' | 'ended'
+
 export interface ComputerSession {
   readonly nodeId: string
   state(): SessionState
   onStateChange(listener: (state: SessionState) => void): () => void
+  /** Set when the session closed; read it from an onStateChange listener. */
+  endReason(): SessionEndReason | undefined
   listProjects(): Promise<Project[]>
   listThreads(filter?: { projectId?: string; query?: string }): Promise<ThreadSummary[]>
   createThread(input: { projectId: string; title?: string }): Promise<ThreadSummary>

@@ -54,8 +54,9 @@ export class EnrollmentStore {
     return this.entries
   }
 
-  /** Enrollments of one account whose keys and roster still verify. */
+  /** Enrollments of one account whose keys and roster still verify, after pending writes. */
   async loaded(accountId: string): Promise<LoadedEnrollment[]> {
+    await this.writing
     const out: LoadedEnrollment[] = []
     for (const stored of await this.list()) {
       if (stored.accountId !== accountId) continue
@@ -106,6 +107,7 @@ export class EnrollmentStore {
         if (row.enrollment.user !== user) return row
         try {
           const incoming = verifyRoster(signed, row.enrollment.rootKey)
+          if (incoming.owner !== row.enrollment.user) return row
           const held = verifyRoster(row.enrollment.roster, row.enrollment.rootKey)
           if (rosterPosition(incoming, held) <= 0) return row
         } catch {
@@ -114,6 +116,11 @@ export class EnrollmentStore {
         return { ...row, enrollment: { ...row.enrollment, roster: signed } }
       }),
     )
+  }
+
+  /** Forgets one enrollment with its keys and Mousse ID registration, for example after the user's computers removed this phone. */
+  async forget(node: string): Promise<void> {
+    await this.update((entries) => entries.filter((row) => row.enrollment.node !== node))
   }
 
   /** Forgets every connector token, for example on sign-out. Enrollments stay. */

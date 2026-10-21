@@ -5,7 +5,7 @@ import { newId } from '../net/canonical'
 import { NetError } from '../net/errors'
 import type { LeafSession, StreamHead } from '../net/session'
 import { ThreadProjection } from './threadProjection'
-import type { ChatItem, ComputerSession, Project, SessionState, ThreadSummary } from './types'
+import type { ChatItem, ComputerSession, Project, SessionEndReason, SessionState, ThreadSummary } from './types'
 
 /** How long a reply may run before the phone stops waiting for its result. */
 export const SEND_DEADLINE_MS = 6 * 60 * 60 * 1000
@@ -146,6 +146,8 @@ export interface RealSessionOptions {
   leaf: LeafSession
   /** Called once when the session closes, for example to stop registration renewal. */
   onClose?: () => void
+  /** Why the session closed; asked once, before state listeners learn of the close. */
+  endReason?: (error?: Error) => SessionEndReason
 }
 
 export class RealComputerSession implements ComputerSession {
@@ -154,10 +156,18 @@ export class RealComputerSession implements ComputerSession {
   private readonly watches = new Map<string, Promise<ThreadWatch>>()
   /** Runs this phone started, by thread: the `orchestrator.send` RPC id that `orchestrator.abort` names. */
   private readonly runs = new Map<string, string>()
+  private ended?: SessionEndReason
 
   constructor(options: RealSessionOptions) {
     this.nodeId = options.nodeId
     this.leaf = options.leaf
+    const decide = (error?: Error) => {
+      this.ended ??= options.endReason?.(error) ?? 'ended'
+    }
+    // State listeners run before close listeners, so the reason is set on the closing state change.
+    this.leaf.onStateChange((state) => {
+      if (state === 'closed') decide(this.leaf.closeReason)
+    })
     this.leaf.onClose(() => {
       for (const watch of this.watches.values()) void watch.then((entry) => entry.close(), () => undefined)
       this.watches.clear()
@@ -171,6 +181,10 @@ export class RealComputerSession implements ComputerSession {
 
   onStateChange(listener: (state: SessionState) => void): () => void {
     return this.leaf.onStateChange(listener)
+  }
+
+  endReason(): SessionEndReason | undefined {
+    return this.ended
   }
 
   async listProjects(): Promise<Project[]> {
