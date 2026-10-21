@@ -59,10 +59,22 @@ export interface InventoryRegistration {
   generation: number
   expiresAt: number
   revokedAt: number | null
+  /** Key epoch of the registered delegation, when Mousse ID reports it. */
+  keyEpoch?: number
+}
+
+/** A user's computers as Mousse ID holds them: the newest roster their computers pushed. */
+export interface InventoryBinding {
+  userId: string
+  /** Signed by the user's root key; check it against the pinned root key before use. */
+  roster?: Signed
+  /** Revoked nodes and the key epoch they are revoked through, as Mousse ID reports them. */
+  revocations: Record<string, number>
 }
 
 export interface Inventory {
   registrations: InventoryRegistration[]
+  bindings: InventoryBinding[]
   limits: { maxRegistrations?: number; maxComputers?: number; maxPhones?: number }
   /** Devices counted against the account's limit, when Mousse ID reports it. */
   devices?: { used: number; limit: number }
@@ -145,6 +157,7 @@ function checkedInventoryRow(value: unknown): InventoryRegistration | undefined 
   const kind = value.kind === 'phone' ? 'phone' : 'computer'
   const deviceName = typeof value.deviceName === 'string' && value.deviceName ? value.deviceName.slice(0, DEVICE_NAME_MAX) : undefined
   const revokedAt = Number.isSafeInteger(value.revokedAt) ? (value.revokedAt as number) : null
+  const keyEpoch = isObject(value.delegation) ? positive(value.delegation.keyEpoch) : undefined
   return {
     id: value.id,
     userId: value.userId,
@@ -155,7 +168,21 @@ function checkedInventoryRow(value: unknown): InventoryRegistration | undefined 
     generation: value.generation as number,
     expiresAt: value.expiresAt as number,
     revokedAt,
+    ...(keyEpoch ? { keyEpoch } : {}),
   }
+}
+
+function checkedBinding(value: unknown): InventoryBinding | undefined {
+  if (!isObject(value) || typeof value.userId !== 'string') return undefined
+  const roster = value.roster
+  const signed = isObject(roster) && typeof roster.payload === 'string' && typeof roster.sig === 'string' ? (roster as unknown as Signed) : undefined
+  const revocations: Record<string, number> = {}
+  if (isObject(value.revocations))
+    for (const [node, row] of Object.entries(value.revocations)) {
+      const through = isObject(row) ? positive(row.throughKeyEpoch) : undefined
+      if (through) revocations[node] = through
+    }
+  return { userId: value.userId, ...(signed ? { roster: signed } : {}), revocations }
 }
 
 function positive(value: unknown): number | undefined {
@@ -209,6 +236,7 @@ export class MousseIdNet {
         : undefined
     return {
       registrations: value.registrations.map(checkedInventoryRow).filter((row): row is InventoryRegistration => !!row),
+      bindings: Array.isArray(value.bindings) ? value.bindings.map(checkedBinding).filter((row): row is InventoryBinding => !!row) : [],
       limits: {
         maxRegistrations: positive(limits.maxRegistrations),
         maxComputers: positive(limits.maxComputers),

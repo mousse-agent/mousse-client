@@ -6,12 +6,13 @@ import type { FetchLike } from '../../src/mousseId/http'
 import { sealForOffer, sealForRequest } from '../../src/mousseId/seal'
 import { b64url, fromB64url, randomBytes } from '../../src/net/bytes'
 import { canonicalJson, newId } from '../../src/net/canonical'
-import { sha256, signDocument } from '../../src/net/crypto'
+import { sha256, signDocument, type Signed } from '../../src/net/crypto'
 import { encodeInvite, type Enrollment, type NodeInviteAuthorization, type RedeemOptions } from '../../src/net/enrollment'
+import { NetError } from '../../src/net/errors'
 import { MemoryKeyStorage } from '../../src/net/keys'
 import { streamPair } from '../../src/net/stream'
 import { delegate, roster, testComputer, testUser, type TestComputer, type TestUser } from '../net/fixtures'
-import { channelOf, fakeComputer } from './helpers'
+import { channelOf, fakeComputer, until } from './helpers'
 
 const ORIGIN = 'https://id.test'
 const RELAY = 'wss://id.test/v1/net/relay'
@@ -52,7 +53,11 @@ function idServer(world: World) {
           { id: 'reg_c', userId: world.user.user, nodeId: world.computer.node, kind: 'computer', deviceName: 'Studio', online: true, generation: 1, expiresAt: now + 60_000, revokedAt: null },
           { id: 'reg_old', userId: world.user.user, nodeId: world.computer.node, kind: 'computer', deviceName: 'Studio', online: false, generation: 1, expiresAt: now - 1, revokedAt: null },
           { id: 'reg_gone', userId: world.user.user, nodeId: 'nod_gone', kind: 'computer', deviceName: 'Old', online: false, generation: 1, expiresAt: now, revokedAt: now - 5 },
+          ...(world.phoneNode
+            ? [{ id: 'reg_p', userId: world.user.user, nodeId: world.phoneNode, kind: 'phone', deviceName: 'Pixel', online: false, generation: 1, expiresAt: now + 60_000, revokedAt: world.phoneRevokedAt ?? null }]
+            : []),
         ],
+        bindings: world.hostedRoster ? [{ userId: world.user.user, rootKey: world.user.rootKey, roster: world.hostedRoster, revocations: {} }] : [],
         limits: { maxComputers: 3 },
         devices: { used: 1, limit: 5 },
       })
@@ -112,7 +117,7 @@ function idServer(world: World) {
       )
     }
     if (path === '/v1/net/registrations/reg_p/renew') {
-      if (world.renewError) return reply({ error: { code: world.renewError } }, 403)
+      if (world.renewError) return reply({ error: { code: world.renewError } }, world.renewStatus ?? 403)
       return reply({ id: 'reg_p', accountId: 'acct_1', userId: world.user.user, nodeId: world.phoneNode, generation: registrations, expiresAt: now + 60_000 })
     }
     return reply({ error: { code: 'not_found' } }, 404)
@@ -126,6 +131,11 @@ interface World {
   phoneNode?: string
   offer?: string
   renewError?: string
+  renewStatus?: number
+  /** Set on the phone's own registration in the inventory, as Mousse ID does once a roster revokes the phone. */
+  phoneRevokedAt?: number
+  /** The roster the user's computers last pushed to Mousse ID. */
+  hostedRoster?: Signed
   onRequest?: (id: string, body: Record<string, unknown>) => void
   decide?: (id: string, polls: number) => { status?: string; sealedInvite?: string } | undefined
 }
@@ -194,6 +204,21 @@ async function connect(w: World, extra: Partial<ConnectionDeps> = {}) {
   const deps: ConnectionDeps = { origin: ORIGIN, storage, fetcher: server.fetcher, redeem: fakeRedeem(w, redeemed), pollMs: 1, ...extra }
   const connection = await createMousseConnection(deps)
   return { connection, server, storage, redeemed, deps }
+}
+
+/** A signed-in connection with the phone added to the world's computer by QR code. */
+async function enrolled() {
+  const w = world()
+  const { connection, storage, deps, server } = await connect(w)
+  await connection.signInWithPassword('a@b.test', 'pw')
+  w.offer = sealForOffer(invite(w), new Uint8Array(32).fill(3))
+  await connection.enrollFromQr(`mousse://net/join?v=1&plus=${encodeURIComponent(ORIGIN)}&offer=off_1&key=${b64url(new Uint8Array(32).fill(3))}`, () => undefined)
+  expect((await connection.listComputers()).find((c) => c.nodeId === w.computer.node)?.enrolled).toBe(true)
+  return { w, connection, storage, deps, server }
+}
+
+async function stored(storage: MemoryKeyStorage): Promise<unknown[]> {
+  return JSON.parse((await storage.getItem('net.enrollments')) ?? '[]') as unknown[]
 }
 
 afterEach(() => {
@@ -314,6 +339,78 @@ describe('real connection', () => {
     w.renewError = 'revoked'
     await new Promise((resolve) => setTimeout(resolve, 60))
     expect(session.state()).toBe('closed')
+    expect(session.endReason()).toBe('removed')
+    expect((await connection.listComputers()).find((c) => c.nodeId === w.computer.node)?.enrolled).toBe(false)
+  })
+
+  it('forgets the computer when it refuses this phone as revoked on open', async () => {
+    const { w, connection, storage, deps } = await enrolled()
+    deps.openChannel = async () => {
+      throw new NetError('revoked', 'This device was revoked.')
+    }
+    await expect(connection.openComputer(w.computer.node)).rejects.toThrow('Studio removed this phone. Add it again to reconnect.')
+    expect(await stored(storage)).toEqual([])
+    expect((await connection.listComputers()).find((c) => c.nodeId === w.computer.node)?.enrolled).toBe(false)
+    await expect(connection.openComputer(w.computer.node)).rejects.toThrow('Add this phone to that computer first.')
+  })
+
+  it('ends the session and forgets the computer when a roster removing this phone arrives', async () => {
+    const { w, connection, storage, deps } = await enrolled()
+    let remote: ReturnType<typeof fakeComputer> | undefined
+    deps.openChannel = async () => {
+      const [a, b] = streamPair()
+      remote = fakeComputer(b, w.user, w.computer, roster(w.user, w.computer.node))
+      void remote.handshake()
+      return channelOf(a, w.computer.keys.transport.spki)
+    }
+    const session = await connection.openComputer(w.computer.node)
+    expect(session.state()).toBe('open')
+    w.user.revoked.push({ subject: w.phoneNode!, throughKeyEpoch: 1, revokedAt: Date.now() - 500 })
+    await remote!.send({ t: 'rosterUpdate', roster: roster(w.user, w.computer.node) })
+    await until(() => session.state() === 'closed')
+    expect(session.endReason()).toBe('removed')
+    expect((await connection.listComputers()).find((c) => c.nodeId === w.computer.node)?.enrolled).toBe(false)
+    expect(await stored(storage)).toEqual([])
+  })
+
+  it('forgets the computer when Mousse ID shows the phone was revoked while offline', async () => {
+    const { w, connection, storage } = await enrolled()
+    w.phoneRevokedAt = Date.now() - 100
+    expect((await connection.listComputers()).find((c) => c.nodeId === w.computer.node)?.enrolled).toBe(false)
+    expect(await stored(storage)).toEqual([])
+  })
+
+  it('forgets the computer when the roster pushed to Mousse ID removes this phone, even while it was offline', async () => {
+    const { w, connection, storage } = await enrolled()
+    w.user.revoked.push({ subject: w.phoneNode!, throughKeyEpoch: 1, revokedAt: Date.now() - 500 })
+    w.hostedRoster = roster(w.user, w.computer.node)
+    expect((await connection.listComputers()).find((c) => c.nodeId === w.computer.node)?.enrolled).toBe(false)
+    expect(await stored(storage)).toEqual([])
+  })
+
+  it('keeps the computer on transient failures and account session refusals', async () => {
+    const { w, connection, storage, deps } = await enrolled()
+    for (const code of ['peer_offline', 'route_unreachable', 'deadline_exceeded']) {
+      deps.openChannel = async () => {
+        throw new NetError(code, 'Not now.')
+      }
+      await expect(connection.openComputer(w.computer.node)).rejects.toThrow()
+      expect(await stored(storage)).toHaveLength(1)
+    }
+    // An expired lease needs Mousse ID; it refuses the renewal for an account reason.
+    vi.useFakeTimers({ now: Date.now() + 120_000, toFake: ['Date'] })
+    w.renewError = 'forbidden'
+    w.renewStatus = 403
+    deps.openChannel = async () => {
+      throw new NetError('peer_offline', 'Not now.')
+    }
+    await expect(connection.openComputer(w.computer.node)).rejects.toThrow()
+    w.renewError = 'unauthorized'
+    w.renewStatus = 401
+    await expect(connection.openComputer(w.computer.node)).rejects.toThrow()
+    expect(await stored(storage)).toHaveLength(1)
+    vi.useRealTimers()
+    expect((await connection.listComputers()).find((c) => c.nodeId === w.computer.node)?.enrolled).toBe(true)
   })
 
   it('reports a denied request and an unknown computer', async () => {

@@ -193,6 +193,11 @@ export class LeafSession {
     return this.stateValue
   }
 
+  /** The error the session closed with, once it is closed. */
+  get closeReason(): Error | undefined {
+    return this.stateValue === 'closed' ? this.closeError : undefined
+  }
+
   /** The computer's current delegation from the roster (name, caps). */
   get peer(): NodeDelegation | undefined {
     return this.peerDelegation

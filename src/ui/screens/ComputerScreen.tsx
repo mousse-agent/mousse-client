@@ -1,5 +1,5 @@
-import { useCallback, useState } from 'react'
-import type { ThreadSummary } from '../../connection/types'
+import { useCallback, useEffect, useState } from 'react'
+import type { ComputerSession, SessionEndReason, ThreadSummary } from '../../connection/types'
 import { useConnectionContext } from '../hooks/connection'
 import { useIsWide } from '../hooks/useMediaQuery'
 import { useSession } from '../hooks/useSession'
@@ -24,6 +24,25 @@ export function ComputerScreen({ nodeId, threadId }: { nodeId: string; threadId?
   const computers = useAsync(() => connection.listComputers(), [connection])
   const [titles, setTitles] = useState<Record<string, string>>({})
   const [refreshKey, setRefreshKey] = useState(0)
+  const [ended, setEnded] = useState<{ session: ComputerSession; reason: SessionEndReason }>()
+  const live = session.data
+  const reloadComputers = computers.reload
+
+  // A closed session stops looking connected; the list is read again so a removed phone shows as not added.
+  useEffect(() => {
+    if (!live) return undefined
+    const check = () => {
+      if (live.state() !== 'closed') return
+      setEnded((current) => current?.session === live ? current : { session: live, reason: live.endReason() ?? 'ended' })
+      reloadComputers()
+    }
+    check()
+    return live.onStateChange(check)
+  }, [live, reloadComputers])
+
+  useEffect(() => {
+    if (session.error) reloadComputers()
+  }, [session.error, reloadComputers])
 
   // Deep links and restored routes arrive without a title; look it up once.
   const lookup = useAsync(async () => {
@@ -49,7 +68,35 @@ export function ComputerScreen({ nodeId, threadId }: { nodeId: string; threadId?
   const settings = <IconButton label="Settings" onClick={() => router.push({ name: 'settings' })}><Settings /></IconButton>
   const presence = computer ? <><StatusDot state={computer.online ? 'online' : 'offline'} /> {computer.online ? 'Online' : 'Offline'}</> : undefined
 
-  if (session.error || (session.loading && !session.data)) {
+  const endedReason = ended && ended.session === live ? ended.reason : undefined
+  const removed = endedReason === 'removed' || (!!session.error && computer?.enrolled === false)
+  const retry = () => { dropSession(nodeId); session.reload() }
+
+  if (removed) {
+    return (
+      <main className="m-screen">
+        <TopBar leading={back} title={computerName} />
+        <div className="m-scroll"><div className="m-content">
+          <Notice>{`${computerName} removed this phone. Add it again to reconnect.`}</Notice>
+          <Button onClick={() => router.reset()}>Back to computers</Button>
+        </div></div>
+      </main>
+    )
+  }
+
+  if (endedReason === 'ended' && !session.loading) {
+    return (
+      <main className="m-screen">
+        <TopBar leading={back} title={computerName} />
+        <div className="m-scroll"><div className="m-content">
+          <Notice>{`Lost the connection to ${computerName}.`}</Notice>
+          <Button onClick={retry}>Try again</Button>
+        </div></div>
+      </main>
+    )
+  }
+
+  if (session.error || (session.loading && (!session.data || endedReason)) || !live) {
     return (
       <main className="m-screen">
         <TopBar leading={back} title={computerName} />
@@ -57,7 +104,7 @@ export function ComputerScreen({ nodeId, threadId }: { nodeId: string; threadId?
           {session.error ? (
             <>
               <Notice>{session.error}</Notice>
-              <Button onClick={() => { dropSession(nodeId); session.reload() }}>Try again</Button>
+              <Button onClick={retry}>Try again</Button>
             </>
           ) : <div className="m-loading"><Spinner label={`Connecting to ${computerName}`} /><span>Connecting to {computerName}…</span></div>}
         </div></div>
@@ -65,7 +112,6 @@ export function ComputerScreen({ nodeId, threadId }: { nodeId: string; threadId?
     )
   }
 
-  const live = session.data!
   const threadTitle = threadId ? titles[threadId] ?? lookedUpTitle ?? 'Thread' : undefined
   const list = (
     <ThreadList session={live} selectedId={threadId} refreshKey={refreshKey} onOpen={openThread} />

@@ -1,7 +1,7 @@
 // The real MousseConnection: Mousse ID sign-in and inventory, phone enrollment through enrollment
 // requests or QR offers, and sessions with the user's computers over the hosted relay.
 import { MousseIdError, checkedOrigin, type FetchLike, MousseIdHttp } from '../mousseId/http'
-import { MousseIdNet, type ControlIdentity, type InventoryRegistration, type RegistrationGrant } from '../mousseId/net'
+import { MousseIdNet, type ControlIdentity, type InventoryBinding, type InventoryRegistration, type RegistrationGrant } from '../mousseId/net'
 import { MOUSSE_ID_ORIGIN } from '../mousseId/origin'
 import { matchCode, openOfferSeal, openRequestSeal, parseJoinQr } from '../mousseId/seal'
 import { MousseIdSession, type AuthBrowser } from '../mousseId/session'
@@ -10,14 +10,14 @@ import { newId } from '../net/canonical'
 import { sha256, type Signed } from '../net/crypto'
 import { parseInvite, redeemInvite, type Enrollment, type RedeemOptions } from '../net/enrollment'
 import { NetError } from '../net/errors'
-import { currentNode } from '../net/identity'
+import { currentNode, removesNode, verifyDelegation, verifyRoster, type Roster } from '../net/identity'
 import { generateNodeKeys, SecureKeyStorage, serializeNodeKeys, type KeyStorage, type NodeKeys } from '../net/keys'
 import { dialRelay, type RelaySocketFactory } from '../net/relay'
 import { LeafSession, type LeafIdentity } from '../net/session'
 import { connectTls, type SecureChannel } from '../net/tls13/client'
 import { RealComputerSession } from './computerSession'
 import { EnrollmentStore, type LoadedEnrollment } from './enrollmentStore'
-import type { AccountState, Computer, ComputerSession, EnrollmentProgress, MousseConnection } from './types'
+import type { AccountState, Computer, ComputerSession, EnrollmentProgress, MousseConnection, SessionEndReason } from './types'
 
 /** Renew the phone's registration this often while a session is open; the lease is 60 seconds. */
 export const RENEW_INTERVAL_MS = 30_000
@@ -26,7 +26,26 @@ const LEASE_MARGIN_MS = 15_000
 const POLL_INTERVAL_MS = 2_000
 const DEFAULT_PHONE_NAME = 'Phone'
 /** Mousse ID errors that mean the registration is gone and the phone must register again. */
-const REREGISTER = new Set(['not_found', 'revoked', 'forbidden', 'expired', 'unauthorized'])
+/** Mousse ID refusals of a stored registration that a fresh registration may fix. */
+const REREGISTER = new Set(['not_found', 'forbidden', 'expired', 'unauthorized'])
+/**
+ * Codes that mean the user's computers removed this phone: from a computer or the relay, and from
+ * Mousse ID when it renews or registers a phone whose roster revokes it.
+ */
+const REMOVED = new Set(['revoked', 'not_member'])
+/** Mousse ID refusals that concern the account session, never this phone's membership. */
+const ACCOUNT_SESSION = new Set(['forbidden', 'unauthorized'])
+/** Codes that say nothing about this phone's membership; the phone tries again later. */
+const TRANSIENT = new Set([
+  'peer_offline',
+  'route_unreachable',
+  'deadline_exceeded',
+  'cancelled',
+  'rate_limited',
+  'clock_skew',
+  'offline',
+  'unavailable',
+])
 
 export interface ConnectionDeps {
   /** Mousse ID API origin; defaults to VITE_MOUSSE_ID_ORIGIN. */
@@ -73,6 +92,7 @@ function connectFailure(error: unknown, name: string): Error {
       return new Error(`${name} did not answer in time. Try again.`)
     case 'revoked':
     case 'not_member':
+      return removedError(name)
     case 'not_enrolled':
     case 'bad_delegation':
       return new Error(`${name} no longer accepts this phone. Add it again.`)
@@ -81,6 +101,10 @@ function connectFailure(error: unknown, name: string): Error {
     default:
       return error instanceof Error ? error : new Error(`Could not connect to ${name}.`)
   }
+}
+
+function removedError(name: string): Error {
+  return new Error(`${name} removed this phone. Add it again to reconnect.`)
 }
 
 class RealConnection implements MousseConnection {
@@ -92,6 +116,8 @@ class RealConnection implements MousseConnection {
   private devices?: { used: number; limit: number }
   private accountSnapshot?: { key: string; state: AccountState }
   private readonly grantLocks = new Map<string, Promise<unknown>>()
+  /** Phone nodes forgotten in this run, kept out of the device list until Mousse ID drops them. */
+  private readonly forgotten = new Set<string>()
 
   constructor(
     private readonly deps: ConnectionDeps,
@@ -161,11 +187,21 @@ class RealConnection implements MousseConnection {
     const accountId = this.accountId()
     const inventory = await net.inventory()
     this.setDevices(inventory.devices)
+    await this.adoptRosters(inventory.bindings)
+    await this.forgetRemoved(accountId)
+    // Mousse ID marks a phone's registration revoked once a computer's roster revokes it, which reaches phones that were offline then.
+    for (const row of inventory.registrations) {
+      if (row.revokedAt === null) continue
+      const own = (await this.store.loaded(accountId)).some((entry) => entry.stored.enrollment.node === row.nodeId)
+      if (own) await this.forget(row.nodeId)
+    }
     const enrollments = await this.store.loaded(accountId)
-    const ownNodes = new Set(enrollments.map((entry) => entry.stored.enrollment.node))
+    const ownNodes = new Set([...this.forgotten, ...enrollments.map((entry) => entry.stored.enrollment.node)])
+    const revocations = new Map(inventory.bindings.map((binding) => [binding.userId, binding.revocations]))
     const rows = new Map<string, InventoryRegistration>()
     for (const row of inventory.registrations) {
       if (row.revokedAt !== null || ownNodes.has(row.nodeId)) continue
+      if ((revocations.get(row.userId)?.[row.nodeId] ?? 0) >= (row.keyEpoch ?? 1)) continue
       const held = rows.get(row.nodeId)
       if (!held || (row.online && !held.online) || (row.online === held.online && row.expiresAt > held.expiresAt)) rows.set(row.nodeId, row)
     }
@@ -239,8 +275,13 @@ class RealConnection implements MousseConnection {
     const { net } = this.signedIn()
     const accountId = this.accountId()
     const now = this.now()
+    const removed = await this.forgetRemoved(accountId)
     const entry = await this.store.forComputer(accountId, nodeId, now)
-    if (!entry) throw new Error('Add this phone to that computer first.')
+    if (!entry) {
+      const gone = removed.find((row) => nodeName(row.roster, nodeId, now) !== undefined)
+      if (gone) throw removedError(nodeName(gone.roster, nodeId, now) || 'The computer')
+      throw new Error('Add this phone to that computer first.')
+    }
     const peer = currentNode(entry.roster, nodeId, now).delegation
     const name = peer.name || 'The computer'
     const identity = controlIdentity(entry, now)
@@ -248,6 +289,7 @@ class RealConnection implements MousseConnection {
     try {
       grant = await this.ensureGrant(entry, identity, accountId)
     } catch (error) {
+      if (await this.confirmRemoved(entry, accountId, error)) throw removedError(name)
       throw new Error(`Mousse ID did not admit this phone: ${errorMessage(error)}`)
     }
     const expectedSpki = fromB64url(peer.keys.transport)
@@ -266,9 +308,12 @@ class RealConnection implements MousseConnection {
             { transport: entry.keys.transport, expectedServerSpki: expectedSpki },
           )
     } catch (error) {
-      throw connectFailure(error, name)
+      throw (await this.confirmRemoved(entry, accountId, error)) ? removedError(name) : connectFailure(error, name)
     }
     const user = entry.stored.enrollment.user
+    const ownNode = entry.stored.enrollment.node
+    // Set when the computer sends a roster that removes this phone; the session then fails its own checks.
+    let removedByRoster = false
     const leafIdentity: LeafIdentity = {
       user,
       rootKey: identity.rootKey,
@@ -282,7 +327,10 @@ class RealConnection implements MousseConnection {
         identity: leafIdentity,
         peerNode: nodeId,
         now: this.now,
-        onRoster: (roster: Signed) => void this.store.setRoster(user, roster).catch(() => undefined),
+        onRoster: (roster: Signed) => {
+          if (rosterRemoves(entry, roster)) removedByRoster = true
+          void this.store.setRoster(user, roster).catch(() => undefined)
+        },
       })
     } catch (error) {
       channel.close?.()
@@ -292,14 +340,73 @@ class RealConnection implements MousseConnection {
       await leaf.opened
     } catch (error) {
       leaf.close()
-      throw connectFailure(error, name)
+      if (removedByRoster) {
+        await this.forget(ownNode)
+        throw removedError(name)
+      }
+      throw (await this.confirmRemoved(entry, accountId, error)) ? removedError(name) : connectFailure(error, name)
     }
     const renewal = setInterval(() => {
-      void this.renewOnce(entry, identity, accountId, net).catch((error: unknown) => {
-        if (REREGISTER.has(codeOf(error) ?? '')) leaf.close(new NetError('revoked', 'Mousse ID no longer admits this phone.'))
+      void this.renewOnce(entry, identity, accountId, net).catch(async (error: unknown) => {
+        const code = codeOf(error) ?? ''
+        if (!REREGISTER.has(code) && !REMOVED.has(code)) return
+        const removed = await this.confirmRemoved(entry, accountId, error).catch(() => false)
+        leaf.close(
+          removed
+            ? new NetError('revoked', `${name} removed this phone.`)
+            : new NetError('forbidden', 'Mousse ID no longer admits this phone.'),
+        )
       })
     }, this.deps.renewMs ?? RENEW_INTERVAL_MS)
-    return new RealComputerSession({ nodeId, leaf, onClose: () => clearInterval(renewal) })
+    const endReason = (error?: Error): SessionEndReason => {
+      if (!removedByRoster && !(error instanceof NetError && REMOVED.has(error.code))) return 'ended'
+      void this.forget(ownNode).catch(() => undefined)
+      return 'removed'
+    }
+    return new RealComputerSession({ nodeId, leaf, endReason, onClose: () => clearInterval(renewal) })
+  }
+
+  /** Keeps the newer rosters the user's computers pushed to Mousse ID; each must verify with the pinned root key. */
+  private async adoptRosters(bindings: InventoryBinding[]): Promise<void> {
+    for (const binding of bindings) if (binding.roster) await this.store.setRoster(binding.userId, binding.roster)
+  }
+
+  /** Forgets the enrollments whose roster removes this phone, and returns them. */
+  private async forgetRemoved(accountId: string): Promise<LoadedEnrollment[]> {
+    const removed = (await this.store.loaded(accountId)).filter(removesSelf)
+    for (const entry of removed) await this.forget(entry.stored.enrollment.node)
+    return removed
+  }
+
+  private async forget(node: string): Promise<void> {
+    this.forgotten.add(node)
+    await this.store.forget(node)
+  }
+
+  /**
+   * Whether a refusal means the user's computers removed this phone; if so the enrollment is forgotten.
+   * A computer, the relay or Mousse ID says so with `revoked` or `not_member`. Account session
+   * problems (`forbidden`, `unauthorized`) never forget anything. For other refusals the phone reads
+   * the roster the computers last pushed to Mousse ID and forgets the enrollment only when that
+   * signed roster removes it.
+   */
+  private async confirmRemoved(entry: LoadedEnrollment, accountId: string, error: unknown): Promise<boolean> {
+    const node = entry.stored.enrollment.node
+    const code = codeOf(error)
+    if (code && REMOVED.has(code)) {
+      await this.forget(node)
+      return true
+    }
+    if (!code || TRANSIENT.has(code) || ACCOUNT_SESSION.has(code)) return false
+    try {
+      await this.adoptRosters((await this.signedIn().net.inventory()).bindings)
+    } catch {
+      return false
+    }
+    const fresh = (await this.store.loaded(accountId)).find((row) => row.stored.enrollment.node === node)
+    if (!fresh || !removesSelf(fresh)) return false
+    await this.forget(node)
+    return true
   }
 
   /** A registration valid for at least LEASE_MARGIN_MS: the stored one, renewed, or a new one. */
@@ -434,6 +541,40 @@ function reaches(entry: LoadedEnrollment, nodeId: string, now: number): boolean 
     return true
   } catch {
     return false
+  }
+}
+
+/** Whether the enrollment's roster removes this phone's own node. */
+function removesSelf(entry: LoadedEnrollment): boolean {
+  return removesOwnNode(entry, entry.roster)
+}
+
+/** Whether a roster received for this enrollment removes this phone's own node. */
+function rosterRemoves(entry: LoadedEnrollment, signed: Signed): boolean {
+  try {
+    return removesOwnNode(entry, verifyRoster(signed, entry.stored.enrollment.rootKey))
+  } catch {
+    return false
+  }
+}
+
+function removesOwnNode(entry: LoadedEnrollment, roster: Roster): boolean {
+  const { enrollment } = entry.stored
+  let keyEpoch = 1
+  try {
+    keyEpoch = verifyDelegation(enrollment.delegation, enrollment.rootKey).keyEpoch
+  } catch {
+    // The roster's own rows still give the newest key epoch.
+  }
+  return removesNode(roster, enrollment.node, keyEpoch)
+}
+
+/** The name of a computer the roster delegates, or undefined when it has no current delegation. */
+function nodeName(roster: Roster, nodeId: string, now: number): string | undefined {
+  try {
+    return currentNode(roster, nodeId, now).delegation.name
+  } catch {
+    return undefined
   }
 }
 

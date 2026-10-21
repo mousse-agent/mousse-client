@@ -9,6 +9,7 @@ import type {
   EnrollmentProgress,
   MousseConnection,
   Project,
+  SessionEndReason,
   SessionState,
   ThreadSummary
 } from '../../connection/types'
@@ -97,6 +98,8 @@ class FakeSession implements ComputerSession {
   constructor(readonly nodeId: string, private threads: ThreadSummary[], private opts: Required<Omit<FakeConnectionOptions, 'now' | 'email'>>) {}
 
   state(): SessionState { return this.sessionState }
+
+  endReason(): SessionEndReason | undefined { return this.sessionState === 'closed' ? 'ended' : undefined }
 
   onStateChange(listener: (state: SessionState) => void): () => void {
     this.stateListeners.add(listener)
