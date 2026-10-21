@@ -25,8 +25,10 @@ export const ENDPOINTS_METHOD = 'net.direct.endpoints'
 export const PROBE_INTERVAL_MS = 30_000
 /** How long one attempt to open a direct session may take. */
 export const DIRECT_OPEN_TIMEOUT_MS = 3_000
-/** How long a path may take to answer a ping after the network changed. */
+/** How long a direct path may take to answer a ping after the network changed. */
 export const LIVENESS_TIMEOUT_MS = 2_500
+/** The relay crosses the internet and may sit on a slow mobile network; it gets longer. */
+export const RELAY_LIVENESS_TIMEOUT_MS = 6_000
 /** Ping interval on a direct path, so a silent drop is noticed within a few seconds. */
 export const DIRECT_PING_INTERVAL_MS = 5_000
 const NETWORK_SETTLE_MS = 300
@@ -214,8 +216,9 @@ export class PathSession implements SessionLink {
   async checkPath(): Promise<void> {
     if (this.stateValue !== 'open' || this.recovering) return
     const path = this.active
+    const direct = this.options.livenessTimeoutMs ?? LIVENESS_TIMEOUT_MS
     try {
-      await path.leaf.probe(this.options.livenessTimeoutMs ?? LIVENESS_TIMEOUT_MS)
+      await path.leaf.probe(path.kind === 'direct' ? direct : Math.max(direct, RELAY_LIVENESS_TIMEOUT_MS))
     } catch (error) {
       if (path.leaf.state === 'open' && codeOf(error) === 'deadline_exceeded')
         path.leaf.close(new NetError('peer_offline', 'The computer stopped answering on this network.'))
