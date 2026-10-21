@@ -12,11 +12,14 @@ import { parseInvite, redeemInvite, type Enrollment, type RedeemOptions } from '
 import { NetError } from '../net/errors'
 import { currentNode, removesNode, verifyDelegation, verifyRoster, type Roster } from '../net/identity'
 import { generateNodeKeys, SecureKeyStorage, serializeNodeKeys, type KeyStorage, type NodeKeys } from '../net/keys'
+import { dialDirect } from '../net/direct'
 import { dialRelay, type RelaySocketFactory } from '../net/relay'
 import { LeafSession, type LeafIdentity } from '../net/session'
 import { connectTls, type SecureChannel } from '../net/tls13/client'
 import { RealComputerSession } from './computerSession'
 import { EnrollmentStore, type LoadedEnrollment } from './enrollmentStore'
+import type { NetworkSignals } from './networkSignals'
+import { DIRECT_OPEN_TIMEOUT_MS, DIRECT_PING_INTERVAL_MS, PathSession, type PathSessionOptions } from './pathSession'
 import type { AccountState, Computer, ComputerSession, EnrollmentProgress, MousseConnection, SessionEndReason } from './types'
 
 /**
@@ -73,6 +76,14 @@ export interface ConnectionDeps {
   socketFactory?: RelaySocketFactory
   /** Tests replace the relay and TLS layers for computer sessions. */
   openChannel?: (target: { route: string; nodeId: string; expectedSpki: Uint8Array; grant: RegistrationGrant }) => Promise<SecureChannel>
+  /** Tests replace the WebSocket and TLS layers of a direct path to a computer. */
+  openDirectChannel?: (target: { url: string; nodeId: string; expectedSpki: Uint8Array; signal: AbortSignal }) => Promise<SecureChannel>
+  /** Opens the WebSocket of a direct path; defaults to the webview's WebSocket. */
+  directSocketFactory?: RelaySocketFactory
+  /** Network changes and app resumes; defaults to the device's. */
+  network?: NetworkSignals
+  /** Tests tune or switch off the background search for a direct path. */
+  paths?: Pick<PathSessionOptions, 'autoProbe' | 'probeIntervalMs' | 'directTimeoutMs' | 'livenessTimeoutMs' | 'settleMs'>
   /** Tests replace invite redemption. */
   redeem?: (options: RedeemOptions) => Promise<Enrollment>
   pollMs?: number
@@ -307,9 +318,8 @@ class RealConnection implements MousseConnection {
     }
     const expectedSpki = fromB64url(peer.keys.transport)
     const route = `${grant.relayAudience}?node=${nodeId}`
-    let channel: SecureChannel
-    try {
-      channel = this.deps.openChannel
+    const relayChannel = async (grant: RegistrationGrant): Promise<SecureChannel> =>
+      this.deps.openChannel
         ? await this.deps.openChannel({ route, nodeId, expectedSpki, grant })
         : await connectTls(
             await dialRelay({
@@ -320,6 +330,9 @@ class RealConnection implements MousseConnection {
             }),
             { transport: entry.keys.transport, expectedServerSpki: expectedSpki },
           )
+    let channel: SecureChannel
+    try {
+      channel = await relayChannel(grant)
     } catch (error) {
       throw (await this.confirmRemoved(entry, accountId, error)) ? removedError(name) : connectFailure(error, name)
     }
@@ -334,32 +347,71 @@ class RealConnection implements MousseConnection {
       roster: identity.roster,
       delegation: identity.delegation,
     }
-    let leaf: LeafSession
+    const onRoster = (roster: Signed) => {
+      if (rosterRemoves(entry, roster)) removedByRoster = true
+      // Later paths start from the newest roster the computer sent.
+      leafIdentity.roster = roster
+      void this.store.setRoster(user, roster).catch(() => undefined)
+    }
+    let first: LeafSession
     try {
-      leaf = new LeafSession(channel, {
-        identity: leafIdentity,
-        peerNode: nodeId,
-        now: this.now,
-        onRoster: (roster: Signed) => {
-          if (rosterRemoves(entry, roster)) removedByRoster = true
-          void this.store.setRoster(user, roster).catch(() => undefined)
-        },
-      })
+      first = new LeafSession(channel, { identity: { ...leafIdentity }, peerNode: nodeId, now: this.now, onRoster })
     } catch (error) {
       channel.close?.()
       throw connectFailure(error, name)
     }
     try {
-      await leaf.opened
+      await first.opened
     } catch (error) {
-      leaf.close()
+      first.close()
       if (removedByRoster) {
         await this.forget(ownNode)
         throw removedError(name)
       }
       throw (await this.confirmRemoved(entry, accountId, error)) ? removedError(name) : connectFailure(error, name)
     }
-    // Keep the registration ahead of the relay's admission renewals for as long as the session is open.
+    // Later sessions to the same computer, over the relay again or over a direct path.
+    const openLeaf = async (opened: SecureChannel, pingIntervalMs?: number): Promise<LeafSession> => {
+      let next: LeafSession
+      try {
+        next = new LeafSession(opened, { identity: { ...leafIdentity }, peerNode: nodeId, now: this.now, onRoster, ...(pingIntervalMs ? { pingIntervalMs } : {}) })
+      } catch (error) {
+        opened.close?.()
+        throw error
+      }
+      try {
+        await next.opened
+      } catch (error) {
+        next.close()
+        throw error
+      }
+      return next
+    }
+    // The session moves between the relay and the computer's direct endpoints on its own.
+    const leaf = new PathSession({
+      first,
+      network: this.deps.network,
+      ...this.deps.paths,
+      open: {
+        relay: async () => openLeaf(await relayChannel(await this.ensureGrant(entry, identity, accountId))),
+        direct: async (endpoint, signal) => {
+          const opened = this.deps.openDirectChannel
+            ? await this.deps.openDirectChannel({ url: endpoint.url, nodeId, expectedSpki, signal })
+            : await connectTls(await dialDirect({ url: endpoint.url, socketFactory: this.deps.directSocketFactory, signal }), {
+                transport: entry.keys.transport,
+                expectedServerSpki: expectedSpki,
+                timeoutMs: DIRECT_OPEN_TIMEOUT_MS,
+              })
+          if (signal.aborted) {
+            opened.close?.()
+            throw new NetError('cancelled')
+          }
+          return openLeaf(opened, DIRECT_PING_INTERVAL_MS)
+        },
+      },
+    })
+    // Keep the registration ahead of the relay's admission renewals for as long as the session is
+    // open, on every path, so falling back to the relay never waits for Mousse ID.
     let renewal: ReturnType<typeof setTimeout> | undefined
     let stopped = false
     let expiresAt = grant.registration.expiresAt

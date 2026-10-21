@@ -3,7 +3,7 @@
 // display stream.
 import { newId } from '../net/canonical'
 import { NetError } from '../net/errors'
-import type { LeafSession, StreamHead } from '../net/session'
+import type { SessionLink, StreamHead } from '../net/session'
 import { ListsWatch } from './lists'
 import { ThreadProjection } from './threadProjection'
 import { LeafComputerSpeech, type ComputerSpeech } from './speech'
@@ -186,7 +186,7 @@ class ThreadWatch {
   private closed = false
 
   constructor(
-    private readonly leaf: LeafSession,
+    private readonly leaf: SessionLink,
     readonly threadId: string,
   ) {
     this.projection = new ThreadProjection(threadId)
@@ -272,7 +272,7 @@ class ThreadWatch {
 
 export interface RealSessionOptions {
   nodeId: string
-  leaf: LeafSession
+  leaf: SessionLink
   /** Called once when the session closes, for example to stop registration renewal. */
   onClose?: () => void
   /** Why the session closed; asked once, before state listeners learn of the close. */
@@ -282,7 +282,7 @@ export interface RealSessionOptions {
 export class RealComputerSession implements ComputerSession {
   readonly nodeId: string
   readonly speech: ComputerSpeech
-  private readonly leaf: LeafSession
+  private readonly leaf: SessionLink
   private readonly watches = new Map<string, Promise<ThreadWatch>>()
   /** Runs this phone started, by thread: the `orchestrator.send` RPC id that `orchestrator.abort` names. */
   private readonly runs = new Map<string, string>()

@@ -5,7 +5,7 @@
 import { equalBytes, fromB64url, fromUtf8 } from '../net/bytes'
 import { sha256 } from '../net/crypto'
 import { NetError } from '../net/errors'
-import type { LeafSession, StreamHead, StreamRecord } from '../net/session'
+import type { SessionLink, StreamHead, StreamRecord } from '../net/session'
 import type { ComputerLists, ListChat, ListProject, ListThread, ListsState, RunState, ThreadStatus } from './types'
 
 /** The desktop's reserved id for the lists stream's snapshot records. */
@@ -221,7 +221,7 @@ export class ListsWatch {
   current?: ComputerLists
 
   constructor(
-    private readonly leaf: LeafSession,
+    private readonly leaf: SessionLink,
     private readonly pollMs = LISTS_POLL_MS,
   ) {}
 
