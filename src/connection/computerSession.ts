@@ -6,6 +6,7 @@ import { NetError } from '../net/errors'
 import type { LeafSession, StreamHead } from '../net/session'
 import { ListsWatch } from './lists'
 import { ThreadProjection } from './threadProjection'
+import { LeafComputerSpeech, type ComputerSpeech } from './speech'
 import type {
   ChatItem,
   ChatMode,
@@ -280,6 +281,7 @@ export interface RealSessionOptions {
 
 export class RealComputerSession implements ComputerSession {
   readonly nodeId: string
+  readonly speech: ComputerSpeech
   private readonly leaf: LeafSession
   private readonly watches = new Map<string, Promise<ThreadWatch>>()
   /** Runs this phone started, by thread: the `orchestrator.send` RPC id that `orchestrator.abort` names. */
@@ -291,6 +293,7 @@ export class RealComputerSession implements ComputerSession {
   constructor(options: RealSessionOptions) {
     this.nodeId = options.nodeId
     this.leaf = options.leaf
+    this.speech = new LeafComputerSpeech((method, params, rpcOptions) => this.leaf.rpc(method, params, rpcOptions))
     const decide = (error?: Error) => {
       this.ended ??= options.endReason?.(error) ?? 'ended'
       this.endedWith ??= shortMessage(error)

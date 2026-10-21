@@ -6,6 +6,7 @@ import { planApprovalText } from '../timeline/context'
 import { ThreadComposer } from '../components/ThreadComposer'
 import { EmptyState } from '../components/EmptyState'
 import { Notice, Spinner } from '../components/primitives'
+import { SpeechProvider } from '../speech/readAloud'
 
 export interface ThreadViewProps {
   session: ComputerSession
@@ -43,6 +44,7 @@ export function ThreadView({ session, threadId, onActivityChange }: ThreadViewPr
   useEffect(() => { stick.current = true }, [threadId])
 
   return (
+    <SpeechProvider speech={session.speech}>
     <div className="m-thread m-thread--timeline">
       <div
         ref={scroller}
@@ -78,5 +80,6 @@ export function ThreadView({ session, threadId, onActivityChange }: ThreadViewPr
         <ThreadComposer session={session} threadId={threadId} thread={thread} />
       </div>
     </div>
+    </SpeechProvider>
   )
 }

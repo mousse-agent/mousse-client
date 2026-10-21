@@ -51,6 +51,10 @@ import FolderOpenIcon from '@hugeicons/core-free-icons/FolderOpenIcon'
 import GitBranchIcon from '@hugeicons/core-free-icons/GitBranchIcon'
 import MessageMultiple01Icon from '@hugeicons/core-free-icons/MessageMultiple01Icon'
 import Structure01Icon from '@hugeicons/core-free-icons/Structure01Icon'
+import Mic01Icon from '@hugeicons/core-free-icons/Mic01Icon'
+import VolumeHighIcon from '@hugeicons/core-free-icons/VolumeHighIcon'
+import Download04Icon from '@hugeicons/core-free-icons/Download04Icon'
+import SquareIcon from '@hugeicons/core-free-icons/SquareIcon'
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'stroke'> {
   size?: number | string
@@ -127,3 +131,8 @@ export const GitBranch = /* @__PURE__ */ createIcon('GitBranch', GitBranchIcon)
 export const ListTree = /* @__PURE__ */ createIcon('ListTree', Structure01Icon)
 export const MessageSquarePlus = /* @__PURE__ */ createIcon('MessageSquarePlus', BubbleChatAddIcon)
 export const MessagesSquare = /* @__PURE__ */ createIcon('MessagesSquare', MessageMultiple01Icon)
+// Voice (dictation and read aloud).
+export const Mic = /* @__PURE__ */ createIcon('Mic', Mic01Icon)
+export const VolumeHigh = /* @__PURE__ */ createIcon('VolumeHigh', VolumeHighIcon)
+export const Download = /* @__PURE__ */ createIcon('Download', Download04Icon)
+export const Square = /* @__PURE__ */ createIcon('Square', SquareIcon)

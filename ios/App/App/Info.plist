@@ -38,6 +38,8 @@
 	<string>LaunchScreen</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan a Mousse Desktop connection QR code.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Dictate messages; your computer turns the recording into text.</string>
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
 	<key>UIRequiredDeviceCapabilities</key>

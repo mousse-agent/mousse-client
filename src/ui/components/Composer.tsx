@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react'
 import type { ChatMode, ComposerCommand, ComposerSkill, ContextUsage, ImageAttachment, LlmProviderOption } from '../../connection/types'
-import { ArrowUp, ChevronDown, Paperclip, Sparkles, Stop, X } from './icons'
+import { ArrowUp, ChevronDown, Loader2, Mic, Paperclip, Sparkles, Square, Stop, X } from './icons'
+import type { ComputerSpeech } from '../../connection/speech'
+import { formatDuration, useDictation } from '../speech/useDictation'
+import { insertTranscript } from '../speech/insertTranscript'
+import { SpeechWave } from '../speech/SpeechWave'
+import { SpeechModelSheet } from '../speech/SpeechModelSheet'
 import { useFinePointer } from '../hooks/useMediaQuery'
 import { extractFamilyLabel, parseModelVariant, parseThinkingSuffixFromModelId } from '../lib/modelVariants'
 import { loadDraft, saveDraft } from '../lib/composerPrefs'
@@ -40,6 +45,8 @@ export interface ComposerProps {
   /** Replaces the text, for example when a queued message is moved back for editing. */
   prefill?: { text: string; key: number }
   controls?: ComposerControls
+  /** The computer's speech models: an empty composer's button records and types the transcript. */
+  speech?: ComputerSpeech
   onSend(text: string, extras: SendExtras): Promise<boolean> | boolean
   onStop(): void
   /** `/steer <text>`: guidance for the running turn. */
@@ -78,7 +85,7 @@ function modelLabel(controls: ComposerControls): { title: string; context?: stri
  * bottom sheets. On touch screens Return inserts a new line and the button sends; with a hardware
  * keyboard and fine pointer, Enter sends and Shift+Enter breaks.
  */
-export function Composer({ active, disabled = false, placeholder, draftKey, prefill, controls, onSend, onStop, onSteer, onNewThread }: ComposerProps) {
+export function Composer({ active, disabled = false, placeholder, draftKey, prefill, controls, speech, onSend, onStop, onSteer, onNewThread }: ComposerProps) {
   const [text, setText] = useState(() => (draftKey ? loadDraft(draftKey) : ''))
   const [images, setImages] = useState<PendingImage[]>([])
   const [skill, setSkill] = useState<ComposerSkill>()
@@ -91,6 +98,29 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
   const field = useRef<HTMLTextAreaElement>(null)
   const picker = useRef<HTMLInputElement>(null)
   const finePointer = useFinePointer()
+
+  // Dictated text goes where the caret is, or at the end when the box is not focused.
+  const insertDictation = (transcript: string) => {
+    const element = field.current
+    const focused = !!element && document.activeElement === element
+    let caret = 0
+    setText((current) => {
+      const next = insertTranscript(current, focused ? element.selectionStart : current.length, focused ? element.selectionEnd : current.length, transcript)
+      caret = next.caret
+      return next.value
+    })
+    if (focused) requestAnimationFrame(() => element.setSelectionRange(caret, caret))
+  }
+  const dictation = useDictation({ speech, disabled, onTranscript: insertDictation })
+  const voice = dictation.available
+    ? {
+        recording: dictation.isRecording,
+        busy: dictation.recordingPending || dictation.transcribing,
+        disabled: disabled || dictation.recordingPending || dictation.transcribing,
+        onStart: dictation.start,
+        onStop: dictation.stop,
+      }
+    : undefined
 
   useEffect(() => {
     const element = field.current
@@ -270,8 +300,31 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
       )}
       <form className="m-composer" onSubmit={submit} data-active={active || undefined} data-controls={controls ? '' : undefined}>
         {error && <p className="m-composer__error" role="alert">{error}</p>}
-        {(images.length > 0 || skill) && (
+        {dictation.error && (
+          <div className="m-composer__voice-error" role="alert">
+            <p>{dictation.error}</p>
+            <button type="button" disabled={disabled || dictation.recordingPending || dictation.transcribing} onClick={dictation.start}>Retry microphone</button>
+            <button type="button" onClick={dictation.dismissError}>Dismiss</button>
+          </div>
+        )}
+        {dictation.notice && <p className="m-composer__voice-notice" role="status">{dictation.notice}</p>}
+        {(images.length > 0 || skill || dictation.isRecording || dictation.transcribing) && (
           <div className="m-composer__attachments">
+            {dictation.isRecording && (
+              <span className="m-attachment m-attachment--recording" role="status" aria-label={`Recording ${formatDuration(dictation.recordingDuration)}`}>
+                <Mic size={13} strokeWidth={2} />
+                <SpeechWave levels={dictation.levels} />
+                <span>{formatDuration(dictation.recordingDuration)}</span>
+                <button type="button" aria-label="Discard recording" onClick={dictation.cancel}><X size={13} /></button>
+              </span>
+            )}
+            {dictation.transcribing && (
+              <span className="m-attachment m-attachment--transcribing" role="status">
+                <Loader2 size={13} strokeWidth={2} className="m-speech-spin" />
+                <span>{dictation.partial ? dictation.partial : 'Transcribing…'}</span>
+                <button type="button" aria-label="Stop transcribing" onClick={dictation.cancel}><X size={13} /></button>
+              </span>
+            )}
             {skill && (
               <span className="m-attachment m-attachment--skill">
                 <Sparkles size={14} />
@@ -302,7 +355,7 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
             onKeyDown={onKeyDown}
             onPaste={onPaste}
           />
-          {!controls && <ActionButton label={actionLabel} hasContent={hasContent} active={active} canSend={canSend} onStop={onStop} />}
+          {!controls && <ActionButton label={actionLabel} hasContent={hasContent} active={active} canSend={canSend} onStop={onStop} voice={voice} />}
         </div>
         {controls && (
           <div className="m-composer__footer">
@@ -327,7 +380,7 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
               <button type="button" className="m-composer__icon" aria-label="Attach images" disabled={disabled} onClick={() => picker.current?.click()}>
                 <Paperclip size={18} />
               </button>
-              <ActionButton label={actionLabel} hasContent={hasContent} active={active} canSend={canSend} onStop={onStop} />
+              <ActionButton label={actionLabel} hasContent={hasContent} active={active} canSend={canSend} onStop={onStop} voice={voice} />
             </div>
           </div>
         )}
@@ -347,6 +400,16 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
           }}
         />
       </form>
+      {speech && (
+        <SpeechModelSheet
+          open={dictation.chooser.open}
+          kind="dictation"
+          speech={speech}
+          continues={dictation.chooser.continues}
+          onClose={dictation.chooser.close}
+          onChosen={dictation.chooser.chosen}
+        />
+      )}
       {controls && (
         <>
           <ModelSheet
@@ -378,7 +441,30 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
   )
 }
 
-function ActionButton({ label, hasContent, active, canSend, onStop }: { label: string; hasContent: boolean; active: boolean; canSend: boolean; onStop(): void }) {
+interface VoiceAction {
+  recording: boolean
+  busy: boolean
+  disabled: boolean
+  onStart(): void
+  onStop(): void
+}
+
+function ActionButton({ label, hasContent, active, canSend, onStop, voice }: { label: string; hasContent: boolean; active: boolean; canSend: boolean; onStop(): void; voice?: VoiceAction }) {
+  // As on the desktop: recording turns the button into a stop square; an empty, idle composer offers the microphone.
+  if (voice?.recording) {
+    return (
+      <button type="button" className="m-composer__action m-composer__action--recording" aria-label="Stop recording" onClick={voice.onStop}>
+        <Square size={15} strokeWidth={2} fill="currentColor" />
+      </button>
+    )
+  }
+  if (!hasContent && !active && voice) {
+    return (
+      <button type="button" className="m-composer__action" aria-label="Voice input" aria-busy={voice.busy || undefined} disabled={voice.disabled} onClick={voice.onStart}>
+        {voice.busy ? <Loader2 size={18} className="m-speech-spin" /> : <Mic size={18} />}
+      </button>
+    )
+  }
   if (!hasContent && active) {
     return (
       <button type="button" className="m-composer__action m-composer__action--stop" aria-label="Stop" onClick={onStop}>

@@ -35,7 +35,8 @@ describe('thread chat', () => {
       const replies = screen.getAllByTestId('chat-item').filter((item) => item.dataset.role === 'assistant')
       expect(replies[replies.length - 1]).toHaveAttribute('data-status', 'done')
     }, { timeout: 3000 })
-    expect(await screen.findByRole('button', { name: 'Send' })).toBeInTheDocument()
+    // Back to idle: as on the desktop, an empty composer offers the microphone.
+    expect(await screen.findByRole('button', { name: 'Voice input' })).toBeInTheDocument()
   })
 
   it('stops a running turn', async () => {
@@ -45,7 +46,7 @@ describe('thread chat', () => {
     fireEvent.click(stop)
 
     expect(await screen.findByText('Stopped')).toBeInTheDocument()
-    expect(await screen.findByRole('button', { name: 'Send' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Voice input' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
   })
 })
