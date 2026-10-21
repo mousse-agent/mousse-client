@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react'
 import type { ComputerSession } from '../../connection/types'
 import { useThread } from '../hooks/useThread'
 import { ChatItemView } from '../components/ChatItemView'
-import { Composer } from '../components/Composer'
+import { ThreadComposer } from '../components/ThreadComposer'
 import { EmptyState } from '../components/EmptyState'
 import { Notice, Spinner } from '../components/primitives'
 
@@ -48,7 +48,7 @@ export function ThreadView({ session, threadId, onActivityChange }: ThreadViewPr
       </div>
       <div className="m-thread__composer">
         {thread.error && <Notice>{thread.error}</Notice>}
-        <Composer active={thread.active} onSend={thread.send} onStop={() => void thread.stop()} />
+        <ThreadComposer session={session} threadId={threadId} thread={thread} />
       </div>
     </div>
   )

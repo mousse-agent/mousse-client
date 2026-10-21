@@ -2,6 +2,21 @@
 // stroke 1.5, exported under the desktop's names so screens read the same.
 import { forwardRef, type ForwardRefExoticComponent, type RefAttributes, type SVGProps } from 'react'
 import { HugeiconsIcon, type IconSvgElement } from '@hugeicons/react'
+import ArrowDown02Icon from '@hugeicons/core-free-icons/ArrowDown02Icon'
+import ArrowUp01Icon from '@hugeicons/core-free-icons/ArrowUp01Icon'
+import Attachment01Icon from '@hugeicons/core-free-icons/Attachment01Icon'
+import Copy01Icon from '@hugeicons/core-free-icons/Copy01Icon'
+import Delete02Icon from '@hugeicons/core-free-icons/Delete02Icon'
+import Edit02Icon from '@hugeicons/core-free-icons/Edit02Icon'
+import GridViewIcon from '@hugeicons/core-free-icons/GridViewIcon'
+import HammerIcon from '@hugeicons/core-free-icons/HammerIcon'
+import Infinity01Icon from '@hugeicons/core-free-icons/Infinity01Icon'
+import Navigation03Icon from '@hugeicons/core-free-icons/Navigation03Icon'
+import SparklesIcon from '@hugeicons/core-free-icons/SparklesIcon'
+import StarIcon from '@hugeicons/core-free-icons/StarIcon'
+import Task01Icon from '@hugeicons/core-free-icons/Task01Icon'
+import Image01Icon from '@hugeicons/core-free-icons/Image01Icon'
+import MoreHorizontalIcon from '@hugeicons/core-free-icons/MoreHorizontalIcon'
 import Add01Icon from '@hugeicons/core-free-icons/Add01Icon'
 import AlertCircleIcon from '@hugeicons/core-free-icons/AlertCircleIcon'
 import ArrowDown01Icon from '@hugeicons/core-free-icons/ArrowDown01Icon'
@@ -62,6 +77,21 @@ function createIcon(name: string, icon: IconSvgElement): IconComponent {
   return Component
 }
 
+export const ArrowDown = /* @__PURE__ */ createIcon('ArrowDown', ArrowDown02Icon)
+export const ChevronUp = /* @__PURE__ */ createIcon('ChevronUp', ArrowUp01Icon)
+export const ClipboardList = /* @__PURE__ */ createIcon('ClipboardList', Task01Icon)
+export const Copy = /* @__PURE__ */ createIcon('Copy', Copy01Icon)
+export const Hammer = /* @__PURE__ */ createIcon('Hammer', HammerIcon)
+export const InfinityIcon = /* @__PURE__ */ createIcon('Infinity', Infinity01Icon)
+export const Image = /* @__PURE__ */ createIcon('Image', Image01Icon)
+export const MoreHorizontal = /* @__PURE__ */ createIcon('MoreHorizontal', MoreHorizontalIcon)
+export const LayoutGrid = /* @__PURE__ */ createIcon('LayoutGrid', GridViewIcon)
+export const Paperclip = /* @__PURE__ */ createIcon('Paperclip', Attachment01Icon)
+export const Pencil = /* @__PURE__ */ createIcon('Pencil', Edit02Icon)
+export const Sparkles = /* @__PURE__ */ createIcon('Sparkles', SparklesIcon)
+export const Star = /* @__PURE__ */ createIcon('Star', StarIcon)
+export const Steer = /* @__PURE__ */ createIcon('Steer', Navigation03Icon)
+export const Trash2 = /* @__PURE__ */ createIcon('Trash2', Delete02Icon)
 export const ArrowUp = /* @__PURE__ */ createIcon('ArrowUp', ArrowUp02Icon)
 export const Check = /* @__PURE__ */ createIcon('Check', Tick02Icon)
 export const ChevronDown = /* @__PURE__ */ createIcon('ChevronDown', ArrowDown01Icon)

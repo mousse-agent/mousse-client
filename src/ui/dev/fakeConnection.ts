@@ -4,9 +4,15 @@
 import type {
   AccountState,
   ChatItem,
+  ComposerOptions,
   Computer,
   ComputerLists,
   ComputerSession,
+  ContextUsage,
+  ModelSelection,
+  QueuedMessage,
+  SendOptions,
+  ThreadDetails,
   EnrollmentProgress,
   ListChat,
   ListsHandlers,
@@ -95,11 +101,54 @@ function initialItems(threadId: string, title: string): ChatItem[] {
   ]
 }
 
+/** The demo computer's models: two providers, efforts, a Fast variant and a long-context variant. */
+export const FAKE_COMPOSER_OPTIONS: ComposerOptions = {
+  providers: [
+    {
+      id: 'anthropic',
+      instanceId: 'pi:anthropic',
+      label: 'Anthropic',
+      models: [
+        { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+        { id: 'claude-opus-4-8:fast', label: 'Claude Opus 4.8 (fast)', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], speed: 'fast' },
+        { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 @ 200K', efforts: ['low', 'medium', 'high'] },
+        { id: 'claude-sonnet-4-6@1m', label: 'Claude Sonnet 4.6 @ 1M', efforts: ['low', 'medium', 'high'] },
+        { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' }
+      ]
+    },
+    {
+      id: 'openai',
+      instanceId: 'pi:openai',
+      label: 'OpenAI',
+      models: [
+        { id: 'gpt-5.5', label: 'GPT 5.5', efforts: ['minimal', 'low', 'medium', 'high', 'xhigh'] },
+        { id: 'gpt-5.5-mini', label: 'GPT 5.5 mini', efforts: ['low', 'medium', 'high'] }
+      ]
+    }
+  ],
+  defaultModel: { instanceId: 'pi:anthropic', llmProvider: 'anthropic', model: 'claude-opus-4-8:high' },
+  modes: ['plan', 'agent', 'build'],
+  skills: [
+    { id: 'skill-review', name: 'Code review', description: 'Review the current diff for bugs' },
+    { id: 'skill-release', name: 'Release notes', description: 'Write release notes from merged PRs' }
+  ],
+  commands: [
+    { name: 'help', description: 'List available channel commands' },
+    { name: 'new', description: 'Start a new session (fresh thread + history)', aliases: ['reset'], argsHint: '[title]' },
+    { name: 'status', description: 'Show session, model, and thread info' },
+    { name: 'usage', description: 'Show subscription usage for the current provider' },
+    { name: 'model', description: 'List or switch the model for this session', aliases: ['models'], argsHint: '[name] [--session|--global]' },
+    { name: 'stop', description: 'Stop the in-flight reply for this session' },
+    { name: 'steer', description: 'Inject guidance mid-turn (after the next tool call)', argsHint: '<prompt>' },
+    { name: 'skills', description: 'Pick a skill to use as the chat mode', argsHint: '[filter]' }
+  ]
+}
+
 function replyFor(text: string): string {
   return `Here is the plan for "${text.slice(0, 48)}": I will look at the relevant files, make the change, and run the focused tests before reporting back.`
 }
 
-class FakeSession implements ComputerSession {
+export class FakeSession implements ComputerSession {
   private sessionState: SessionState = 'open'
   private stateListeners = new Set<(state: SessionState) => void>()
   private items = new Map<string, ChatItem[]>()
@@ -112,6 +161,10 @@ class FakeSession implements ComputerSession {
   /** Threads whose last turn finished and that show "Done" until their next turn. */
   private done = new Set<string>(['t-relay'])
   private waiting = new Set<string>(['t-voices'])
+  private models = new Map<string, ModelSelection>()
+  private queues = new Map<string, QueuedMessage[]>()
+  /** Every send, queued message and steer, with its options, for tests. */
+  readonly sent: Array<{ kind: 'send' | 'queue' | 'steer'; threadId: string; text: string; options?: SendOptions }> = []
 
   constructor(readonly nodeId: string, private threads: ThreadSummary[], private opts: Required<Omit<FakeConnectionOptions, 'now' | 'email'>>) {}
 
@@ -216,9 +269,10 @@ class FakeSession implements ComputerSession {
     return () => { set?.delete(onItems) }
   }
 
-  async send(threadId: string, text: string): Promise<void> {
+  async send(threadId: string, text: string, options?: SendOptions): Promise<void> {
     await sleep(this.opts.latencyMs)
     if (this.isActive(threadId)) throw new Error('A turn is already running in this thread.')
+    this.sent.push({ kind: 'send', threadId, text, ...(options ? { options } : {}) })
     const now = Date.now()
     const list = this.itemsFor(threadId)
     list.push({ id: `u${this.nextId++}`, role: 'user', text, createdAt: now, status: 'done' })
@@ -249,6 +303,83 @@ class FakeSession implements ComputerSession {
     return this.isActive(threadId)
   }
 
+  async composerOptions(): Promise<ComposerOptions> {
+    await sleep(this.opts.latencyMs)
+    return structuredClone(FAKE_COMPOSER_OPTIONS)
+  }
+
+  async getThread(threadId: string): Promise<ThreadDetails> {
+    await sleep(this.opts.latencyMs)
+    const thread = this.threads.find((entry) => entry.id === threadId)
+    const model = this.models.get(threadId)
+    return { id: threadId, ...(thread?.projectId ? { projectId: thread.projectId } : {}), ...(model ? { model: { ...model } } : {}) }
+  }
+
+  async setThreadModel(threadId: string, selection: ModelSelection): Promise<void> {
+    await sleep(this.opts.latencyMs)
+    this.models.set(threadId, { ...selection })
+  }
+
+  async steer(threadId: string, text: string): Promise<void> {
+    await sleep(this.opts.latencyMs)
+    if (!this.isActive(threadId)) throw new Error('No active turn to steer on this thread.')
+    this.sent.push({ kind: 'steer', threadId, text })
+  }
+
+  async enqueue(threadId: string, text: string, options?: SendOptions): Promise<void> {
+    await sleep(this.opts.latencyMs)
+    this.sent.push({ kind: 'queue', threadId, text, ...(options ? { options } : {}) })
+    const queue = this.queues.get(threadId) ?? []
+    queue.push({
+      id: `q${this.nextId++}`,
+      content: text,
+      ...(options?.mode ? { mode: options.mode } : {}),
+      imageCount: options?.images?.length ?? 0,
+      enqueuedAt: Date.now(),
+      intent: 'normal',
+      state: 'pending'
+    })
+    this.queues.set(threadId, queue)
+  }
+
+  async listQueue(threadId: string): Promise<QueuedMessage[]> {
+    return (this.queues.get(threadId) ?? []).map((item) => ({ ...item }))
+  }
+
+  async removeQueued(threadId: string, itemId: string): Promise<void> {
+    const queue = this.queues.get(threadId) ?? []
+    if (!queue.some((item) => item.id === itemId)) throw new Error('This message already started or is no longer queued.')
+    this.queues.set(threadId, queue.filter((item) => item.id !== itemId))
+  }
+
+  async reorderQueue(threadId: string, orderedIds: string[]): Promise<void> {
+    const queue = this.queues.get(threadId) ?? []
+    this.queues.set(threadId, orderedIds.map((id) => queue.find((item) => item.id === id)).filter((item): item is QueuedMessage => !!item))
+  }
+
+  async steerQueued(threadId: string, itemId: string): Promise<void> {
+    const item = (this.queues.get(threadId) ?? []).find((entry) => entry.id === itemId)
+    if (!item) throw new Error('This message already started or is no longer queued.')
+    await this.steer(threadId, item.content)
+    await this.removeQueued(threadId, itemId)
+  }
+
+  async contextUsage(threadId: string): Promise<ContextUsage | undefined> {
+    const used = 18_000 + this.itemsFor(threadId).reduce((total, item) => total + item.text.length * 4, 0)
+    const limit = 200_000
+    return {
+      percent: Math.round((used / limit) * 100),
+      used,
+      limit,
+      modelName: 'Claude Opus 4.8',
+      categories: [
+        { label: 'System', color: '#8b7cf6', tokens: 12_000 },
+        { label: 'Tools', color: '#4fb6a7', tokens: 6_000 },
+        { label: 'Messages', color: '#e3a13b', tokens: used - 18_000 }
+      ]
+    }
+  }
+
   /** Closes the session; `message` stands in for the close error a real session reports. */
   close(message?: string): void {
     this.endedWith = message
@@ -265,6 +396,14 @@ class FakeSession implements ComputerSession {
     const list = this.items.get(threadId)
     if (list) return list.some((item) => item.status === 'streaming')
     return this.threads.find((thread) => thread.id === threadId)?.active === true
+  }
+
+  /** Like the computer: the next queued message runs once the turn ends. */
+  private drain(threadId: string): void {
+    const queue = this.queues.get(threadId)
+    const next = queue?.shift()
+    if (!next) return
+    void this.send(threadId, next.content, next.mode ? { mode: next.mode } : undefined)
   }
 
   private itemsFor(threadId: string): ChatItem[] {
@@ -305,6 +444,7 @@ class FakeSession implements ComputerSession {
         if (chat) Object.assign(chat, { preview: fullText, updatedAt: Date.now() })
         this.emit(threadId)
         this.emitLists()
+        this.drain(threadId)
         return
       }
       index += 2
@@ -405,8 +545,12 @@ export class FakeMousseConnection implements MousseConnection {
     if (!computer.enrolled) throw new Error(`Add this phone to ${computer.name} first.`)
     let threads = this.threadsByNode.get(nodeId)
     if (!threads) this.threadsByNode.set(nodeId, (threads = initialThreads()))
-    return new FakeSession(nodeId, threads, this.opts)
+    this.lastSession = new FakeSession(nodeId, threads, this.opts)
+    return this.lastSession
   }
+
+  /** The most recently opened session, for tests. */
+  lastSession?: FakeSession
 
   private async runStages(onProgress: (progress: EnrollmentProgress) => void): Promise<void> {
     onProgress({ stage: 'requesting' })

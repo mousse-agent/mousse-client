@@ -693,11 +693,12 @@ html[data-keyboard='open'] .m-thread__composer { padding-bottom: 8px; }
 }
 
 /* ---------- Composer (polish.css) ---------- */
+.m-composer-wrap { position: relative; display: flex; flex-direction: column; gap: 8px; }
 .m-composer {
   position: relative;
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
   padding: 8px 8px 8px 16px;
   border-radius: var(--composer-radius);
   border: 1px solid var(--ui-line-strong);
@@ -716,6 +717,9 @@ html[data-keyboard='open'] .m-thread__composer { padding-bottom: 8px; }
 }
 @keyframes m-composer-glint { from { background-size: 30% 1px, 100% 100%; } to { background-size: 50% 1px, 100% 100%; } }
 
+.m-composer[data-controls] { padding: 10px 8px 8px 12px; }
+.m-composer__row { display: flex; align-items: flex-end; gap: 8px; }
+.m-composer[data-controls] .m-composer__row { padding-left: 4px; }
 .m-composer__input {
   flex: 1;
   min-height: 28px;
@@ -753,6 +757,165 @@ html[data-keyboard='open'] .m-thread__composer { padding-bottom: 8px; }
   box-shadow: var(--ui-specular-accent);
 }
 .m-composer__action:active:not(:disabled) { transform: scale(0.94); }
+
+/* Footer: mode, model and effort pills on the left, context, attach and send on the right (ComposerFooter). */
+.m-composer__footer { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-width: 0; container-type: inline-size; }
+.m-composer__pills { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 1; overflow: hidden; }
+.m-composer__tools { display: flex; align-items: center; gap: 2px; flex: none; }
+.m-composer[data-controls] .m-composer__action { width: 36px; height: 36px; border-radius: 10px; }
+.m-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  position: relative;
+}
+/* Grow the hit area toward 44px without growing the pill. */
+.m-pill::after { content: ''; position: absolute; inset: -6px 0; }
+.m-pill:active { background: var(--ui-pressed); }
+.m-pill > .mousse-icon { flex: none; }
+.m-pill--model { flex: 0 1 auto; color: var(--text-primary); }
+.m-pill__model { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.m-pill__context { color: var(--text-secondary); }
+/* Narrow phones: the mode pill keeps its icon so the model name fits (as the desktop under 440px). */
+@container (max-width: 380px) {
+  .m-pill__label { display: none; }
+}
+@container (max-width: 320px) {
+  .m-pill__context { display: none; }
+}
+.m-composer__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 36px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-secondary);
+  position: relative;
+}
+.m-composer__icon::after { content: ''; position: absolute; inset: -4px 0; }
+.m-composer__icon:active:not(:disabled) { background: var(--ui-pressed); }
+.m-composer__icon:disabled { opacity: 0.45; }
+.m-composer__error { font-size: 12.5px; color: var(--danger); padding: 0 4px; }
+
+.m-context-ring { transform: rotate(-90deg); }
+.m-context-ring circle { fill: none; stroke-width: 2.4; }
+.m-context-ring__track { stroke: rgba(var(--accent-rgb), 0.2); }
+.m-context-ring__value { stroke: var(--accent-hover); stroke-linecap: round; transition: stroke-dashoffset 240ms ease; }
+
+.m-provider-icon { display: block; flex: none; object-fit: contain; }
+.m-provider-icon--mono { filter: invert(0.72); }
+html[data-theme='light'] .m-provider-icon--mono { filter: none; }
+
+/* Attachment pills (composer-attachment-pill). */
+.m-composer__attachments { display: flex; flex-wrap: wrap; gap: 6px; }
+.m-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  height: 34px;
+  padding: 0 4px 0 4px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--accent-pale-rgb), 0.14);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.m-attachment img { width: 26px; height: 26px; border-radius: 999px; object-fit: cover; flex: none; }
+.m-attachment > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px; }
+.m-attachment button { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 0; border-radius: 999px; background: transparent; color: inherit; }
+.m-attachment--skill { padding-left: 10px; background: rgba(var(--accent-rgb), 0.16); color: var(--text-primary); }
+
+/* Slash commands above the composer (composer-command-suggestions). */
+.m-command-suggestions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 5;
+  max-height: min(46vh, 320px);
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 14px;
+  border: 1px solid var(--ui-line-strong);
+  background: var(--floating-surface);
+  box-shadow: var(--ui-specular), 0 16px 40px rgba(0, 0, 0, 0.36);
+}
+.m-command { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; min-height: var(--touch-target); padding: 8px 10px; border: 0; border-radius: 9px; background: transparent; text-align: left; }
+.m-command[aria-selected='true'] { background: rgba(var(--accent-pale-rgb), 0.16); }
+.m-command:active { background: var(--ui-pressed); }
+.m-command__name { font-size: 14px; font-weight: 600; font-family: var(--font-mono, ui-monospace, monospace); }
+.m-command__args { font-weight: 400; color: var(--ui-faint); }
+.m-command__detail { font-size: 12.5px; color: var(--text-secondary); }
+
+/* Queued messages (QueuedMessages). */
+.m-queue { display: flex; flex-direction: column; gap: 4px; padding: 6px 6px 6px 12px; border-radius: 14px; border: 1px solid var(--ui-line); background: color-mix(in srgb, var(--ui-raised) 70%, transparent); }
+.m-queue__heading { font-size: 11.5px; font-weight: 600; color: var(--text-secondary); letter-spacing: 0.02em; }
+.m-queue ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.m-queue__item { display: flex; align-items: center; gap: 4px; min-height: 36px; }
+.m-queue__text { flex: 1; min-width: 0; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.m-queue__badge { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; color: var(--text-secondary); }
+.m-queue-preview { font-size: 14px; color: var(--text-secondary); white-space: pre-wrap; max-height: 120px; overflow: auto; }
+
+/* Menus in sheets (composer-mode-menu, model-picker-row). */
+.m-options { display: flex; flex-direction: column; gap: 2px; }
+.m-options__heading { font-size: 12px; font-weight: 600; color: var(--text-secondary); padding: 4px 4px 2px; }
+.m-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+}
+.m-option:active { background: var(--ui-pressed); }
+.m-option--selected { background: rgba(var(--accent-deep-rgb), 0.22); }
+.m-option__leading { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 24px; color: var(--text-secondary); }
+.m-option__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.m-option__title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 500; }
+.m-option__detail { font-size: 12.5px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; }
+.m-option__check { flex: none; color: var(--accent); }
+.m-tag { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 999px; background: rgba(var(--accent-rgb), 0.16); color: var(--accent); }
+.m-model-search { display: flex; align-items: center; gap: 8px; }
+.m-model-search .m-search { flex: 1; }
+.m-model-search__favorites { flex: none; display: inline-flex; align-items: center; justify-content: center; width: var(--touch-target); height: var(--touch-target); border-radius: 12px; border: 1px solid var(--ui-line-strong); background: transparent; color: var(--text-secondary); }
+.m-model-search__favorites[aria-pressed='true'] { color: #f0c14b; background: rgba(240, 193, 75, 0.12); border-color: rgba(240, 193, 75, 0.35); }
+.m-model-rail { margin: 0 -20px; padding: 0 20px; }
+.m-chip--icon { display: inline-flex; align-items: center; gap: 6px; }
+.m-model-row { display: grid; grid-template-columns: 1fr auto; align-items: center; }
+.m-model-row__star { display: inline-flex; align-items: center; justify-content: center; width: var(--touch-target); height: var(--touch-target); border: 0; background: transparent; color: var(--ui-faint); }
+.m-model-row__star[aria-pressed='true'] { color: #f0c14b; }
+.m-model-row__contexts { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 10px 8px 46px; font-size: 12px; color: var(--text-secondary); }
+.m-context-chip { min-height: 32px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--ui-line-strong); background: transparent; font-size: 12.5px; color: var(--text-secondary); }
+.m-context-chip[aria-pressed='true'] { border-color: rgba(var(--accent-rgb), 0.45); background: rgba(var(--accent-rgb), 0.16); color: var(--text-primary); }
+
+/* Context usage (ContextUsagePopover). */
+.m-context { display: flex; flex-direction: column; gap: 10px; }
+.m-context__head { display: flex; align-items: baseline; gap: 10px; }
+.m-context__head strong { font-size: 26px; font-weight: 600; }
+.m-context__head span { color: var(--text-secondary); font-size: 13.5px; }
+.m-context__bar { display: flex; height: 8px; border-radius: 999px; overflow: hidden; background: rgba(var(--accent-rgb), 0.12); }
+.m-context__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
+.m-context__list li { display: flex; align-items: center; gap: 8px; }
+.m-context__list li span:last-child { margin-left: auto; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.m-context__swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
 
 /* ---------- Settings ---------- */
 .m-kv { display: flex; align-items: center; gap: 12px; min-height: 40px; }

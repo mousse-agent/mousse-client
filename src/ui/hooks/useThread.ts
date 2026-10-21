@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ChatItem, ComputerSession } from '../../connection/types'
+import type { ChatItem, ComputerSession, SendOptions } from '../../connection/types'
 import { errorMessage } from './useAsync'
 
 export interface ThreadState {
@@ -9,7 +9,7 @@ export interface ThreadState {
   /** True while the computer is working on a turn in this thread. */
   active: boolean
   sending: boolean
-  send(text: string): Promise<boolean>
+  send(text: string, options?: SendOptions): Promise<boolean>
   stop(): Promise<void>
 }
 
@@ -74,7 +74,7 @@ export function useThread(session: ComputerSession | undefined, threadId: string
   const streaming = items.some((item) => item.status === 'streaming')
   const active = pending || streaming || remoteActive
 
-  const send = useCallback(async (text: string) => {
+  const send = useCallback(async (text: string, options?: SendOptions) => {
     const trimmed = text.trim()
     if (!session || !trimmed) return false
     setSending(true)
@@ -82,7 +82,7 @@ export function useThread(session: ComputerSession | undefined, threadId: string
     setPending(true)
     baseline.current = itemCount.current
     try {
-      await session.send(threadId, trimmed)
+      await session.send(threadId, trimmed, options)
       return true
     } catch (cause) {
       setPending(false)
