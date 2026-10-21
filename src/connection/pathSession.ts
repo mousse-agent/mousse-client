@@ -204,7 +204,7 @@ export class PathSession implements SessionLink {
       // Move only when the direct path is quicker: a Tailscale path through a distant relay may not be.
       const [direct, relayed] = await Promise.all([this.roundTrip(next.leaf), this.roundTrip(relay.leaf)])
       if (direct === undefined || (relayed !== undefined && direct >= relayed)) return this.retire(next)
-      if (this.stateValue !== 'open' || this.recovering || this.active !== relay) return this.retire(next)
+      if (this.stateValue !== 'open' || this.recovering || this.active !== relay || next.leaf.state !== 'open') return this.retire(next)
       this.adopt(next)
     } finally {
       this.upgrading = false
