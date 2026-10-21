@@ -134,6 +134,93 @@ export interface ChatItem {
   toolName?: string
 }
 
+/** A computer's model choice for a thread. The effort is a `:<effort>` suffix on `model`. */
+export interface ModelSelection {
+  instanceId?: string
+  llmProvider: string
+  model: string
+}
+
+export interface LlmModelOption {
+  id: string
+  label: string
+  /** Reasoning effort levels the model supports (without "off"). */
+  efforts?: string[]
+  speed?: 'fast' | 'slow'
+}
+
+export interface LlmProviderOption {
+  id: string
+  /** Provider instance serving these models. */
+  instanceId?: string
+  label: string
+  models: LlmModelOption[]
+}
+
+/** A built-in mode ("plan", "agent", "build") or one skill for a single message. */
+export type ChatMode = string | { type: 'skill'; skillId: string }
+
+export interface ComposerSkill {
+  id: string
+  name: string
+  description: string
+}
+
+export interface ComposerCommand {
+  name: string
+  description: string
+  aliases?: string[]
+  argsHint?: string
+}
+
+/** What the computer's composer offers: its models, default model, modes, skills and slash commands. */
+export interface ComposerOptions {
+  providers: LlmProviderOption[]
+  defaultModel?: ModelSelection
+  modes: string[]
+  skills: ComposerSkill[]
+  commands: ComposerCommand[]
+}
+
+/** An image to send, as base64 without a `data:` prefix. */
+export interface ImageAttachment {
+  name: string
+  mimeType: string
+  data: string
+}
+
+export interface SendOptions {
+  mode?: ChatMode
+  images?: ImageAttachment[]
+}
+
+/** A message waiting in the thread's queue on the computer. */
+export interface QueuedMessage {
+  id: string
+  content: string
+  mode?: ChatMode
+  imageCount: number
+  enqueuedAt: number
+  /** "steer" items join the running turn instead of starting a new one. */
+  intent: string
+  state: string
+}
+
+/** The thread fields the composer needs. */
+export interface ThreadDetails {
+  id: string
+  projectId?: string
+  model?: ModelSelection
+}
+
+export interface ContextUsage {
+  percent: number
+  used: number
+  limit: number
+  modelName: string | null
+  categories: Array<{ label: string; color: string; tokens: number }>
+}
+
 export type SessionState = 'connecting' | 'open' | 'closed'
 
 /** Why a session closed: the user's computers removed this phone, or anything else (network, timeout, the app). */
@@ -152,7 +239,7 @@ export interface ComputerSession {
   createThread(input: { projectId: string; title?: string }): Promise<ThreadSummary>
   /** Calls onItems with the full item list on open and after every change. Returns an unsubscribe. */
   openThread(threadId: string, onItems: (items: ChatItem[]) => void): Promise<() => void>
-  send(threadId: string, text: string): Promise<void>
+  send(threadId: string, text: string, options?: SendOptions): Promise<void>
   abort(threadId: string): Promise<void>
   isTurnActive(threadId: string): Promise<boolean>
   /**
@@ -160,6 +247,21 @@ export interface ComputerSession {
    * current lists right away when known, then after every change. Returns an unsubscribe.
    */
   watchLists(handlers: ListsHandlers): () => void
+  /** Models, modes, skills and commands for the composer; skills follow the thread's project. */
+  composerOptions(threadId?: string): Promise<ComposerOptions>
+  getThread(threadId: string): Promise<ThreadDetails>
+  /** Stores the thread's model and effort on the computer. */
+  setThreadModel(threadId: string, selection: ModelSelection): Promise<void>
+  /** Sends guidance into the running turn. */
+  steer(threadId: string, text: string): Promise<void>
+  /** Queues a message to run after the current turn. */
+  enqueue(threadId: string, text: string, options?: SendOptions): Promise<void>
+  listQueue(threadId: string): Promise<QueuedMessage[]>
+  removeQueued(threadId: string, itemId: string): Promise<void>
+  reorderQueue(threadId: string, orderedIds: string[]): Promise<void>
+  /** Moves a queued message into the running turn. */
+  steerQueued(threadId: string, itemId: string): Promise<void>
+  contextUsage(threadId: string): Promise<ContextUsage | undefined>
   close(): void
 }
 

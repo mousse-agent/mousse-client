@@ -6,13 +6,36 @@ import { NetError } from '../net/errors'
 import type { LeafSession, StreamHead } from '../net/session'
 import { ListsWatch } from './lists'
 import { ThreadProjection } from './threadProjection'
-import type { ChatItem, ComputerSession, ListChat, ListsHandlers, Project, SessionEndReason, SessionState, ThreadSummary } from './types'
+import type {
+  ChatItem,
+  ChatMode,
+  ComposerOptions,
+  ComputerSession,
+  ContextUsage,
+  ImageAttachment,
+  ListChat,
+  ListsHandlers,
+  LlmModelOption,
+  LlmProviderOption,
+  ModelSelection,
+  Project,
+  QueuedMessage,
+  SendOptions,
+  SessionEndReason,
+  SessionState,
+  ThreadDetails,
+  ThreadSummary,
+} from './types'
 
 /** How long a reply may run before the phone stops waiting for its result. */
 export const SEND_DEADLINE_MS = 6 * 60 * 60 * 1000
 /** Errors within this window after sending are thrown to the caller; later ones land in the chat. */
 const SEND_EARLY_WINDOW_MS = 1_500
 const SEARCH_LIMIT = 50
+/** Base64 characters per `attachments.stage` request; the computer accepts up to 48 KiB. */
+export const IMAGE_CHUNK_CHARS = 48 * 1024
+/** Largest image the computer accepts, in base64 characters. */
+export const IMAGE_MAX_CHARS = 3 * 1024 * 1024
 
 /** The longest close message shown to the user. */
 const END_MESSAGE_MAX = 160
@@ -57,6 +80,91 @@ function threadsOf(value: unknown, method: string): ThreadSummary[] {
   if (!isObject(value) || !Array.isArray(value.threads)) return badAnswer(method)
   return value.threads.map(threadSummary).filter((thread): thread is ThreadSummary => !!thread)
 }
+
+function selection(value: unknown): ModelSelection | undefined {
+  if (!isObject(value) || typeof value.model !== 'string' || !value.model) return undefined
+  const llmProvider = typeof value.llmProvider === 'string' ? value.llmProvider : ''
+  const instanceId = typeof value.instanceId === 'string' && value.instanceId ? value.instanceId : undefined
+  if (!llmProvider && !instanceId) return undefined
+  return { ...(instanceId ? { instanceId } : {}), llmProvider, model: value.model }
+}
+
+function chatMode(value: unknown): ChatMode | undefined {
+  if (typeof value === 'string' && value) return value
+  if (isObject(value) && value.type === 'skill' && typeof value.skillId === 'string') return { type: 'skill', skillId: value.skillId }
+  return undefined
+}
+
+function queued(value: unknown): QueuedMessage | undefined {
+  if (!isObject(value) || typeof value.id !== 'string' || typeof value.content !== 'string') return undefined
+  const mode = chatMode(value.mode)
+  const at = typeof value.enqueuedAt === 'string' ? Date.parse(value.enqueuedAt) : NaN
+  return {
+    id: value.id,
+    content: value.content,
+    ...(mode ? { mode } : {}),
+    imageCount: Array.isArray(value.images) ? value.images.length : 0,
+    enqueuedAt: Number.isFinite(at) ? at : 0,
+    intent: typeof value.intent === 'string' ? value.intent : 'normal',
+    state: typeof value.state === 'string' ? value.state : 'pending',
+  }
+}
+
+function queueOf(value: unknown, method: string): QueuedMessage[] {
+  if (!isObject(value) || !Array.isArray(value.items)) return badAnswer(method)
+  return value.items.map(queued).filter((item): item is QueuedMessage => !!item)
+}
+
+/** Composer writes answer `{ ok: false, error }` for expected refusals; turn them into errors. */
+function refusal(value: unknown): void {
+  if (isObject(value) && value.ok === false) throw new Error(typeof value.error === 'string' && value.error ? value.error : 'The computer refused the request.')
+}
+
+function stringList(value: unknown): string[] | undefined {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : undefined
+}
+
+function composerOptionsOf(value: unknown): ComposerOptions {
+  if (!isObject(value) || !Array.isArray(value.providers)) return badAnswer('composer.options')
+  const providers = value.providers.flatMap((provider): LlmProviderOption[] => {
+    if (!isObject(provider) || typeof provider.id !== 'string' || !Array.isArray(provider.models)) return []
+    const models = provider.models.flatMap((model): LlmModelOption[] => {
+      if (!isObject(model) || typeof model.id !== 'string' || !model.id) return []
+      const efforts = stringList(model.efforts)
+      return [{
+        id: model.id,
+        label: typeof model.label === 'string' && model.label ? model.label : model.id,
+        ...(efforts ? { efforts } : {}),
+        ...(model.speed === 'fast' || model.speed === 'slow' ? { speed: model.speed } : {}),
+      }]
+    })
+    return [{
+      id: provider.id,
+      ...(typeof provider.instanceId === 'string' && provider.instanceId ? { instanceId: provider.instanceId } : {}),
+      label: typeof provider.label === 'string' && provider.label ? provider.label : provider.id,
+      models,
+    }]
+  })
+  const named = <T extends { name: string }>(rows: unknown, map: (row: Record<string, unknown>) => T | undefined): T[] =>
+    Array.isArray(rows) ? rows.flatMap((row) => (isObject(row) && typeof row.name === 'string' ? [map(row)].filter((entry): entry is T => !!entry) : [])) : []
+  const defaultModel = selection(value.defaultModel)
+  return {
+    providers,
+    ...(defaultModel ? { defaultModel } : {}),
+    modes: stringList(value.modes) ?? ['plan', 'agent', 'build'],
+    skills: named(value.skills, (row) =>
+      typeof row.id === 'string' ? { id: row.id, name: row.name as string, description: typeof row.description === 'string' ? row.description : '' } : undefined),
+    commands: named(value.commands, (row) => ({
+      name: row.name as string,
+      description: typeof row.description === 'string' ? row.description : '',
+      ...(stringList(row.aliases) ? { aliases: stringList(row.aliases) } : {}),
+      ...(typeof row.argsHint === 'string' ? { argsHint: row.argsHint } : {}),
+    })),
+  }
+}
+
+/** An upload id: letters, digits, `_` and `-`, as the computer requires. */
+const uploadId = (): string => newId('rpc')
 
 function isHead(value: unknown): value is StreamHead {
   return isObject(value) && Number.isSafeInteger(value.epoch) && Number.isSafeInteger(value.seq)
@@ -274,7 +382,7 @@ export class RealComputerSession implements ComputerSession {
     }
   }
 
-  async send(threadId: string, text: string): Promise<void> {
+  async send(threadId: string, text: string, options: SendOptions = {}): Promise<void> {
     const content = text.trim()
     if (!content) throw new Error('Write a message first.')
     const chat = this.chatOf(threadId)
@@ -282,10 +390,23 @@ export class RealComputerSession implements ComputerSession {
     if (this.runs.has(threadId)) throw new Error('A reply is already running in this thread.')
     const id = newId('rpc')
     this.runs.set(threadId, id)
-    const call = this.leaf.rpc('orchestrator.send', { threadId, content }, { id, idem: crypto.randomUUID(), deadlineMs: SEND_DEADLINE_MS })
+    let extras: Record<string, unknown>
+    try {
+      extras = await this.chatExtras(options)
+    } catch (error) {
+      if (this.runs.get(threadId) === id) this.runs.delete(threadId)
+      throw error
+    }
+    const call = this.leaf.rpc('orchestrator.send', { threadId, content, ...extras }, { id, idem: crypto.randomUUID(), deadlineMs: SEND_DEADLINE_MS })
     let early = true
     const settled = call.then(
-      () => undefined,
+      (value) => {
+        // A turn the computer refused (for example, another turn holds the thread) answers with an error.
+        if (!isObject(value) || typeof value.error !== 'string' || !value.error) return
+        const refused = new Error(value.error)
+        if (early) throw refused
+        this.reportLate(threadId, refused)
+      },
       (error: unknown) => {
         if (early) throw error
         this.reportLate(threadId, error)
@@ -329,6 +450,85 @@ export class RealComputerSession implements ComputerSession {
     return this.lists.add({ lists: handlers.lists, state: (state, error) => handlers.state?.(state, error) })
   }
 
+  async composerOptions(threadId?: string): Promise<ComposerOptions> {
+    return composerOptionsOf(await this.leaf.rpc('composer.options', threadId ? { threadId } : {}))
+  }
+
+  async getThread(threadId: string): Promise<ThreadDetails> {
+    const value = await this.leaf.rpc('threads.get', { threadId })
+    const thread = isObject(value) && isObject(value.thread) ? value.thread : undefined
+    if (!thread || thread.id !== threadId) return badAnswer('threads.get')
+    const model = selection(thread.modelOverride)
+    return {
+      id: threadId,
+      ...(typeof thread.projectId === 'string' && thread.projectId ? { projectId: thread.projectId } : {}),
+      ...(model ? { model } : {}),
+    }
+  }
+
+  async setThreadModel(threadId: string, model: ModelSelection): Promise<void> {
+    const params = {
+      threadId,
+      model: { ...(model.instanceId ? { instanceId: model.instanceId } : {}), ...(model.llmProvider ? { llmProvider: model.llmProvider } : {}), model: model.model },
+    }
+    refusal(await this.leaf.rpc('threads.setModel', params, { idem: crypto.randomUUID() }))
+  }
+
+  async steer(threadId: string, text: string): Promise<void> {
+    const content = text.trim()
+    if (!content) throw new Error('Write the guidance first.')
+    const run = this.runs.get(threadId)
+    if (run) {
+      const value = await this.leaf.rpc('orchestrator.steer', { threadId, run, text: content }, { idem: crypto.randomUUID() })
+      if (isObject(value) && value.ok === true) return
+    }
+    // A turn this phone did not start: queue the text, then move it into that turn.
+    const item = await this.enqueueItem(threadId, content, {})
+    if (item) await this.steerQueued(threadId, item)
+  }
+
+  async enqueue(threadId: string, text: string, options: SendOptions = {}): Promise<void> {
+    const content = text.trim()
+    if (!content) throw new Error('Write a message first.')
+    // Agent chats run one reply at a time and have no queue.
+    const chat = this.chatOf(threadId)
+    if (chat) return this.sendChat(chat, content)
+    await this.enqueueItem(threadId, content, options)
+  }
+
+  async listQueue(threadId: string): Promise<QueuedMessage[]> {
+    return queueOf(await this.leaf.rpc('queue.list', { threadId }), 'queue.list')
+  }
+
+  async removeQueued(threadId: string, itemId: string): Promise<void> {
+    refusal(await this.leaf.rpc('queue.remove', { threadId, itemId }, { idem: crypto.randomUUID() }))
+  }
+
+  async reorderQueue(threadId: string, orderedIds: string[]): Promise<void> {
+    refusal(await this.leaf.rpc('queue.reorder', { threadId, orderedIds }, { idem: crypto.randomUUID() }))
+  }
+
+  async steerQueued(threadId: string, itemId: string): Promise<void> {
+    refusal(await this.leaf.rpc('queue.promoteToSteer', { threadId, itemId }, { idem: crypto.randomUUID() }))
+  }
+
+  async contextUsage(threadId: string): Promise<ContextUsage | undefined> {
+    const value = await this.leaf.rpc('orchestrator.contextUsage', { threadId })
+    if (!isObject(value) || typeof value.percent !== 'number' || typeof value.used !== 'number' || typeof value.limit !== 'number') return undefined
+    return {
+      percent: value.percent,
+      used: value.used,
+      limit: value.limit,
+      modelName: typeof value.modelName === 'string' ? value.modelName : null,
+      categories: Array.isArray(value.categories)
+        ? value.categories.flatMap((row) =>
+            isObject(row) && typeof row.label === 'string' && typeof row.tokens === 'number'
+              ? [{ label: row.label, color: typeof row.color === 'string' ? row.color : 'currentColor', tokens: row.tokens }]
+              : [])
+        : [],
+    }
+  }
+
   close(): void {
     this.leaf.close()
   }
@@ -346,6 +546,42 @@ export class RealComputerSession implements ComputerSession {
   private async stopChat(chat: ListChat): Promise<void> {
     if (!chat.run || chat.run.state !== 'running') return
     await this.leaf.rpc('chats.cancel', { chatId: chat.id, runId: chat.run.id }, { idem: crypto.randomUUID() })
+  }
+
+  private async enqueueItem(threadId: string, content: string, options: SendOptions): Promise<string | undefined> {
+    const extras = await this.chatExtras(options)
+    const value = await this.leaf.rpc('queue.enqueue', { threadId, content, ...extras }, { idem: crypto.randomUUID() })
+    refusal(value)
+    return isObject(value) && isObject(value.item) && typeof value.item.id === 'string' ? value.item.id : undefined
+  }
+
+  /** The mode and staged image ids a send or queued message carries. */
+  private async chatExtras(options: SendOptions): Promise<Record<string, unknown>> {
+    const extras: Record<string, unknown> = {}
+    if (options.mode !== undefined) extras.mode = options.mode
+    if (options.images?.length) {
+      const ids: string[] = []
+      for (const image of options.images) ids.push(await this.stageImage(image))
+      extras.attachments = ids
+    }
+    return extras
+  }
+
+  /** Uploads one image in chunks the computer reassembles; returns the id a send names. */
+  private async stageImage(image: ImageAttachment): Promise<string> {
+    if (image.data.length > IMAGE_MAX_CHARS) throw new Error(`${image.name} is too large to send.`)
+    const upload = uploadId()
+    const total = Math.max(1, Math.ceil(image.data.length / IMAGE_CHUNK_CHARS))
+    for (let index = 0; index < total; index++) {
+      const data = image.data.slice(index * IMAGE_CHUNK_CHARS, (index + 1) * IMAGE_CHUNK_CHARS)
+      const value = await this.leaf.rpc(
+        'attachments.stage',
+        { upload, index, total, name: image.name.slice(0, 512) || 'image', mimeType: image.mimeType, data },
+        { idem: crypto.randomUUID() },
+      )
+      refusal(value)
+    }
+    return upload
   }
 
   /** A send that failed after the phone stopped waiting: show it in the thread instead of dropping it. */

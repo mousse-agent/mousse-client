@@ -159,6 +159,16 @@ class StubSession implements ComputerSession {
   send = vi.fn()
   abort = vi.fn()
   isTurnActive = vi.fn()
+  composerOptions = vi.fn()
+  getThread = vi.fn()
+  setThreadModel = vi.fn()
+  steer = vi.fn()
+  enqueue = vi.fn()
+  listQueue = vi.fn()
+  removeQueued = vi.fn()
+  reorderQueue = vi.fn()
+  steerQueued = vi.fn()
+  contextUsage = vi.fn()
   watchLists(handlers: ListsHandlers) { this.handlers.add(handlers); return () => { this.handlers.delete(handlers) } }
   push(lists: ComputerLists) { for (const handler of this.handlers) { handler.lists(lists); handler.state?.('live') } }
   close(reason: 'removed' | 'ended' = 'ended') { this.reason = reason; this.current = 'closed'; for (const listener of this.listeners) listener('closed') }

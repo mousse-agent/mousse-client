@@ -167,3 +167,107 @@ describe('computer session', () => {
     session.close()
   })
 })
+
+describe('composer controls', () => {
+  it('reads the computer options and the thread model, and stores a new model on the thread', async () => {
+    const { session, remote } = await setup()
+    const options = session.composerOptions('t1')
+    const optionsCall = await remote.answer('composer.options', {
+      providers: [
+        { id: 'anthropic', instanceId: 'pi:anthropic', label: 'Anthropic', models: [{ id: 'claude-opus-4-8', label: 'Claude Opus 4.8', efforts: ['low', 'high'], speed: 'weird' }, { bad: 1 }] },
+        { nope: true },
+      ],
+      defaultModel: { instanceId: 'pi:anthropic', llmProvider: 'anthropic', model: 'claude-opus-4-8:high' },
+      modes: ['plan', 'agent', 'build'],
+      skills: [{ id: 's1', name: 'Review', description: 'Look', skillPath: '/secret' }],
+      commands: [{ name: 'new', description: 'New', aliases: ['reset'], argsHint: '[title]' }],
+    })
+    expect(optionsCall.params).toEqual({ threadId: 't1' })
+    expect(await options).toEqual({
+      providers: [{ id: 'anthropic', instanceId: 'pi:anthropic', label: 'Anthropic', models: [{ id: 'claude-opus-4-8', label: 'Claude Opus 4.8', efforts: ['low', 'high'] }] }],
+      defaultModel: { instanceId: 'pi:anthropic', llmProvider: 'anthropic', model: 'claude-opus-4-8:high' },
+      modes: ['plan', 'agent', 'build'],
+      skills: [{ id: 's1', name: 'Review', description: 'Look' }],
+      commands: [{ name: 'new', description: 'New', aliases: ['reset'], argsHint: '[title]' }],
+    })
+
+    const details = session.getThread('t1')
+    await remote.answer('threads.get', { thread: { id: 't1', projectId: 'p1', modelOverride: { instanceId: 'pi:openai', llmProvider: 'openai', model: 'gpt-5.5:xhigh' } } })
+    expect(await details).toEqual({ id: 't1', projectId: 'p1', model: { instanceId: 'pi:openai', llmProvider: 'openai', model: 'gpt-5.5:xhigh' } })
+
+    const setting = session.setThreadModel('t1', { instanceId: 'pi:openai', llmProvider: 'openai', model: 'gpt-5.5:low' })
+    const setCall = await remote.answer('threads.setModel', { ok: true })
+    expect(setCall.params).toEqual({ threadId: 't1', model: { instanceId: 'pi:openai', llmProvider: 'openai', model: 'gpt-5.5:low' } })
+    expect(setCall.idem).toBeTruthy()
+    await setting
+
+    const refused = session.setThreadModel('t1', { llmProvider: 'gone', model: 'x' })
+    await remote.answer('threads.setModel', { ok: false, error: 'Unknown provider instance' })
+    await expect(refused).rejects.toThrow('Unknown provider instance')
+    session.close()
+  })
+
+  it('stages images in chunks, then sends them with the mode', async () => {
+    const { session, remote } = await setup()
+    const data = 'A'.repeat(48 * 1024 + 8)
+    const sending = session.send('t1', 'Look', { mode: 'plan', images: [{ name: 'shot.png', mimeType: 'image/png', data }] })
+    const first = await remote.answer('attachments.stage', { ok: true, received: 1, total: 2 })
+    const upload = (first.params as { upload: string }).upload
+    expect(first.params).toMatchObject({ index: 0, total: 2, name: 'shot.png', mimeType: 'image/png', data: 'A'.repeat(48 * 1024) })
+    const second = await remote.answer('attachments.stage', { ok: true, received: 2, total: 2 })
+    expect(second.params).toMatchObject({ upload, index: 1, data: 'AAAAAAAA' })
+    const request = await remote.next('rpc.request')
+    expect(request).toMatchObject({ method: 'orchestrator.send', params: { threadId: 't1', content: 'Look', mode: 'plan', attachments: [upload] } })
+    await sending
+    session.close()
+  })
+
+  it('surfaces a turn the computer refused', async () => {
+    const { session, remote } = await setup()
+    const sending = session.send('t1', 'Hi')
+    const request = await remote.next('rpc.request')
+    await remote.send({ t: 'rpc.result', id: request.id, result: { text: '', silent: false, error: 'Thread already has a running turn: t1' } })
+    await expect(sending).rejects.toThrow(/already has a running turn/)
+    session.close()
+  })
+
+  it('queues, lists, reorders, removes and steers queued messages', async () => {
+    const { session, remote } = await setup()
+    const queueing = session.enqueue('t1', 'Next', { mode: { type: 'skill', skillId: 's1' } })
+    const enqueue = await remote.answer('queue.enqueue', { ok: true, item: { id: 'q1' }, items: [] })
+    expect(enqueue.params).toEqual({ threadId: 't1', content: 'Next', mode: { type: 'skill', skillId: 's1' } })
+    await queueing
+
+    const listing = session.listQueue('t1')
+    await remote.answer('queue.list', { items: [{ id: 'q1', content: 'Next', images: [{ name: 'a.png' }], enqueuedAt: '2026-01-01T00:00:00Z', intent: 'normal', state: 'pending' }, { bad: true }] })
+    expect(await listing).toEqual([{ id: 'q1', content: 'Next', imageCount: 1, enqueuedAt: Date.parse('2026-01-01T00:00:00Z'), intent: 'normal', state: 'pending' }])
+
+    const reordering = session.reorderQueue('t1', ['q2', 'q1'])
+    expect((await remote.answer('queue.reorder', { ok: true, items: [] })).params).toEqual({ threadId: 't1', orderedIds: ['q2', 'q1'] })
+    await reordering
+
+    const removing = session.removeQueued('t1', 'q1')
+    await remote.answer('queue.remove', { ok: false, error: 'This message already started or is no longer queued.' })
+    await expect(removing).rejects.toThrow(/already started/)
+
+    // Steering a turn this phone did not start: queue the text, then move it into the turn.
+    const steering = session.steer('t1', 'Use the other API')
+    const steerQueue = await remote.answer('queue.enqueue', { ok: true, item: { id: 'q9' } })
+    expect(steerQueue.params).toEqual({ threadId: 't1', content: 'Use the other API' })
+    expect((await remote.answer('queue.promoteToSteer', { ok: true, items: [] })).params).toEqual({ threadId: 't1', itemId: 'q9' })
+    await steering
+    session.close()
+  })
+
+  it('steers its own run directly', async () => {
+    const { session, remote } = await setup()
+    const sending = session.send('t1', 'Do it')
+    const run = await remote.next('rpc.request')
+    await sending
+    const steering = session.steer('t1', 'Faster')
+    const steer = await remote.answer('orchestrator.steer', { ok: true })
+    expect(steer.params).toEqual({ threadId: 't1', run: run.id, text: 'Faster' })
+    await steering
+    session.close()
+  })
+})
