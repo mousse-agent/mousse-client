@@ -52,6 +52,15 @@ export function displayPath(filePath: string): string {
 
 export const baseName = (path: string): string => path.split(/[\\/]/).pop() || path
 
+/** Keeps the end of a long path, where the file name is: "…/net/resume.test.ts". */
+export function shortPath(path: string, max = 40): string {
+  if (path.length <= max) return path
+  const parts = path.split('/')
+  let out = parts.pop() ?? path
+  while (parts.length && out.length + parts[parts.length - 1].length + 1 <= max - 2) out = `${parts.pop()}/${out}`
+  return `…/${out}`
+}
+
 export function filePathOf(input: unknown): string {
   if (!isObject(input)) return ''
   const raw = input.file_path ?? input.path ?? input.filePath ?? input.file ?? input.notebook_path

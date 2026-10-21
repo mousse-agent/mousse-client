@@ -17,6 +17,7 @@ import {
   groupLabel,
   groupTurns,
   segmentReplies,
+  shortPath,
   turnEdits,
   type Turn,
 } from './format'
@@ -335,7 +336,7 @@ function EditSummary({ replies }: { replies: ChatItem[] }) {
             <li key={file.path} className="m-tl-edits__file">
               <FileText size={14} />
               <span className="m-tl-edits__path" title={file.path}>
-                {file.path}
+                {shortPath(file.path)}
               </span>
               <DiffStat added={file.added} removed={file.removed} />
             </li>

@@ -20,6 +20,7 @@ import {
   outputText,
   searchLabels,
   searchResults,
+  shortPath,
   thoughtHeading,
   todosOf,
   toolState,
@@ -263,7 +264,7 @@ function EditCard({ tool, state }: { tool: ChatToolCall; state: ToolState }) {
     >
       {lines.length ? (
         <>
-          {path && <div className="m-tl-diff__path">{displayPath(path)}</div>}
+          {path && <div className="m-tl-diff__path" title={path}>{shortPath(displayPath(path), 48)}</div>}
           <DiffView lines={lines} path={path} />
         </>
       ) : undefined}
