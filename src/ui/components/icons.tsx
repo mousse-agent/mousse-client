@@ -30,6 +30,12 @@ import StopIcon from '@hugeicons/core-free-icons/StopIcon'
 import Tick02Icon from '@hugeicons/core-free-icons/Tick02Icon'
 import UserCircleIcon from '@hugeicons/core-free-icons/UserCircleIcon'
 import Wrench01Icon from '@hugeicons/core-free-icons/Wrench01Icon'
+import BubbleChatAddIcon from '@hugeicons/core-free-icons/BubbleChatAddIcon'
+import FolderLibraryIcon from '@hugeicons/core-free-icons/FolderLibraryIcon'
+import FolderOpenIcon from '@hugeicons/core-free-icons/FolderOpenIcon'
+import GitBranchIcon from '@hugeicons/core-free-icons/GitBranchIcon'
+import MessageMultiple01Icon from '@hugeicons/core-free-icons/MessageMultiple01Icon'
+import Structure01Icon from '@hugeicons/core-free-icons/Structure01Icon'
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'stroke'> {
   size?: number | string
@@ -84,3 +90,10 @@ export const Stop = /* @__PURE__ */ createIcon('Stop', StopIcon)
 export const User = /* @__PURE__ */ createIcon('User', UserCircleIcon)
 export const Wrench = /* @__PURE__ */ createIcon('Wrench', Wrench01Icon)
 export const X = /* @__PURE__ */ createIcon('X', Cancel01Icon)
+// Sidebar (mousse/src/renderer/lib/icons.tsx names).
+export const FolderKanban = /* @__PURE__ */ createIcon('FolderKanban', FolderLibraryIcon)
+export const FolderOpen = /* @__PURE__ */ createIcon('FolderOpen', FolderOpenIcon)
+export const GitBranch = /* @__PURE__ */ createIcon('GitBranch', GitBranchIcon)
+export const ListTree = /* @__PURE__ */ createIcon('ListTree', Structure01Icon)
+export const MessageSquarePlus = /* @__PURE__ */ createIcon('MessageSquarePlus', BubbleChatAddIcon)
+export const MessagesSquare = /* @__PURE__ */ createIcon('MessagesSquare', MessageMultiple01Icon)

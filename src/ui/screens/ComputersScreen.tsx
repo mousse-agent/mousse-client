@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import type { Computer } from '../../connection/types'
-import { useConnection } from '../hooks/connection'
-import { useAsync } from '../hooks/useAsync'
+import { useComputers } from '../hooks/connection'
 import { useRouter } from '../state/router'
 import { EmptyState } from '../components/EmptyState'
 import { ChevronRight, Monitor, Plus, QrCode, RefreshCw, Settings, Smartphone } from '../components/icons'
@@ -18,9 +17,8 @@ function lastSeen(computer: Computer): string {
 }
 
 export function ComputersScreen() {
-  const connection = useConnection()
   const router = useRouter()
-  const computers = useAsync(() => connection.listComputers(), [connection])
+  const computers = useComputers()
   const [target, setTarget] = useState<AddPhoneTarget>()
 
   const list = computers.data ?? []

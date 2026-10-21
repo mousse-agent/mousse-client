@@ -5,8 +5,12 @@ import type {
   AccountState,
   ChatItem,
   Computer,
+  ComputerLists,
   ComputerSession,
   EnrollmentProgress,
+  ListChat,
+  ListsHandlers,
+  ThreadStatus,
   MousseConnection,
   Project,
   SessionEndReason,
@@ -66,6 +70,14 @@ function initialThreads(): ThreadSummary[] {
   ]
 }
 
+function initialChats(): ListChat[] {
+  return [
+    { id: 'c-review', kind: 'direct', name: 'Reviewer', threadId: 'ct-review', network: false, agents: ['Reviewer'], updatedAt: BASE_TIME - 12 * 60_000, preview: 'The retry test still races the relay timeout; I left a note on line 88.' },
+    { id: 'c-release', kind: 'group', name: 'Release crew', threadId: 'ct-release', network: false, agents: ['Planner', 'Tester'], updatedAt: BASE_TIME - 2 * 3_600_000, preview: '@tester the Android build is ready for a smoke test.' },
+    { id: 'c-team', kind: 'group', name: 'Team space', network: true, agents: ['Planner'], updatedAt: BASE_TIME - 30 * 3_600_000 }
+  ]
+}
+
 function initialItems(threadId: string, title: string): ChatItem[] {
   if (threadId === 't-redesign') {
     return [
@@ -95,8 +107,59 @@ class FakeSession implements ComputerSession {
   private streams = new Map<string, ReturnType<typeof setInterval>>()
   private nextId = 1
   private endedWith?: string
+  private listWatchers = new Set<ListsHandlers>()
+  private chats = initialChats()
+  /** Threads whose last turn finished and that show "Done" until their next turn. */
+  private done = new Set<string>(['t-relay'])
+  private waiting = new Set<string>(['t-voices'])
 
   constructor(readonly nodeId: string, private threads: ThreadSummary[], private opts: Required<Omit<FakeConnectionOptions, 'now' | 'email'>>) {}
+
+  watchLists(handlers: ListsHandlers): () => void {
+    this.listWatchers.add(handlers)
+    handlers.state?.('loading')
+    setTimeout(() => {
+      if (!this.listWatchers.has(handlers)) return
+      handlers.lists(this.lists())
+      handlers.state?.('live')
+    }, this.opts.latencyMs)
+    return () => { this.listWatchers.delete(handlers) }
+  }
+
+  private lists(): ComputerLists {
+    const status: Record<string, ThreadStatus> = {}
+    for (const thread of this.threads) {
+      if (this.isActive(thread.id)) status[thread.id] = { state: 'processing', since: thread.updatedAt }
+      else if (this.waiting.has(thread.id)) status[thread.id] = { state: 'awaiting_input', since: thread.updatedAt }
+      else if (this.done.has(thread.id)) status[thread.id] = { state: 'completed' }
+    }
+    const chats = this.chats.map((chat) => chat.threadId && this.isActive(chat.threadId)
+      ? { ...chat, run: { id: `run-${chat.id}`, state: 'running', startedAt: Date.now() } }
+      : { ...chat })
+    return {
+      projects: PROJECTS.map((project, order) => ({ id: project.id, name: project.name, path: project.path, order, pinned: false })),
+      threads: this.threads.map((thread, order) => ({
+        id: thread.id,
+        title: thread.title,
+        projectId: thread.projectId,
+        createdAt: thread.updatedAt,
+        updatedAt: thread.updatedAt,
+        order,
+        pinned: !!thread.pinned,
+        settled: !!thread.settled,
+        started: true
+      })),
+      chats,
+      status,
+      receivedAt: Date.now()
+    }
+  }
+
+  private emitLists(): void {
+    if (!this.listWatchers.size) return
+    const lists = this.lists()
+    for (const watcher of this.listWatchers) watcher.lists(lists)
+  }
 
   state(): SessionState { return this.sessionState }
 
@@ -134,6 +197,7 @@ class FakeSession implements ComputerSession {
     }
     this.threads.unshift(thread)
     this.items.set(thread.id, [])
+    this.emitLists()
     return { ...thread }
   }
 
@@ -162,8 +226,11 @@ class FakeSession implements ComputerSession {
     const assistantId = `a${this.nextId++}`
     list.push({ id: assistantId, role: 'assistant', text: '', createdAt: now + 2, status: 'streaming' })
     this.touch(threadId)
+    this.done.delete(threadId)
+    this.waiting.delete(threadId)
     this.emit(threadId)
     this.stream(threadId, assistantId, replyFor(text))
+    this.emitLists()
   }
 
   async abort(threadId: string): Promise<void> {
@@ -175,6 +242,7 @@ class FakeSession implements ComputerSession {
     for (const item of list) if (item.status === 'streaming') item.status = 'done'
     list.push({ id: `s${this.nextId++}`, role: 'system', text: 'Stopped', createdAt: Date.now(), status: 'done' })
     this.emit(threadId)
+    this.emitLists()
   }
 
   async isTurnActive(threadId: string): Promise<boolean> {
@@ -187,6 +255,7 @@ class FakeSession implements ComputerSession {
     for (const timer of this.streams.values()) clearInterval(timer)
     this.streams.clear()
     this.watchers.clear()
+    this.listWatchers.clear()
     this.sessionState = 'closed'
     for (const listener of this.stateListeners) listener('closed')
   }
@@ -231,7 +300,11 @@ class FakeSession implements ComputerSession {
         item.status = 'done'
         const thread = this.threads.find((entry) => entry.id === threadId)
         if (thread) thread.active = false
+        this.done.add(threadId)
+        const chat = this.chats.find((entry) => entry.threadId === threadId)
+        if (chat) Object.assign(chat, { preview: fullText, updatedAt: Date.now() })
         this.emit(threadId)
+        this.emitLists()
         return
       }
       index += 2
