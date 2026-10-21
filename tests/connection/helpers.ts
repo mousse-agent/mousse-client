@@ -43,6 +43,7 @@ export function fakeComputer(stream: StreamEndpoint, user: TestUser, computer: T
     }
   }
   let seq = 0
+  let epoch = 1
   function record(streamId: string, type: string, body: unknown): Record {
     seq++
     const envelope = canonicalJson({
@@ -60,7 +61,7 @@ export function fakeComputer(stream: StreamEndpoint, user: TestUser, computer: T
   }
   function batch(records: Record[]) {
     return {
-      headers: records.map((entry) => ({ seq: entry.seq, epoch: 1, recvTs: entry.seq })),
+      headers: records.map((entry) => ({ seq: entry.seq, epoch, recvTs: entry.seq })),
       parts: records.flatMap((entry) => [entry.envelope, entry.signature]),
       lengths: records.flatMap((entry) => [entry.envelope.length, 64]),
     }
@@ -72,6 +73,18 @@ export function fakeComputer(stream: StreamEndpoint, user: TestUser, computer: T
     record,
     get seq() {
       return seq
+    },
+    get epoch() {
+      return epoch
+    },
+    /** Moves the stream to a position: a later epoch is a new generation, as after a desktop restart. */
+    position(nextEpoch: number, nextSeq: number) {
+      epoch = nextEpoch
+      seq = nextSeq
+    },
+    /** Whether the phone sent a message of this type that no test has taken yet. */
+    has(t: WireMessage['t']) {
+      return inbox.some((message) => message.t === t)
     },
     async handshake() {
       await next('hello')
@@ -97,7 +110,7 @@ export function fakeComputer(stream: StreamEndpoint, user: TestUser, computer: T
     },
     async snapshotChunk(streamId: string, records: Record[]) {
       const { headers, parts, lengths } = batch(records)
-      await send({ t: 'snapshot.chunk', stream: streamId, epoch: 1, throughSeq: seq, records: headers, done: true, parts: lengths }, parts)
+      await send({ t: 'snapshot.chunk', stream: streamId, epoch, throughSeq: seq, records: headers, done: true, parts: lengths }, parts)
     },
     async delta(streamId: string, data: unknown) {
       await send({ t: 'ephemeral', stream: streamId, kind: 'delta', data })
@@ -105,9 +118,12 @@ export function fakeComputer(stream: StreamEndpoint, user: TestUser, computer: T
     async presence(streamId: string) {
       await send({ t: 'presence', stream: streamId } as WireMessage)
     },
-    async events(streamId: string, records: Record[]) {
+    async events(streamId: string, records: Record[], replay = false) {
       const { headers, parts, lengths } = batch(records)
-      await send({ t: 'events', stream: streamId, records: headers, replay: false, parts: lengths }, parts)
+      await send({ t: 'events', stream: streamId, records: headers, replay, parts: lengths }, parts)
+    },
+    async snapshotRequired(streamId: string, reason: string) {
+      await send({ t: 'snapshotRequired', stream: streamId, reason, head: { epoch, seq } } as WireMessage)
     },
   }
 }

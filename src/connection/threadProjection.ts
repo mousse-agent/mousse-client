@@ -34,6 +34,20 @@ export interface DesktopMessage {
   toolCall?: { title?: string; summary?: string; toolName?: string; status?: string; details?: unknown; response?: unknown; input?: unknown }
 }
 
+/**
+ * What the signed records say about a thread at one stream position: never live deltas, pending
+ * questions or phone-only items. The phone saves it to open the thread instantly next time, then
+ * follows the stream from that position.
+ */
+export interface SettledThreadState {
+  messages: DesktopMessage[]
+  active: boolean
+  phase?: TurnPhase
+  turnStartedAt?: number
+  turnError?: string
+  connectionFailed?: string
+}
+
 interface PendingSnapshot {
   id: string
   bytes: number
@@ -69,6 +83,11 @@ export class ThreadProjection {
   private messages: DesktopMessage[] = []
   private pending?: PendingSnapshot
   private localItems: ChatItem[] = []
+  /**
+   * Messages now showing a live delta, with the version the records last gave (null when the
+   * records have not mentioned the message yet). Saved state uses the record version.
+   */
+  private overlaid = new Map<string, DesktopMessage | null>()
   /** Items by message object, so unchanged messages keep the same item between updates. */
   private mapped = new WeakMap<DesktopMessage, ChatItem | null>()
   /** Whether the computer reports a running turn, as far as the stream has told us. */
@@ -86,6 +105,48 @@ export class ThreadProjection {
     let changed = false
     for (const record of records) changed = this.accept(record.envelope.type, record.envelope.body) || changed
     return changed
+  }
+
+  /** True between a snapshot's begin and end records: the state is not yet the records' state. */
+  get midSnapshot(): boolean {
+    return this.pending !== undefined
+  }
+
+  /** The state the records alone give, without live deltas, questions or phone-only items. */
+  settled(): SettledThreadState {
+    const messages = this.overlaid.size
+      ? this.messages.flatMap((message) => {
+          if (!this.overlaid.has(message.id)) return [message]
+          const base = this.overlaid.get(message.id)
+          return base ? [base] : []
+        })
+      : [...this.messages]
+    return {
+      messages,
+      active: this.active,
+      ...(this.phase ? { phase: this.phase } : {}),
+      ...(this.turnStartedAt !== undefined ? { turnStartedAt: this.turnStartedAt } : {}),
+      ...(this.turnError ? { turnError: this.turnError } : {}),
+      ...(this.connectionFailed ? { connectionFailed: this.connectionFailed } : {}),
+    }
+  }
+
+  /** Starts from saved state, before any record. Returns false when the state is unusable. */
+  restore(value: unknown): boolean {
+    if (!isObject(value)) return false
+    const messages = messagesOf(value.messages)
+    if (!messages) return false
+    this.messages = messages
+    this.overlaid.clear()
+    this.localItems = []
+    this.pending = undefined
+    this.questions = []
+    this.active = value.active === true
+    this.phase = typeof value.phase === 'string' && KNOWN_PHASES.has(value.phase as TurnPhase) ? (value.phase as TurnPhase) : undefined
+    this.turnStartedAt = typeof value.turnStartedAt === 'number' && Number.isFinite(value.turnStartedAt) ? value.turnStartedAt : undefined
+    this.turnError = typeof value.turnError === 'string' && value.turnError ? value.turnError : undefined
+    this.connectionFailed = typeof value.connectionFailed === 'string' && value.connectionFailed ? value.connectionFailed : undefined
+    return true
   }
 
   /** Adds an item that exists only on this phone, such as a send that failed after it was dispatched. */
@@ -131,8 +192,10 @@ export class ThreadProjection {
       case 'thread.message':
       case 'thread.message-updated': {
         if (!isMessage(data.message) || data.message.streaming !== true) return false
-        const known = this.messages.find((entry) => entry.id === (data.message as DesktopMessage).id)
+        const id = data.message.id
+        const known = this.messages.find((entry) => entry.id === id)
         if (known && known.streaming !== true) return false
+        if (!this.overlaid.has(id)) this.overlaid.set(id, known ?? null)
         return this.upsert(data.message)
       }
       case 'questions.updated': {
@@ -231,6 +294,7 @@ export class ThreadProjection {
     const messages = messagesOf(value.messages)
     if (!messages) return false
     this.messages = messages
+    this.overlaid.clear()
     this.localItems = []
     if (isObject(value.activeTurn)) this.active = value.activeTurn.active === true
     this.questions = pendingQuestionsOf(value.pendingQuestions, this.threadId) ?? []
@@ -243,11 +307,19 @@ export class ThreadProjection {
     switch (type) {
       case 'thread.message':
       case 'thread.message-updated':
-        return isMessage(data.message) ? this.upsert(data.message) : false
+        if (!isMessage(data.message)) return false
+        this.overlaid.delete(data.message.id)
+        return this.upsert(data.message)
       case 'thread.messages': {
         const messages = messagesOf(data.messages)
         if (!messages) return false
-        this.messages = data.replace === true ? messages : this.merge(messages)
+        if (data.replace === true) {
+          this.messages = messages
+          this.overlaid.clear()
+        } else {
+          this.messages = this.merge(messages)
+          for (const message of messages) this.overlaid.delete(message.id)
+        }
         return true
       }
       case 'turn.started':

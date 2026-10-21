@@ -86,6 +86,9 @@ h1, h2, h3, p { margin: 0; }
 
 .m-spinner { animation: m-spin 900ms linear infinite; }
 @keyframes m-spin { to { transform: rotate(360deg); } }
+/* Shown only when loading takes a moment: a saved thread opens without the spinner flashing. */
+.m-loading--late { animation: m-late 0s linear 250ms both; }
+@keyframes m-late { from { visibility: hidden; } }
 
 /* ---------- Top bar ---------- */
 .m-topbar {
