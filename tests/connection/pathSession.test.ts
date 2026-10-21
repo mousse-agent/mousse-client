@@ -102,7 +102,7 @@ async function setup(
     ...(options.allowed === undefined ? {} : { directAllowed: async () => options.allowed! }),
     ...(options.timeoutMs === undefined ? {} : { directTimeoutMs: () => options.timeoutMs! }),
   }
-  const session = new PathSession({ first: relay.leaf, open, network, autoProbe: false, livenessTimeoutMs: 200, settleMs: 5 })
+  const session = new PathSession({ first: relay.leaf, open, network, autoProbe: false, livenessTimeoutMs: 200, settleMs: 5, recoveryDelaysMs: [0, 20, 20], recoveryWindowMs: 1_000 })
   const states: string[] = []
   session.onStateChange((state) => states.push(state))
   return {
@@ -116,7 +116,7 @@ async function setup(
     links,
     signals,
     states,
-    failRelay: (error: Error) => (relayFailure = error),
+    failRelay: (error?: Error) => (relayFailure = error),
     failDirect: (error: Error) => (directFailure = error),
   }
 }
@@ -321,6 +321,23 @@ describe('path session', () => {
     expect(request.method).toBe(ENDPOINTS_METHOD)
     await t.relay.remote.send({ t: 'rpc.result', id: request.id, result: WEBRTC })
     await until(() => t.session.path === 'direct', 400)
+  })
+
+  it('keeps the session open while the relay restarts, and sends waiting requests once it is back', async () => {
+    const t = await setup()
+    const pending = t.session.rpc('projects.list', {})
+    await t.relay.remote.next('rpc.request')
+    // Mousse ID deploys: the relay is gone for a moment and the computer registers again.
+    t.failRelay(new NetError('route_unreachable', 'Relay connection failed.'))
+    t.relay.end.close(new NetError('route_unreachable', 'The relay closed the connection (code 1006).'))
+    await until(() => t.opened.filter((kind) => kind === 'relay').length === 2)
+    t.failRelay(undefined)
+    await until(() => t.relays.length === 2)
+    const again = await t.relays[1].remote.next('rpc.request')
+    await t.relays[1].remote.send({ t: 'rpc.result', id: again.id, result: { projects: [] } })
+    expect(await pending).toEqual({ projects: [] })
+    expect(t.session.state).toBe('open')
+    expect(t.states).toEqual([])
   })
 
   it('closes as before when both paths fail, with the reason the session had', async () => {

@@ -31,6 +31,13 @@ import { connectTls, type SecureChannel } from './tls13/client'
 export const INVITE_PREFIX = 'mj1_'
 export const ENROLL_EXPORTER_LABEL = 'EXPORTER-mousse-net-enroll'
 const INVITE_MAX_BYTES = 64 * 1024
+/**
+ * What the phone accepts from the computer while enrolling: its hello and the result each carry
+ * the whole roster, about 1 KB per device. The inner TLS already pins the computer's key from the
+ * invite, so this is the desktop's ENROLLMENT_JOINER_MAX_BYTES rather than the 16 KiB bound on
+ * unauthenticated peers; that one fit only seven devices.
+ */
+export const ENROLLMENT_RECEIVE_MAX_BYTES = 64 * 1024
 const NAME_MAX_CHARS = 256
 /** Every capability the desktop recognises in a hello; only `enroll.v1` may be offered here. */
 const SESSION_CAPABILITIES = ['streams.v1', 'blobs.v1', 'rpc.v1', 'presence.v1', 'enroll.v1', 'relay.v1', 'space.discovery.v1']
@@ -303,7 +310,7 @@ class JoinHandshake {
       onBytesReceived: (count) => {
         if (this.done) return
         this.bytes += count
-        if (this.bytes > PREAUTH_MAX_BYTES) throw new NetError('too_large', 'Enrollment exceeds 16 KiB.')
+        if (this.bytes > ENROLLMENT_RECEIVE_MAX_BYTES) throw new NetError('too_large', 'Enrollment exceeds 64 KiB.')
       },
     })
     this.mux.onClose((error) => this.fail(error ?? new NetError('peer_offline', 'The computer closed the connection.')))

@@ -1,7 +1,8 @@
 // One computer as the phone's screens see it: the shared session, its connection state, and the
 // lists (projects, threads, chats, run status). Lists come from memory first, then from what the
 // phone saved last time, and then live from the computer, so screens never wait to draw them.
-import type { ComputerLists, ComputerSession, ListsState } from './types'
+import type { ComputerLists, ComputerSession, ListsState, SessionEndReason } from './types'
+import { isUnreachable } from './types'
 
 export type LinkState = 'idle' | 'connecting' | 'open' | 'closed' | 'removed' | 'error'
 
@@ -108,6 +109,12 @@ export function memoryListsCache(): ListsCache {
 
 /** Waits before each automatic reconnect; after the last one the phone waits for "Try again" or the app's return. */
 export const RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000]
+/**
+ * How long after an open link dropped the phone keeps reconnecting without saying so: a relay
+ * restart (Mousse ID deploys restart it) or a network change heals within this time. A failure
+ * that is not about reaching the computer, or one still there after this time, is shown.
+ */
+export const QUIET_RECONNECT_MS = 30_000
 const SAVE_DELAY_MS = 500
 
 export interface ComputerStoreOptions {
@@ -119,6 +126,7 @@ export interface ComputerStoreOptions {
   /** Closes and forgets the shared session, so the next open starts a new one. */
   drop(): void
   reconnectDelaysMs?: number[]
+  quietReconnectMs?: number
 }
 
 export class ComputerStore {
@@ -129,7 +137,11 @@ export class ComputerStore {
   private saveTimer?: ReturnType<typeof setTimeout>
   private attempts = 0
   private opening = 0
+  /** An open started by `connect` has not settled yet. */
+  private inFlight = false
   private disposed = false
+  /** While set, an open link dropped and reconnect attempts that cannot reach the computer stay quiet until then. */
+  private quietUntil?: number
 
   constructor(private readonly options: ComputerStoreOptions) {
     const saved = options.cache.read(options.accountId, options.nodeId)
@@ -150,20 +162,25 @@ export class ComputerStore {
     }
   }
 
-  /** Connects unless connected, connecting, or removed from the computer. */
+  /** Connects unless connected, already opening, or removed from the computer. */
   connect(): void {
-    if (this.disposed || ['open', 'connecting', 'removed'].includes(this.current.link)) return
+    if (this.disposed || this.inFlight || ['open', 'removed'].includes(this.current.link)) return
     clearTimeout(this.retryTimer)
     this.retryTimer = undefined
     const attempt = ++this.opening
+    this.inFlight = true
     this.set({ link: 'connecting', error: undefined })
     this.options.open().then(
       (session) => {
         if (this.disposed || attempt !== this.opening) return
+        this.inFlight = false
         this.attach(session)
       },
       (error: unknown) => {
         if (this.disposed || attempt !== this.opening) return
+        this.inFlight = false
+        if (isUnreachable(error) && this.quietRetry()) return
+        this.quietUntil = undefined
         this.set({ link: 'error', error: error instanceof Error && error.message ? error.message : 'Could not connect.' })
         this.scheduleRetry()
       },
@@ -173,6 +190,8 @@ export class ComputerStore {
   /** Starts over now, with a new session. */
   retry(): void {
     if (this.disposed) return
+    this.quietUntil = undefined
+    this.inFlight = false
     this.detach()
     this.options.drop()
     this.attempts = 0
@@ -182,7 +201,8 @@ export class ComputerStore {
 
   /** Called when the app returns to the foreground: reconnect at once if the link dropped. */
   resume(): void {
-    if (this.current.link === 'closed' || this.current.link === 'error') {
+    const waiting = this.current.link === 'connecting' && !this.inFlight && this.retryTimer !== undefined
+    if (this.current.link === 'closed' || this.current.link === 'error' || waiting) {
       this.attempts = 0
       this.connect()
     }
@@ -220,6 +240,7 @@ export class ComputerStore {
     })
     this.attached = { session, stop: () => { stopLists(); stopState() } }
     this.attempts = 0
+    this.quietUntil = undefined
     this.set({ link: 'open', session, error: undefined })
   }
 
@@ -230,7 +251,8 @@ export class ComputerStore {
   }
 
   /** `message` says why the link dropped, when the session knows. */
-  private closed(reason: 'removed' | 'ended', message?: string): void {
+  private closed(reason: SessionEndReason, message?: string): void {
+    const wasOpen = this.current.link === 'open'
     this.detach()
     if (reason === 'removed') {
       clearTimeout(this.saveTimer)
@@ -238,14 +260,39 @@ export class ComputerStore {
       this.set({ link: 'removed', session: undefined, lists: undefined, listsState: 'none' })
       return
     }
-    this.set({ link: 'closed', session: undefined, error: message, listsState: this.current.lists ? 'saved' : 'none' })
+    const listsState = this.current.lists ? 'saved' : 'none'
+    // A link that was up and only lost its path reconnects without a banner: the lists stay on
+    // screen and the computer reads "Connecting…" until it is back.
+    if (reason === 'lost' && wasOpen) {
+      this.quietUntil = Date.now() + (this.options.quietReconnectMs ?? QUIET_RECONNECT_MS)
+      if (this.quietRetry({ session: undefined, listsState })) return
+    }
+    this.quietUntil = undefined
+    this.set({ link: 'closed', session: undefined, error: message, listsState })
     this.scheduleRetry()
   }
 
-  private scheduleRetry(): void {
+  /**
+   * Schedules the next attempt and keeps the link "connecting" without an error, while the quiet
+   * window lasts and that attempt starts inside it. Returns false when the failure must show.
+   */
+  private quietRetry(change: Partial<ComputerView> = {}): boolean {
+    const delay = this.nextDelay()
+    if (this.quietUntil === undefined || delay === undefined || Date.now() + delay > this.quietUntil) return false
+    this.set({ ...change, link: 'connecting', error: undefined })
+    this.scheduleRetry()
+    return true
+  }
+
+  private nextDelay(): number | undefined {
     const delays = this.options.reconnectDelaysMs ?? RECONNECT_DELAYS_MS
-    if (this.disposed || !this.listeners.size || this.attempts >= delays.length) return
-    const delay = delays[this.attempts++]
+    return this.disposed || !this.listeners.size || this.attempts >= delays.length ? undefined : delays[this.attempts]
+  }
+
+  private scheduleRetry(): void {
+    const delay = this.nextDelay()
+    if (delay === undefined) return
+    this.attempts++
     clearTimeout(this.retryTimer)
     this.retryTimer = setTimeout(() => {
       this.retryTimer = undefined

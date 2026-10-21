@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { RealComputerSession } from '../../src/connection/computerSession'
 import { ComputerStore, memoryListsCache } from '../../src/connection/computerStore'
 import { LISTS_THREAD_ID, parseLists } from '../../src/connection/lists'
-import type { ComputerLists, ComputerSession, ListsHandlers, SessionState } from '../../src/connection/types'
+import type { ComputerLists, ComputerSession, ListsHandlers, SessionEndReason, SessionState } from '../../src/connection/types'
+import { isUnreachable, unreachable } from '../../src/connection/types'
+import { NetError } from '../../src/net/errors'
 import { newId } from '../../src/net/canonical'
 import { generateNodeKeys } from '../../src/net/keys'
 import { LeafSession } from '../../src/net/session'
@@ -148,10 +150,12 @@ class StubSession implements ComputerSession {
   current: SessionState = 'open'
   handlers = new Set<ListsHandlers>()
   private listeners = new Set<(state: SessionState) => void>()
-  reason: 'removed' | 'ended' = 'ended'
+  reason: SessionEndReason = 'ended'
+  message?: string
   state() { return this.current }
   onStateChange(listener: (state: SessionState) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   endReason() { return this.current === 'closed' ? this.reason : undefined }
+  endMessage() { return this.current === 'closed' ? this.message : undefined }
   listProjects = vi.fn()
   listThreads = vi.fn()
   createThread = vi.fn()
@@ -171,7 +175,7 @@ class StubSession implements ComputerSession {
   contextUsage = vi.fn()
   watchLists(handlers: ListsHandlers) { this.handlers.add(handlers); return () => { this.handlers.delete(handlers) } }
   push(lists: ComputerLists) { for (const handler of this.handlers) { handler.lists(lists); handler.state?.('live') } }
-  close(reason: 'removed' | 'ended' = 'ended') { this.reason = reason; this.current = 'closed'; for (const listener of this.listeners) listener('closed') }
+  close(reason: SessionEndReason = 'ended', message?: string) { this.reason = reason; this.message = message; this.current = 'closed'; for (const listener of this.listeners) listener('closed') }
 }
 
 describe('computer store', () => {
@@ -228,6 +232,93 @@ describe('computer store', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('reconnects without a banner when the relay drops an open link, and says so only when it stays down', async () => {
+    vi.useFakeTimers()
+    try {
+      let down = false
+      const sessions: StubSession[] = []
+      const states: string[] = []
+      const store = new ComputerStore({
+        nodeId: 'node',
+        accountId: 'acct',
+        cache: memoryListsCache(),
+        reconnectDelaysMs: [1_000, 2_000, 5_000, 10_000, 30_000],
+        drop: () => undefined,
+        open: async () => {
+          if (down) throw unreachable(new Error('Studio Mac is offline. Open Mousse on it and try again.'))
+          sessions.push(new StubSession())
+          return sessions.at(-1)!
+        },
+      })
+      store.subscribe(() => states.push(`${store.view().link}:${store.view().error ?? ''}`))
+      await vi.advanceTimersByTimeAsync(0)
+      sessions[0].push(lists('First'))
+      // Mousse ID deploys and its relay restarts: the socket closes with 1006.
+      down = true
+      sessions[0].close('lost', 'The relay closed the connection (code 1006).')
+      expect(store.view()).toMatchObject({ link: 'connecting', listsState: 'saved', lists: { threads: [{ title: 'First' }] } })
+      expect(store.view().error).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(store.view()).toMatchObject({ link: 'connecting' })
+      down = false
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(store.view().link).toBe('open')
+      expect(sessions).toHaveLength(2)
+      expect(states.filter((state) => state.startsWith('closed') || state.startsWith('error'))).toEqual([])
+
+      // A relay that stays down is reported once the quiet window is over.
+      down = true
+      sessions[1].close('lost', 'The relay closed the connection (code 1006).')
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(store.view()).toMatchObject({ link: 'error', error: 'Studio Mac is offline. Open Mousse on it and try again.' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('still shows a session that ended for another reason, and a refusal while reconnecting', async () => {
+    vi.useFakeTimers()
+    try {
+      let refuse = false
+      const sessions: StubSession[] = []
+      const store = new ComputerStore({
+        nodeId: 'node',
+        accountId: 'acct',
+        cache: memoryListsCache(),
+        reconnectDelaysMs: [100, 100],
+        drop: () => undefined,
+        open: async () => {
+          if (refuse) throw new Error('Studio Mac no longer accepts this phone. Add it again.')
+          sessions.push(new StubSession())
+          return sessions.at(-1)!
+        },
+      })
+      store.subscribe(vi.fn())
+      await vi.advanceTimersByTimeAsync(0)
+      sessions[0].close('ended', 'Handshake exceeds 16 KiB.')
+      expect(store.view()).toMatchObject({ link: 'closed', error: 'Handshake exceeds 16 KiB.' })
+      await vi.advanceTimersByTimeAsync(100)
+      expect(store.view().link).toBe('open')
+      refuse = true
+      sessions[1].close('lost', 'The relay closed the connection (code 1006).')
+      expect(store.view()).toMatchObject({ link: 'connecting' })
+      await vi.advanceTimersByTimeAsync(100)
+      expect(store.view()).toMatchObject({ link: 'error', error: 'Studio Mac no longer accepts this phone. Add it again.' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('tells a path that is only unreachable from a refusal or a broken handshake', () => {
+    expect(isUnreachable(new NetError('route_unreachable', 'The relay closed the connection (code 1006).'))).toBe(true)
+    expect(isUnreachable(new NetError('peer_offline'))).toBe(true)
+    expect(isUnreachable(unreachable(new Error('Studio Mac is offline.')))).toBe(true)
+    expect(isUnreachable(new NetError('revoked'))).toBe(false)
+    expect(isUnreachable(new NetError('too_large', 'Handshake exceeds 16 KiB.'))).toBe(false)
+    expect(isUnreachable(new Error('Studio Mac no longer accepts this phone.'))).toBe(false)
+    expect(isUnreachable(undefined)).toBe(false)
   })
 
   it('reports a failed connection and tries again on request', async () => {

@@ -332,8 +332,27 @@ export interface ContextUsage {
 
 export type SessionState = 'connecting' | 'open' | 'closed'
 
-/** Why a session closed: the user's computers removed this phone, or anything else (network, timeout, the app). */
-export type SessionEndReason = 'removed' | 'ended'
+/**
+ * Why a session closed: the user's computers removed this phone; the path to the computer dropped
+ * (the network, the Mousse ID relay restarting, the computer going away), which the phone retries
+ * on its own; or anything else (a refusal, the app).
+ */
+export type SessionEndReason = 'removed' | 'lost' | 'ended'
+
+/** Codes of failures that say only that the computer or Mousse ID could not be reached just now. */
+const UNREACHABLE = new Set(['peer_offline', 'route_unreachable', 'deadline_exceeded', 'unavailable', 'offline', 'rate_limited'])
+
+/** Marks a failure to reach a computer that the phone retries on its own before showing it. */
+export function unreachable<T extends Error>(error: T): T {
+  return Object.assign(error, { unreachable: true })
+}
+
+/** Whether a failure only says the computer or Mousse ID could not be reached just now. */
+export function isUnreachable(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  const value = error as Error & { unreachable?: unknown; code?: unknown }
+  return value.unreachable === true || (typeof value.code === 'string' && UNREACHABLE.has(value.code))
+}
 
 export interface ComputerSession {
   readonly nodeId: string

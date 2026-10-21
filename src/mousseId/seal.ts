@@ -10,7 +10,11 @@ const MATCH_DOMAIN = 'mousse-net/enroll-match/v1'
 const NONCE_BYTES = 12
 const TAG_BYTES = 16
 const KEY_BYTES = 32
-const SEALED_MAX_CHARS = 16_384
+/**
+ * The desktop's limit (SEALED_INVITE_MAX_BYTES, 64 KiB). The invite carries the computer's whole
+ * roster, about 2.3 KB per device once sealed, so the earlier 16 KiB fit only four devices.
+ */
+const SEALED_MAX_CHARS = 64 * 1024
 
 function invalidSeal(): never {
   throw new MousseIdError('bad_response', 'The invite from the computer could not be opened. Try again.')

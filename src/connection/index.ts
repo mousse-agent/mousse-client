@@ -23,6 +23,7 @@ import { EnrollmentStore, type LoadedEnrollment } from './enrollmentStore'
 import type { NetworkSignals } from './networkSignals'
 import { DIRECT_OPEN_TIMEOUT_MS, DIRECT_PING_INTERVAL_MS, PathSession, type DirectLink, type PathSessionOptions } from './pathSession'
 import type { AccountState, Computer, ComputerSession, EnrollmentProgress, MousseConnection, SessionEndReason } from './types'
+import { isUnreachable, unreachable } from './types'
 
 /**
  * The longest wait between registration renewals while a session is open. A registration lasts 60
@@ -117,9 +118,9 @@ function connectFailure(error: unknown, name: string): Error {
   switch (codeOf(error)) {
     case 'peer_offline':
     case 'route_unreachable':
-      return new Error(`${name} is offline. Open Mousse on it and try again.`)
+      return unreachable(new Error(`${name} is offline. Open Mousse on it and try again.`))
     case 'deadline_exceeded':
-      return new Error(`${name} did not answer in time. Try again.`)
+      return unreachable(new Error(`${name} did not answer in time. Try again.`))
     case 'revoked':
     case 'not_member':
       return removedError(name)
@@ -496,7 +497,8 @@ class RealConnection implements MousseConnection {
     }
     scheduleRenewal()
     const endReason = (error?: Error): SessionEndReason => {
-      if (!removedByRoster && !(error instanceof NetError && REMOVED.has(error.code))) return 'ended'
+      if (!removedByRoster && !(error instanceof NetError && REMOVED.has(error.code)))
+        return isUnreachable(error) ? 'lost' : 'ended'
       void this.threads.clearComputer(accountId, nodeId)
       void this.forget(ownNode).catch(() => undefined)
       return 'removed'

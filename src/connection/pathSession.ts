@@ -39,6 +39,14 @@ export const RELAY_LIVENESS_TIMEOUT_MS = 6_000
 export const DIRECT_PING_INTERVAL_MS = 5_000
 const NETWORK_SETTLE_MS = 300
 const MAX_ATTEMPTS = 3
+/**
+ * Waits before each attempt to open the relay again after the current path dropped. The Mousse ID
+ * relay restarts on every deploy and the computer then registers again, so the first attempts can
+ * find it down or the computer not yet back; requests wait meanwhile.
+ */
+export const RELAY_RECOVERY_DELAYS_MS = [0, 1_000, 2_000, 4_000]
+/** No new relay attempt starts this long after the path dropped; the session closes instead. */
+export const RELAY_RECOVERY_WINDOW_MS = 12_000
 
 export type PathKind = 'relay' | 'direct'
 
@@ -73,6 +81,8 @@ export interface PathSessionOptions {
   settleMs?: number
   /** Tests start probing by hand. */
   autoProbe?: boolean
+  recoveryDelaysMs?: number[]
+  recoveryWindowMs?: number
 }
 
 interface Path {
@@ -115,6 +125,7 @@ export class PathSession implements SessionLink {
   private directSupported = true
   private probeTimer?: ReturnType<typeof setTimeout>
   private settleTimer?: ReturnType<typeof setTimeout>
+  private recoveryWait?: { timer: ReturnType<typeof setTimeout>; resolve: () => void }
   private readonly offNetwork: () => void
 
   constructor(private readonly options: PathSessionOptions) {
@@ -439,28 +450,54 @@ export class PathSession implements SessionLink {
 
   /**
    * Opens the next path after the current one was lost: always the relay, since a direct path is
-   * signaled through an open session. After a relay loss on a computer with a direct path, the
-   * direct path is tried again from the new relay session at once.
+   * signaled through an open session. A relay that is restarting, or a computer that has not
+   * registered with it again yet, gets a few more attempts within a short window before the
+   * session closes, so a brief drop never reaches the screens. After a relay loss on a computer
+   * with a direct path, the direct path is tried again from the new relay session at once.
    */
   private async recover(dead: Path, reason: Error): Promise<void> {
+    const delays = this.options.recoveryDelaysMs ?? RELAY_RECOVERY_DELAYS_MS
+    const until = Date.now() + (this.options.recoveryWindowMs ?? RELAY_RECOVERY_WINDOW_MS)
     let next: Path | undefined
     let failure: unknown
-    try {
-      next = this.track('relay', await this.options.open.relay())
-    } catch (error) {
-      failure = error
+    for (const [index, delay] of delays.entries()) {
+      if (index > 0 && Date.now() + delay >= until) break
+      if (delay > 0) await this.waitToRecover(delay)
+      if (this.stateValue !== 'open') return
+      try {
+        next = this.track('relay', await this.options.open.relay())
+        break
+      } catch (error) {
+        failure = error
+        const code = codeOf(error)
+        // A refusal is final; only a path that is not there yet is worth another attempt.
+        if (!code || !PATH_LOST.has(code)) break
+      }
     }
     if (this.stateValue !== 'open') {
       if (next) this.retire(next)
       return
     }
     if (!next) {
-      // Both paths failed: close as before. A refusal says more than the lost path.
+      // Every attempt failed: close as before. A refusal says more than the lost path.
       const code = codeOf(failure)
       return this.fail(code && !PATH_LOST.has(code) && code !== 'cancelled' ? (failure as Error) : reason)
     }
     this.adopt(next)
     if (dead.kind === 'relay' && this.endpoints.length) this.probeSoon(0)
+  }
+
+  /** Waits before the next relay attempt; closing the session ends the wait. */
+  private waitToRecover(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      this.recoveryWait = {
+        timer: setTimeout(() => {
+          this.recoveryWait = undefined
+          resolve()
+        }, ms),
+        resolve,
+      }
+    })
   }
 
   private closedError(): Error {
@@ -473,6 +510,11 @@ export class PathSession implements SessionLink {
     this.stateValue = 'closed'
     clearTimeout(this.probeTimer)
     clearTimeout(this.settleTimer)
+    if (this.recoveryWait) {
+      clearTimeout(this.recoveryWait.timer)
+      this.recoveryWait.resolve()
+      this.recoveryWait = undefined
+    }
     this.offNetwork()
     for (const listener of [...this.stateListeners]) listener('closed')
     const subscriptions = [...this.subscriptions.values()]
