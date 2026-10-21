@@ -5,7 +5,7 @@ import { memo, useMemo, useState, type ReactNode } from 'react'
 import { marked, type Token, type Tokens } from 'marked'
 import { stripApplets } from '../../connection/timelineItems'
 import { copyText, openLink, safeHref } from './actions'
-import { highlightCode } from './highlight'
+import { useHighlight } from './useHighlight'
 import { Check, Copy } from './icons'
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'" }
@@ -31,7 +31,7 @@ function prepare(source: string): string {
 
 export function CodeBlock({ code, language }: { code: string; language?: string }) {
   const [copied, setCopied] = useState(false)
-  const html = useMemo(() => highlightCode(code, language), [code, language])
+  const html = useHighlight(code, language)
   return (
     <div className="m-code">
       <div className="m-code__header">

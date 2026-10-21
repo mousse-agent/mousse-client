@@ -28,7 +28,7 @@ import {
   type DiffLine,
   type ToolState,
 } from './format'
-import { highlightCode, languageForPath } from './highlight'
+import { languageForPath, useHighlight } from './useHighlight'
 import {
   Brain,
   Check,
@@ -223,7 +223,7 @@ function DiffView({ lines, path }: { lines: DiffLine[]; path: string }) {
 }
 
 function DiffText({ text, language }: { text: string; language?: string }) {
-  const html = useMemo(() => (language ? highlightCode(text, language) : undefined), [text, language])
+  const html = useHighlight(text, language)
   return html !== undefined ? <span className="m-tl-diff__text hljs" dangerouslySetInnerHTML={{ __html: html || ' ' }} /> : <span className="m-tl-diff__text">{text || ' '}</span>
 }
 

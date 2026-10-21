@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach } from 'vitest'
 import type { ChatItem, ThreadDisplayState } from '../../src/connection/types'
 import { Timeline } from '../../src/ui/timeline/Timeline'
@@ -43,8 +43,8 @@ const items: ChatItem[] = [
 const idle: ThreadDisplayState = { questions: [] }
 
 describe('timeline', () => {
-  it('renders turns like the desktop: groups, cards, markdown, toolbar and edits', () => {
-    render(<Timeline items={items} display={idle} active={false} />)
+  it('renders turns like the desktop: groups, cards, markdown, toolbar and edits', async () => {
+    const { container } = render(<Timeline items={items} display={idle} active={false} />)
     // User pills and bubble.
     expect(screen.getByText('Fix the relay')).toBeInTheDocument()
     expect(screen.getByText('log.txt')).toBeInTheDocument()
@@ -61,6 +61,8 @@ describe('timeline', () => {
     // Markdown: table, highlighted code, safe link, raw HTML as text.
     expect(screen.getByRole('columnheader', { name: 'Case' }).closest('table')).toHaveTextContent('retry')
     expect(screen.getByText('ts')).toBeInTheDocument()
+    // The highlighter loads on first use, then colours the block.
+    await waitFor(() => expect(container.querySelector('.m-code .hljs-keyword')).toHaveTextContent('const'))
     expect(screen.getByRole('link', { name: 'Docs' })).toHaveAttribute('href', 'https://example.com/')
     expect(screen.getByText(/<b>/)).toBeInTheDocument()
     // Worked-for line, turn file changes and response metadata.

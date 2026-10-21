@@ -1,5 +1,6 @@
 // Syntax highlighting for code blocks. highlight.js escapes the code it returns, so its HTML is
-// safe to insert. Only common languages are bundled to keep the app small.
+// safe to insert. Only common languages are bundled, and this module loads on first use
+// (see useHighlight.ts) so it stays out of the app's first download.
 import hljs from 'highlight.js/lib/core'
 import bash from 'highlight.js/lib/languages/bash'
 import c from 'highlight.js/lib/languages/c'
@@ -45,11 +46,4 @@ export function highlightCode(code: string, language: string | undefined): strin
   } catch {
     return undefined
   }
-}
-
-/** Guesses a language from a file name, for diffs and file previews. */
-export function languageForPath(path: string): string | undefined {
-  const ext = path.split('.').pop()?.toLowerCase()
-  if (!ext || ext === path.toLowerCase()) return undefined
-  return hljs.getLanguage(ext) ? ext : undefined
 }
