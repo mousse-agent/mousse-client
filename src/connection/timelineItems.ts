@@ -2,10 +2,12 @@
 // renderer adapter does (mousse/src/renderer/chat/adapters/mousseToUI.ts): tool names are
 // normalized, composer markers are lifted out of user text, consecutive thoughts merge and
 // repeated assistant text folds. Everything here reads untrusted JSON from the computer.
+import { publishedAppletParts, streamingAppletParts } from './applets'
 import type {
   ChatImage,
   ChatItem,
   ChatItemKind,
+  ChatPart,
   ChatReference,
   ChatResponseMeta,
   ChatToolCall,
@@ -247,16 +249,6 @@ function errorOf(value: unknown): { message: string; code?: string } | undefined
 const modelLabel = (value: unknown): string =>
   isObject(value) ? [str(value.provider), str(value.model)].filter(Boolean).join(' / ') : ''
 
-/** Strips the desktop's interactive applet fences: the phone cannot run applets. */
-export function stripApplets(text: string): { text: string; applets: number } {
-  let applets = 0
-  const stripped = text.replace(/^(`{3,}|~{3,})[ \t]*mousse-applet[^\r\n]*\r?\n[\s\S]*?^\1[ \t]*(?:\r?\n|$)/gm, () => {
-    applets++
-    return ''
-  })
-  return { text: applets ? stripped.trim() : text, applets }
-}
-
 /** One desktop message as a phone item, following the desktop adapter. Hidden or empty rows map to nothing. */
 export function toChatItem(message: DesktopMessage): ChatItem | undefined {
   if (message.hidden) return undefined
@@ -339,8 +331,15 @@ export function toChatItem(message: DesktopMessage): ChatItem | undefined {
     files = parsed.files.filter((name) => !imageNames.has(name))
     references = parsed.references
   }
-  if (message.role === 'assistant') text = text.replace(/(?:[ \t]*\r?\n)*[ \t]*\(Stopped\)\s*$/u, '')
-  if (!text.trim() && !images.length && !files.length && !references.length && !error) return undefined
+  let parts: ChatPart[] | undefined
+  if (message.role === 'assistant') {
+    text = text.replace(/(?:[ \t]*\r?\n)*[ \t]*\(Stopped\)\s*$/u, '')
+    // Like the desktop: applets run only once the reply is finished and the computer published them.
+    parts = streaming ? (text.includes('mousse-applet') ? streamingAppletParts(text) : undefined) : publishedAppletParts(message.content, message.presentationParts)
+    if (parts && !parts.some((part) => part.type !== 'text')) parts = undefined
+    if (parts) text = parts.map((part) => (part.type === 'text' ? part.text : '')).join('').replace(/\n{3,}/g, '\n\n').trim()
+  }
+  if (!text.trim() && !parts && !images.length && !files.length && !references.length && !error) return undefined
   const meta = message.role === 'assistant' ? metaOf(message.responseMetadata) : undefined
   return {
     ...base,
@@ -353,6 +352,7 @@ export function toChatItem(message: DesktopMessage): ChatItem | undefined {
     ...(references.length ? { references } : {}),
     ...(error ? { error } : {}),
     ...(meta ? { meta } : {}),
+    ...(parts ? { parts } : {}),
   }
 }
 

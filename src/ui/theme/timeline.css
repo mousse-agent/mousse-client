@@ -299,7 +299,23 @@ button.m-tl-card__header:active { background: var(--ui-pressed); }
 .m-md-table th, .m-md-table td { padding: 6px 10px; border-bottom: 1px solid var(--an-border-color); text-align: left; vertical-align: top; white-space: nowrap; }
 .m-md-table th { background: var(--an-tool-background); font-weight: 600; }
 .m-md-table tr:last-child td { border-bottom: 0; }
-.m-md-applet { margin-top: 0.5em; padding: 8px 12px; border: 1px dashed var(--ui-line-strong); border-radius: var(--an-tool-border-radius); color: var(--text-secondary); font-size: 14px; }
+
+/* In-response applets, like the desktop's .mousse-applet card. */
+.m-applet { margin: 12px 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface-base); color: var(--text-primary); }
+.m-applet__header { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 6px 6px 12px; border-bottom: 1px solid var(--border); }
+.m-applet__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
+.m-applet__actions { display: flex; flex: 0 0 auto; gap: 4px; }
+.m-applet__button { min-height: 32px; padding: 0 12px; border: 1px solid var(--ui-line-strong); border-radius: var(--ui-control-radius, 6px); background: transparent; color: inherit; font: inherit; font-size: 13px; }
+.m-applet__button--primary { border-color: transparent; background: var(--accent); color: var(--ui-on-accent, #fff); }
+.m-applet__frame { display: block; width: 100%; border: 0; background: var(--surface-base); }
+.m-applet__idle { display: grid; place-items: center; min-height: 96px; padding: 16px; color: var(--text-secondary); font-size: 13px; text-align: center; }
+.m-applet--pending .m-applet__idle { background: var(--surface-strong); }
+.m-applet__error { margin: 0; padding: 8px 12px; color: var(--danger); font-size: 13px; }
+.m-applet__request { padding: 10px 12px; border-top: 1px solid var(--border); font-size: 13px; }
+.m-applet__request p { margin: 0; max-height: 140px; overflow: auto; white-space: pre-wrap; }
+.m-applet__link { display: inline-block; margin: 8px 16px 0 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-decoration: underline; }
+.m-applet__error .m-applet__link { display: block; }
+.m-applet__footer { padding: 6px 12px; font-size: 11px; opacity: 0.6; }
 
 /* Code blocks: bordered, 28px header on the tool background. */
 .m-code { margin: 0 0 0.75em; border: 1px solid var(--an-border-color); border-radius: var(--an-tool-border-radius); overflow: hidden; background: var(--an-code-background); }

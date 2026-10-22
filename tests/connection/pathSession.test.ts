@@ -241,6 +241,23 @@ describe('path session', () => {
     expect(seen).toEqual([1, 2, 3, 4, 5, 6])
   })
 
+  it('passes on replayed records that a live record overtook, once each', async () => {
+    const t = await setup()
+    const stream = 'str_thread'
+    const r = [1, 2, 3, 4].map((n) => t.w.record(stream, n))
+    const seen: number[] = []
+    t.session.subscribe(stream, { epoch: 1, seq: 0 }, {
+      records: (records: StreamRecord[]) => seen.push(...records.map((record) => record.seq)),
+    })
+    await t.relay.remote.next('subscribe')
+    // Live 4 arrives on the control lane before the replay of 1 to 3 on the bulk lane.
+    await events(t.relay.remote, stream, [r[3]])
+    await events(t.relay.remote, stream, [r[0], r[1], r[2]])
+    await events(t.relay.remote, stream, [r[3]])
+    await until(() => seen.length >= 4)
+    expect(seen).toEqual([4, 1, 2, 3])
+  })
+
   it('finishes requests in flight on the old path and sends new ones on the new path', async () => {
     const t = await setup()
     const send = t.session.rpc('orchestrator.send', { threadId: 't1', content: 'hi' }, { idem: 'idem-1', deadlineMs: 60_000 })

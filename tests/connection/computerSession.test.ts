@@ -8,7 +8,7 @@ import { generateNodeKeys } from '../../src/net/keys'
 import { LeafSession } from '../../src/net/session'
 import { streamPair } from '../../src/net/stream'
 import { delegate, roster, testComputer, testUser } from '../net/fixtures'
-import { channelOf, fakeComputer, message, snapshotBodies, until } from './helpers'
+import { appletReply, channelOf, fakeComputer, message, snapshotBodies, until } from './helpers'
 
 async function setup() {
   const user = testUser()
@@ -115,6 +115,66 @@ describe('computer session', () => {
 
     unsubscribe()
     expect(await remote.next('unsubscribe')).toEqual({ t: 'unsubscribe', stream: 'str_t1' })
+    session.close()
+  })
+
+  it('reads the thread again when the computer skips a live record of a large applet reply', async () => {
+    const { session, remote } = await setup()
+    const seen: ChatItem[][] = []
+    const opening = session.openThread('t1', (items) => seen.push(items))
+    await remote.answer('bridge.thread.open', { descriptor: { id: 'str_t1' }, head: { epoch: 1, seq: 3 } })
+    await remote.next('snapshot.get')
+    await remote.snapshotChunk(
+      'str_t1',
+      snapshotBodies('t1', { messages: [message('m1', 'user', 'Make a budget tool')] }).map((entry) => remote.record('str_t1', entry.type, entry.body)),
+    )
+    await opening
+    await remote.next('subscribe')
+    await remote.send({ t: 'caughtUp', stream: 'str_t1' })
+
+    // The finished reply is over 48 KiB, so the computer republishes the whole thread as a fresh
+    // snapshot: begin, 32 KiB chunks and end. An older computer dropped some of those records.
+    const reply = appletReply('m2', 2_000)
+    const refreshed = { messages: [message('m1', 'user', 'Make a budget tool'), reply] }
+    const records = snapshotBodies('t1', refreshed).map((entry) => remote.record('str_t1', entry.type, entry.body))
+    expect(records.length).toBeGreaterThan(4)
+    for (const [index, record] of records.entries()) if (index !== 2) await remote.events('str_t1', [record])
+
+    // The phone notices the gap and reads the thread again instead of staying behind for good.
+    expect(await remote.next('unsubscribe')).toEqual({ t: 'unsubscribe', stream: 'str_t1' })
+    await remote.next('snapshot.get')
+    await remote.snapshotChunk('str_t1', snapshotBodies('t1', refreshed).map((entry) => remote.record('str_t1', entry.type, entry.body)))
+    expect(await remote.next('subscribe')).toEqual({ t: 'subscribe', stream: 'str_t1', after: { epoch: 1, seq: remote.seq } })
+    await until(() => seen.at(-1)?.length === 2)
+    expect(seen.at(-1)?.[1]).toMatchObject({ id: 'm2', role: 'assistant', status: 'done', text: 'Here is a budget tool.\n\nMove the slider.' })
+    expect(seen.at(-1)?.[1].parts?.[1]).toMatchObject({ type: 'applet', applet: { title: 'Budget', source: { title: 'Budget' } } })
+    expect(session.state()).toBe('open')
+    session.close()
+  })
+
+  it('holds live records that overtake the replay until the replay fills the gap', async () => {
+    const { session, remote } = await setup()
+    const seen: ChatItem[][] = []
+    const opening = session.openThread('t1', (items) => seen.push(items))
+    await remote.answer('bridge.thread.open', { descriptor: { id: 'str_t1' }, head: { epoch: 1, seq: 3 } })
+    await remote.next('snapshot.get')
+    await remote.snapshotChunk(
+      'str_t1',
+      snapshotBodies('t1', { messages: [message('m1', 'user', 'Hi')] }).map((entry) => remote.record('str_t1', entry.type, entry.body)),
+    )
+    await opening
+    await remote.next('subscribe')
+    const event = (id: string, at: number) =>
+      remote.record('str_t1', 'thread.event', { threadId: 't1', type: 'thread.message', data: { threadId: 't1', message: message(id, 'assistant', id, at) } })
+    const replayed = event('m2', 2_000)
+    const live = event('m3', 3_000)
+    // Live records travel on the control lane and can arrive before replayed ones on the bulk lane.
+    await remote.events('str_t1', [live])
+    await remote.events('str_t1', [replayed], true)
+    await remote.send({ t: 'caughtUp', stream: 'str_t1' })
+    await until(() => seen.at(-1)?.length === 3)
+    expect(seen.at(-1)?.map((item) => item.id)).toEqual(['m1', 'm2', 'm3'])
+    expect(remote.has('snapshot.get')).toBe(false)
     session.close()
   })
 

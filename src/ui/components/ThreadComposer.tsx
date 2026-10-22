@@ -30,7 +30,7 @@ function composerOptions(session: ComputerSession, threadId: string): Promise<Co
  * every device sees the same choice), mode, skills, slash commands, images, the queue and context.
  * A computer without these controls (an older Mousse) still gets a working text composer.
  */
-export function ThreadComposer({ session, threadId, thread }: { session: ComputerSession; threadId: string; thread: ThreadState }) {
+export function ThreadComposer({ session, threadId, thread, addition }: { session: ComputerSession; threadId: string; thread: ThreadState; addition?: { text: string; key: number } }) {
   const router = useRouter()
   const [options, setOptions] = useState<ComposerOptions>()
   const [model, setModel] = useState<ModelSelection>()
@@ -40,7 +40,10 @@ export function ThreadComposer({ session, threadId, thread }: { session: Compute
   const [queue, setQueue] = useState<QueuedMessage[]>([])
   const [usage, setUsage] = useState<ContextUsage>()
   const [error, setError] = useState<string>()
-  const [prefill, setPrefill] = useState<{ text: string; key: number }>()
+  const [prefill, setPrefill] = useState<{ text: string; key: number; append?: boolean }>()
+  useEffect(() => {
+    if (addition) setPrefill({ ...addition, append: true })
+  }, [addition])
   const alive = useRef(true)
   const { active } = thread
 

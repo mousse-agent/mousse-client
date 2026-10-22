@@ -3,7 +3,7 @@
 // display stream.
 import { newId } from '../net/canonical'
 import { NetError } from '../net/errors'
-import type { SessionLink, StreamHead } from '../net/session'
+import type { SessionLink, StreamHead, StreamRecord } from '../net/session'
 import { ListsWatch } from './lists'
 import { ThreadProjection } from './threadProjection'
 import type { CachedThread, ThreadCacheScope } from './threadCache'
@@ -196,6 +196,8 @@ const GONE = new Set(['not_found', 'stream_unknown'])
 
 const atOrBefore = (record: { epoch: number; seq: number }, head: StreamHead) =>
   record.epoch < head.epoch || (record.epoch === head.epoch && record.seq <= head.seq)
+/** Live records held past a gap while the replay catches up; more than this reads the thread again. */
+const EARLY_MAX_RECORDS = 1_000
 
 /** One thread's display stream, shared by every open view of that thread. */
 class ThreadWatch {
@@ -211,6 +213,10 @@ class ThreadWatch {
   private seed?: CachedThread
   private unsubscribe?: () => void
   private resyncing?: Promise<void>
+  /** Records past a gap, by sequence: live ones can overtake the replay that fills it. */
+  private early = new Map<number, StreamRecord>()
+  /** The subscription finished its replay; a gap now means the computer skipped records. */
+  private caught = false
   private saveTimer?: ReturnType<typeof setTimeout>
   private dirty = false
   private closed = false
@@ -312,22 +318,17 @@ class ThreadWatch {
 
   private follow(after: StreamHead, resumed: boolean): void {
     const stream = this.stream!
+    this.early.clear()
+    this.caught = false
     this.unsubscribe = this.leaf.subscribe(stream, after, {
-      records: (records) => {
-        // Never apply a record twice, whatever the path replays.
-        const head = this.head
-        const fresh = head ? records.filter((record) => !atOrBefore(record, head)) : records
-        if (!fresh.length) return
-        const changed = this.projection.apply(fresh)
-        const last = fresh[fresh.length - 1]
-        this.head = { epoch: last.epoch, seq: last.seq }
-        this.changed()
-        if (changed) this.emit()
-      },
+      records: (records) => this.receive(records),
       delta: (data) => {
         if (this.projection.applyDelta(data)) this.emit()
       },
       caughtUp: () => {
+        this.caught = true
+        // A gap the replay did not fill: records are missing, so the state cannot follow on.
+        if (this.early.size) return this.resync()
         if (resumed) this.markReady()
       },
       snapshotRequired: () => this.resync(),
@@ -336,6 +337,35 @@ class ThreadWatch {
         if (this.leaf.state === 'open') this.resync()
       },
     })
+  }
+
+  /** Applies records in stream order, exactly once; a record the stream skipped reads the thread again. */
+  private receive(records: StreamRecord[]): void {
+    let head = this.head!
+    const ready: StreamRecord[] = []
+    for (const record of records) {
+      if (atOrBefore(record, head) || this.early.has(record.seq)) continue
+      // A new generation (the computer restarted) cannot follow on from this one.
+      if (record.epoch !== head.epoch) return this.resync()
+      if (record.seq !== head.seq + 1) {
+        this.early.set(record.seq, record)
+        continue
+      }
+      ready.push(record)
+      head = { epoch: record.epoch, seq: record.seq }
+      for (let next = this.early.get(head.seq + 1); next; next = this.early.get(head.seq + 1)) {
+        this.early.delete(next.seq)
+        ready.push(next)
+        head = { epoch: next.epoch, seq: next.seq }
+      }
+    }
+    if (ready.length) {
+      const changed = this.projection.apply(ready)
+      this.head = head
+      this.changed()
+      if (changed) this.emit()
+    }
+    if (this.early.size && (this.caught || this.early.size > EARLY_MAX_RECORDS)) this.resync()
   }
 
   /** A resumed thread missed the snapshot that carries pending questions; ask for them. */
@@ -355,6 +385,7 @@ class ThreadWatch {
     if (this.closed || this.resyncing) return
     this.unsubscribe?.()
     this.unsubscribe = undefined
+    this.early.clear()
     this.resyncing = this.load()
       .catch((error: unknown) => {
         if (this.closed) return

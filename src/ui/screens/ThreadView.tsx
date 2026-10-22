@@ -20,6 +20,8 @@ export function ThreadView({ session, threadId, onActivityChange }: ThreadViewPr
   const scroller = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
   const [away, setAway] = useState(false)
+  const [addition, setAddition] = useState<{ text: string; key: number }>()
+  const addToDraft = useCallback((text: string) => setAddition({ text, key: Date.now() }), [])
   const send = thread.send
   const approvePlan = useCallback(async (markdown: string) => {
     // Like the desktop's plan card: approve, then build.
@@ -67,6 +69,7 @@ export function ThreadView({ session, threadId, onActivityChange }: ThreadViewPr
               display={thread.display}
               active={thread.active}
               onApprovePlan={approvePlan}
+              onAddToDraft={addToDraft}
               onAnswer={thread.answer}
               onDismiss={thread.dismiss}
             />
@@ -77,7 +80,7 @@ export function ThreadView({ session, threadId, onActivityChange }: ThreadViewPr
       {away && <JumpToLatest live={thread.active} onClick={jump} />}
       <div className="m-thread__composer">
         {thread.error && <Notice>{thread.error}</Notice>}
-        <ThreadComposer session={session} threadId={threadId} thread={thread} />
+        <ThreadComposer session={session} threadId={threadId} thread={thread} addition={addition} />
       </div>
     </div>
     </SpeechProvider>

@@ -42,8 +42,8 @@ export interface ComposerProps {
   placeholder?: string
   /** Keeps the unsent text across visits (per thread). */
   draftKey?: string
-  /** Replaces the text, for example when a queued message is moved back for editing. */
-  prefill?: { text: string; key: number }
+  /** Replaces the text, for example when a queued message is moved back for editing; `append` adds it after the text instead. */
+  prefill?: { text: string; key: number; append?: boolean }
   controls?: ComposerControls
   /** The computer's speech models: an empty composer's button records and types the transcript. */
   speech?: ComputerSpeech
@@ -133,7 +133,7 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
 
   useEffect(() => {
     if (!prefill) return
-    setText(prefill.text)
+    setText((text) => (prefill.append && text.trim() ? `${text}\n\n${prefill.text}` : prefill.text))
     field.current?.focus()
   }, [prefill])
 

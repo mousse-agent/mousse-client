@@ -3,7 +3,6 @@
 // so raw HTML in a reply shows as text and never runs.
 import { memo, useMemo, useState, type ReactNode } from 'react'
 import { marked, type Token, type Tokens } from 'marked'
-import { stripApplets } from '../../connection/timelineItems'
 import { copyText, openLink, safeHref } from './actions'
 import { useHighlight } from './useHighlight'
 import { Check, Copy } from './icons'
@@ -203,21 +202,9 @@ function blocks(tokens: Token[], key = 'b'): ReactNode[] {
 export interface MarkdownProps {
   text: string
   className?: string
-  /** Shows a note in place of interactive applets, which only run on the computer. */
-  applets?: boolean
 }
 
-export const Markdown = memo(function Markdown({ text, className = '', applets = false }: MarkdownProps) {
-  const { tokens, appletCount } = useMemo(() => {
-    const stripped = applets ? stripApplets(text) : { text, applets: 0 }
-    return { tokens: marked.lexer(prepare(stripped.text), { gfm: true, breaks: false }), appletCount: stripped.applets }
-  }, [text, applets])
-  return (
-    <div className={`m-md ${className}`.trim()}>
-      {blocks(tokens)}
-      {appletCount > 0 && (
-        <div className="m-md-applet">{appletCount === 1 ? 'An interactive applet' : `${appletCount} interactive applets`} — open this thread on the computer to use {appletCount === 1 ? 'it' : 'them'}.</div>
-      )}
-    </div>
-  )
+export const Markdown = memo(function Markdown({ text, className = '' }: MarkdownProps) {
+  const tokens = useMemo(() => marked.lexer(prepare(text), { gfm: true, breaks: false }), [text])
+  return <div className={`m-md ${className}`.trim()}>{blocks(tokens)}</div>
 })

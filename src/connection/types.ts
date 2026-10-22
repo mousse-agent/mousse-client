@@ -170,6 +170,32 @@ export interface ChatResponseMeta {
   tokensPerSecond?: number
 }
 
+/** An in-response applet's source, as the desktop validates it (mousse/src/shared/applets.ts). */
+export interface AppletSubmission {
+  schemaVersion: 1
+  title: string
+  description: string
+  html: string
+  css: string
+  js: string
+  data?: unknown
+  stateVersion: number
+  appletId?: string
+  expectedRevision?: string
+}
+
+/** An applet the computer published in a finished reply; without `source` the phone cannot run it. */
+export interface ChatApplet {
+  appletId: string
+  revisionId: string
+  title: string
+  description: string
+  source?: AppletSubmission
+}
+
+/** A reply in order: text, applets, and placeholders for applets still being written. */
+export type ChatPart = { type: 'text'; text: string } | { type: 'applet'; applet: ChatApplet } | { type: 'applet-pending' }
+
 export interface ChatItem {
   id: string
   role: ChatRole
@@ -194,6 +220,8 @@ export interface ChatItem {
   handoff?: { from: string; to: string }
   /** The reply stopped before it finished. */
   incomplete?: boolean
+  /** A reply with applets, in order; `text` then holds only its text parts. */
+  parts?: ChatPart[]
 }
 
 /** The desktop's turn phase (shared/types.ts TurnPhase). */

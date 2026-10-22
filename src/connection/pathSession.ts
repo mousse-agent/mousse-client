@@ -98,8 +98,10 @@ interface Path {
 interface Subscription {
   stream: string
   handlers: SubscriptionHandlers
-  /** The last record position delivered to the caller. */
+  /** Every record through this position was delivered to the caller; a new path resumes after it. */
   head: StreamHead
+  /** Records past a gap in `head`'s epoch already delivered: live ones can overtake a replay. */
+  ahead: Set<number>
   attached: Map<Path, () => void>
   subscribedSent: boolean
 }
@@ -212,7 +214,7 @@ export class PathSession implements SessionLink {
   subscribe(stream: string, from: StreamHead, handlers: SubscriptionHandlers): () => void {
     if (this.stateValue !== 'open') throw this.closedError()
     if (this.subscriptions.has(stream)) throw new NetError('conflict', 'Already subscribed.')
-    const sub: Subscription = { stream, handlers, head: { epoch: from.epoch, seq: from.seq }, attached: new Map(), subscribedSent: false }
+    const sub: Subscription = { stream, handlers, head: { epoch: from.epoch, seq: from.seq }, ahead: new Set(), attached: new Map(), subscribedSent: false }
     this.subscriptions.set(stream, sub)
     if (!this.recovering) this.attach(sub, this.active, true)
     return () => {
@@ -381,10 +383,17 @@ export class PathSession implements SessionLink {
         records: (records, replay) => {
           if (this.subscriptions.get(sub.stream) !== sub) return
           // Records already delivered from another path are dropped, so nothing arrives twice.
-          const fresh = records.filter((record) => after(record, sub.head))
+          const fresh = records.filter((record) => after(record, sub.head) && !(record.epoch === sub.head.epoch && sub.ahead.has(record.seq)))
           if (!fresh.length) return
-          const last = fresh.at(-1)!
-          sub.head = { epoch: last.epoch, seq: last.seq }
+          for (const record of fresh) {
+            if (record.epoch !== sub.head.epoch) {
+              sub.head = { epoch: record.epoch, seq: record.seq }
+              sub.ahead.clear()
+            } else if (record.seq === sub.head.seq + 1) {
+              sub.head = { epoch: record.epoch, seq: record.seq }
+              while (sub.ahead.delete(sub.head.seq + 1)) sub.head = { epoch: sub.head.epoch, seq: sub.head.seq + 1 }
+            } else sub.ahead.add(record.seq)
+          }
           sub.handlers.records(fresh, replay)
         },
         caughtUp: () => {

@@ -7,6 +7,8 @@ export interface TimelineActions {
   busy: boolean
   /** Plan item ids already approved by a later message. */
   approvedPlans: ReadonlySet<string>
+  /** Adds text to the end of the message being written, like the desktop's applet requests. */
+  addToDraft?: (text: string) => void
 }
 
 export const TimelineActionsContext = createContext<TimelineActions>({ busy: false, approvedPlans: new Set() })

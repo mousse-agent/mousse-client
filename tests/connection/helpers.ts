@@ -1,4 +1,5 @@
 // A scripted computer at the far end of a LeafSession, and signed thread-stream records.
+import { appletSourceHash, validateAppletSubmission } from '../../src/connection/applets'
 import { b64url, utf8 } from '../../src/net/bytes'
 import { canonicalJson, newId } from '../../src/net/canonical'
 import { sha256, signBytes, type Signed } from '../../src/net/crypto'
@@ -128,16 +129,41 @@ export function fakeComputer(stream: StreamEndpoint, user: TestUser, computer: T
   }
 }
 
-/** The desktop's snapshot records for one thread's JSON snapshot (one chunk). */
+/** The desktop's snapshot records for one thread's JSON snapshot, in 32 KiB chunks like the desktop's. */
 export function snapshotBodies(threadId: string, snapshot: unknown): Array<{ type: string; body: unknown }> {
   const bytes = utf8(JSON.stringify(snapshot))
   const id = crypto.randomUUID()
   const hash = b64url(sha256(bytes))
+  const size = 32 * 1024
+  const chunks = Math.ceil(bytes.length / size)
   return [
-    { type: 'thread.snapshot.begin', body: { threadId, snapshot: id, totalBytes: bytes.length, chunks: 1, sha256: hash } },
-    { type: 'thread.snapshot.chunk', body: { threadId, snapshot: id, index: 0, data: b64url(bytes) } },
+    { type: 'thread.snapshot.begin', body: { threadId, snapshot: id, totalBytes: bytes.length, chunks, sha256: hash } },
+    ...Array.from({ length: chunks }, (_, index) => ({
+      type: 'thread.snapshot.chunk',
+      body: { threadId, snapshot: id, index, data: b64url(bytes.subarray(index * size, (index + 1) * size)) },
+    })),
     { type: 'thread.snapshot.end', body: { threadId, snapshot: id, sha256: hash } },
   ]
+}
+
+/** A reply carrying an in-response applet the way the desktop stores it: the fence in the text, plus its presentation parts. */
+export function appletReply(id: string, at: number, htmlBytes = 96 * 1024) {
+  const source = {
+    schemaVersion: 1,
+    title: 'Budget',
+    description: 'Adjust monthly income.',
+    html: `<main><label>Income <input id="income" type="range" min="0" max="10000" value="4000"></label><output id="total"></output></main><!-- ${'x'.repeat(htmlBytes)} -->`,
+    css: 'main{max-width:100%;padding:16px}input{width:100%}',
+    js: "const input=document.getElementById('income'),out=document.getElementById('total');function update(){out.textContent='$'+input.value;window.mousseApplet.saveState({income:input.value})}if(window.mousseApplet.state)input.value=window.mousseApplet.state.income;input.addEventListener('input',update);update();",
+  }
+  const content = `Here is a budget tool.\n\n\`\`\`mousse-applet\n${JSON.stringify(source)}\n\`\`\`\n\nMove the slider.`
+  return message(id, 'assistant', content, at, {
+    presentationParts: [
+      { type: 'text', text: 'Here is a budget tool.\n\n' },
+      { type: 'applet', reference: { appletId: 'applet_1', revisionId: 'rev_1', sourceHash: appletSourceHash(validateAppletSubmission(source)), title: source.title, description: source.description } },
+      { type: 'text', text: '\n\nMove the slider.' },
+    ],
+  })
 }
 
 export function message(id: string, role: 'user' | 'assistant' | 'system', content: string, at = 1_000, extra: object = {}) {

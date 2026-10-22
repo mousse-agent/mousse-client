@@ -23,6 +23,7 @@ import {
 } from './format'
 import { Bot, Check, ChevronRight, CircleX, Copy, FileText, Folder, Globe, Image as ImageIcon, Info, Link, Monitor, MessageSquare, Paperclip, VolumeHigh, X } from './icons'
 import { Markdown } from './Markdown'
+import { AppletCard, AppletPending } from './AppletCard'
 import { ReadAloudButton as ComputerReadAloudButton, useComputerSpeech } from '../speech/readAloud'
 import { QuestionPrompt } from './QuestionPrompt'
 import { DiffStat, PlanCard, Shimmer, Spinner, ToolGroup, ToolItem } from './ToolCards'
@@ -224,9 +225,21 @@ const AssistantMessage = memo(function AssistantMessage({ item, live }: { item: 
   const showActions = !streaming && !item.incomplete && item.status !== 'streaming' && !!item.text.trim()
   return (
     <div className="m-tl-assistant" data-testid="chat-item" data-role="assistant" data-status={item.status} aria-busy={streaming || undefined}>
-      {item.text.trim() && (
+      {item.parts ? (
+        item.parts.map((part, index) =>
+          part.type === 'applet' ? (
+            <AppletCard key={`a${index}`} applet={part.applet} />
+          ) : part.type === 'applet-pending' ? (
+            <AppletPending key={`p${index}`} />
+          ) : part.text.trim() ? (
+            <div key={`t${index}`} className={`m-tl-assistant__text${streaming ? ' m-tl-assistant__text--streaming' : ''}`}>
+              <Markdown text={part.text} />
+            </div>
+          ) : null,
+        )
+      ) : item.text.trim() && (
         <div className={`m-tl-assistant__text${streaming ? ' m-tl-assistant__text--streaming' : ''}`}>
-          <Markdown text={item.text} applets />
+          <Markdown text={item.text} />
         </div>
       )}
       {item.error && <ErrorBox message={item.error.message} />}
@@ -416,11 +429,13 @@ export interface TimelineProps {
   /** True while the computer works on a turn in this thread. */
   active: boolean
   onApprovePlan?: (markdown: string) => Promise<void>
+  /** Adds an applet's request to the message being written. */
+  onAddToDraft?: (text: string) => void
   onAnswer?: (requestId: string, answers: QuestionAnswers) => Promise<void>
   onDismiss?: (requestId: string) => Promise<void>
 }
 
-export function Timeline({ items, display, active, onApprovePlan, onAnswer, onDismiss }: TimelineProps) {
+export function Timeline({ items, display, active, onApprovePlan, onAddToDraft, onAnswer, onDismiss }: TimelineProps) {
   const turns = useMemo(() => groupTurns(items), [items])
   const approvedPlans = useMemo(() => {
     const approved = new Set<string>()
@@ -434,7 +449,10 @@ export function Timeline({ items, display, active, onApprovePlan, onAnswer, onDi
     }
     return approved
   }, [items])
-  const actions = useMemo<TimelineActions>(() => ({ approvePlan: onApprovePlan, busy: active, approvedPlans }), [onApprovePlan, active, approvedPlans])
+  const actions = useMemo<TimelineActions>(
+    () => ({ approvePlan: onApprovePlan, busy: active, approvedPlans, addToDraft: onAddToDraft }),
+    [onApprovePlan, active, approvedPlans, onAddToDraft],
+  )
   const lastTurn = turns[turns.length - 1]
   const lastHasError = !!lastTurn?.replies.some((item) => item.error || item.status === 'error')
   const stoppedAfterLast = display.phase === 'stopped' && !active
