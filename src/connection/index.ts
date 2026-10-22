@@ -574,7 +574,7 @@ class RealConnection implements MousseConnection {
   /** A registration valid for at least LEASE_MARGIN_MS: the stored one, renewed, or a new one. */
   private ensureGrant(entry: LoadedEnrollment, identity: ControlIdentity, accountId: string): Promise<RegistrationGrant> {
     const node = identity.node
-    const run = (this.grantLocks.get(node) ?? Promise.resolve()).catch(() => undefined).then(async () => {
+    return this.grantTask(node, async () => {
       const { net } = this.signedIn()
       const stored = (await this.store.list()).find((row) => row.enrollment.node === node)
       let grant = stored?.grant
@@ -595,19 +595,31 @@ class RealConnection implements MousseConnection {
       entry.stored.grant = fresh
       return fresh
     })
+  }
+
+  /**
+   * Runs `task` once every earlier registration change of this phone settled. Renewing a
+   * registration that ended moves it to a new generation, and Mousse ID refuses the older one as
+   * revoked; two renewals at once (the session's timer and a new relay path, after the phone slept)
+   * would make the phone forget a computer that still has it.
+   */
+  private grantTask<T>(node: string, task: () => Promise<T>): Promise<T> {
+    const run = (this.grantLocks.get(node) ?? Promise.resolve()).catch(() => undefined).then(task)
     this.grantLocks.set(node, run)
     return run
   }
 
-  private async renewOnce(entry: LoadedEnrollment, identity: ControlIdentity, accountId: string, net: MousseIdNet): Promise<Registration> {
+  private renewOnce(entry: LoadedEnrollment, identity: ControlIdentity, accountId: string, net: MousseIdNet): Promise<Registration> {
     const node = identity.node
-    const stored = (await this.store.list()).find((row) => row.enrollment.node === node)
-    if (!stored?.grant) throw new MousseIdError('unauthorized', 'This phone has no Mousse ID registration.')
-    const registration = await net.renew(identity, stored.grant, accountId)
-    const renewed = { ...stored.grant, registration }
-    entry.stored.grant = renewed
-    await this.store.setGrant(node, renewed)
-    return registration
+    return this.grantTask(node, async () => {
+      const stored = (await this.store.list()).find((row) => row.enrollment.node === node)
+      if (!stored?.grant) throw new MousseIdError('unauthorized', 'This phone has no Mousse ID registration.')
+      const registration = await net.renew(identity, stored.grant, accountId)
+      const renewed = { ...stored.grant, registration }
+      entry.stored.grant = renewed
+      await this.store.setGrant(node, renewed)
+      return registration
+    })
   }
 
   /** Redeems an invite, stores the enrollment and registers the phone with Mousse ID. */

@@ -4,6 +4,7 @@
 // streams and new requests move onto it; the relay session closes once its requests in flight
 // finish. When the direct path stops answering, the session falls back to the relay. Callers see
 // one open session the whole time and never learn which path carries it.
+import { MousseIdError } from '../mousseId/http'
 import { newId } from '../net/canonical'
 import { NetError } from '../net/errors'
 import type {
@@ -109,6 +110,13 @@ const PATH_LOST = new Set(['route_unreachable', 'peer_offline', 'deadline_exceed
 const after = (record: StreamRecord, head: StreamHead) => record.epoch > head.epoch || (record.epoch === head.epoch && record.seq > head.seq)
 
 const codeOf = (error: unknown) => (error instanceof NetError ? error.code : undefined)
+
+/**
+ * A relay attempt failed only because the path is not there yet: the relay or the computer is
+ * away, or Mousse ID could not renew the registration for now (it is restarting, or the phone's
+ * network is not back after the app returned).
+ */
+const notThereYet = (error: unknown) => PATH_LOST.has(codeOf(error) ?? '') || (error instanceof MousseIdError && error.retryable)
 
 export class PathSession implements SessionLink {
   private active: Path
@@ -469,9 +477,8 @@ export class PathSession implements SessionLink {
         break
       } catch (error) {
         failure = error
-        const code = codeOf(error)
         // A refusal is final; only a path that is not there yet is worth another attempt.
-        if (!code || !PATH_LOST.has(code)) break
+        if (!notThereYet(error)) break
       }
     }
     if (this.stateValue !== 'open') {

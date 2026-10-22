@@ -35,6 +35,10 @@ function start(): void {
   void import('@capacitor/network')
     .then(({ Network }) => Network.addListener('networkStatusChange', notify))
     .catch(() => undefined)
+  // The webview may not report its return as a visibility change; the app plugin does.
+  void import('@capacitor/app')
+    .then(({ App }) => App.addListener('resume', notify))
+    .catch(() => undefined)
 }
 
 /** The device's network signals, shared by every session. */

@@ -3,6 +3,7 @@
 // phone saved last time, and then live from the computer, so screens never wait to draw them.
 import type { ComputerLists, ComputerSession, ListsState, SessionEndReason } from './types'
 import { isUnreachable } from './types'
+import type { NetworkSignals } from './networkSignals'
 
 export type LinkState = 'idle' | 'connecting' | 'open' | 'closed' | 'removed' | 'error'
 
@@ -107,7 +108,10 @@ export function memoryListsCache(): ListsCache {
   }
 }
 
-/** Waits before each automatic reconnect; after the last one the phone waits for "Try again" or the app's return. */
+/**
+ * Waits before each automatic reconnect. After the last one the phone keeps trying at the last wait
+ * for as long as a screen shows the computer, and at once when the network changes or the app returns.
+ */
 export const RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000]
 /**
  * How long after an open link dropped the phone keeps reconnecting without saying so: a relay
@@ -127,6 +131,8 @@ export interface ComputerStoreOptions {
   drop(): void
   reconnectDelaysMs?: number[]
   quietReconnectMs?: number
+  /** Network changes and app resumes, which reconnect a dropped link at once. */
+  network?: NetworkSignals
 }
 
 export class ComputerStore {
@@ -142,8 +148,10 @@ export class ComputerStore {
   private disposed = false
   /** While set, an open link dropped and reconnect attempts that cannot reach the computer stay quiet until then. */
   private quietUntil?: number
+  private readonly offNetwork?: () => void
 
   constructor(private readonly options: ComputerStoreOptions) {
+    this.offNetwork = options.network?.onChange(() => this.resume())
     const saved = options.cache.read(options.accountId, options.nodeId)
     this.current = { nodeId: options.nodeId, link: 'idle', listsState: saved ? 'saved' : 'none', ...(saved ? { lists: saved } : {}) }
   }
@@ -199,7 +207,7 @@ export class ComputerStore {
     this.connect()
   }
 
-  /** Called when the app returns to the foreground: reconnect at once if the link dropped. */
+  /** Called when the app returns to the foreground or the network changes: reconnect at once if the link dropped. */
   resume(): void {
     const waiting = this.current.link === 'connecting' && !this.inFlight && this.retryTimer !== undefined
     if (this.current.link === 'closed' || this.current.link === 'error' || waiting) {
@@ -210,6 +218,7 @@ export class ComputerStore {
 
   dispose(): void {
     this.disposed = true
+    this.offNetwork?.()
     clearTimeout(this.retryTimer)
     this.flushSave()
     this.detach()
@@ -286,7 +295,8 @@ export class ComputerStore {
 
   private nextDelay(): number | undefined {
     const delays = this.options.reconnectDelaysMs ?? RECONNECT_DELAYS_MS
-    return this.disposed || !this.listeners.size || this.attempts >= delays.length ? undefined : delays[this.attempts]
+    if (this.disposed || !this.listeners.size || !delays.length) return undefined
+    return delays[Math.min(this.attempts, delays.length - 1)]
   }
 
   private scheduleRetry(): void {

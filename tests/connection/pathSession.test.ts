@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import { manualNetworkSignals } from '../../src/connection/networkSignals'
 import { DIRECT_OPEN_TIMEOUT_MS, ENDPOINTS_METHOD, PathSession, type DirectLink, type PathOpeners } from '../../src/connection/pathSession'
+import { MousseIdError } from '../../src/mousseId/http'
 import { newId } from '../../src/net/canonical'
 import { NetError } from '../../src/net/errors'
 import { generateNodeKeys } from '../../src/net/keys'
@@ -336,6 +337,20 @@ describe('path session', () => {
     const again = await t.relays[1].remote.next('rpc.request')
     await t.relays[1].remote.send({ t: 'rpc.result', id: again.id, result: { projects: [] } })
     expect(await pending).toEqual({ projects: [] })
+    expect(t.session.state).toBe('open')
+    expect(t.states).toEqual([])
+  })
+
+  it('keeps the session open while Mousse ID cannot renew the registration for a moment', async () => {
+    const t = await setup()
+    // Mousse ID itself redeploys, or the phone's network is not back yet after the app returns.
+    t.failRelay(new MousseIdError('unavailable'))
+    t.relay.end.close(new NetError('route_unreachable', 'The relay closed the connection (code 1006).'))
+    await until(() => t.opened.length === 1)
+    t.failRelay(new MousseIdError('offline'))
+    await until(() => t.opened.length === 2)
+    t.failRelay(undefined)
+    await until(() => t.relays.length === 2)
     expect(t.session.state).toBe('open')
     expect(t.states).toEqual([])
   })

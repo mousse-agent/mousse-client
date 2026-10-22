@@ -32,6 +32,8 @@ function idServer(world: World) {
   const calls: Call[] = []
   const requests = new Map<string, { status: string; sealedInvite?: string; polls: number }>()
   let registrations = 0
+  /** The registration's generation; renewing one that has ended moves it on, as Mousse ID does. */
+  let generation = 0
   const fetcher: FetchLike = async (input, init) => {
     const url = new URL(input)
     const headers = init.headers as Record<string, string>
@@ -110,6 +112,7 @@ function idServer(world: World) {
       world.phoneNode = String(calls.filter((c) => c.path === '/v1/net/challenges').at(-1)!.body!.nodeId)
       expect(intent.kind).toBe('phone')
       world.registrationExpiresAt = now + (world.registrationMs ?? 60_000)
+      generation = registrations
       return reply(
         {
           registration: { id: 'reg_p', accountId: 'acct_1', userId: world.user.user, nodeId: world.phoneNode, generation: registrations, expiresAt: world.registrationExpiresAt },
@@ -120,9 +123,13 @@ function idServer(world: World) {
       )
     }
     if (path === '/v1/net/registrations/reg_p/renew') {
+      await world.renewGate
       if (world.renewError) return reply({ error: { code: world.renewError } }, world.renewStatus ?? 403)
-      world.registrationExpiresAt = now + (world.registrationMs ?? 60_000)
-      return reply({ id: 'reg_p', accountId: 'acct_1', userId: world.user.user, nodeId: world.phoneNode, generation: registrations, expiresAt: world.registrationExpiresAt })
+      // Mousse ID refuses an older generation as revoked.
+      if (call.body!.generation !== generation) return reply({ error: { code: 'revoked' } }, 403)
+      if ((world.registrationExpiresAt ?? 0) <= Date.now()) generation++
+      world.registrationExpiresAt = Date.now() + (world.registrationMs ?? 60_000)
+      return reply({ id: 'reg_p', accountId: 'acct_1', userId: world.user.user, nodeId: world.phoneNode, generation, expiresAt: world.registrationExpiresAt })
     }
     return reply({ error: { code: 'not_found' } }, 404)
   }
@@ -135,6 +142,8 @@ interface World {
   phoneNode?: string
   offer?: string
   renewError?: string
+  /** Holds renewals until it settles. */
+  renewGate?: Promise<void>
   renewStatus?: number
   /** Set on the phone's own registration in the inventory, as Mousse ID does once a roster revokes the phone. */
   phoneRevokedAt?: number
@@ -505,6 +514,34 @@ describe('real connection', () => {
       session.close()
       for (const stop of stops) stop()
     }
+  })
+
+  it('renews one at a time, so renewing after the phone slept never ends the session or forgets the computer', async () => {
+    const { w, connection, deps, server } = await enrolled((w) => (w.registrationMs = 30_000), { renewMs: 50 })
+    const relays: Array<{ close(): void }> = []
+    deps.openChannel = async () => {
+      const [a, b] = streamPair()
+      void fakeComputer(b, w.user, w.computer, roster(w.user, w.computer.node)).handshake()
+      relays.push(b)
+      return channelOf(a, w.computer.keys.transport.spki)
+    }
+    const session = await connection.openComputer(w.computer.node)
+    const renewals = () => server.calls.filter((call) => call.path === '/v1/net/registrations/reg_p/renew').length
+    // The phone slept past the registration's end and the relay closed meanwhile. On waking, the
+    // renewal timer and the new relay path both renew, while Mousse ID answers slowly.
+    w.registrationExpiresAt = Date.now() - 1
+    let release!: () => void
+    w.renewGate = new Promise((resolve) => (release = resolve))
+    const before = renewals()
+    await until(() => renewals() > before)
+    relays[0].close()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    release()
+    await until(() => relays.length === 2)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(session.state()).toBe('open')
+    expect((await connection.listComputers()).find((c) => c.nodeId === w.computer.node)?.enrolled).toBe(true)
+    session.close()
   })
 
   it('forgets the computer when it refuses this phone as revoked on open', async () => {

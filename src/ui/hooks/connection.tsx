@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode } from 'react'
 import { ComputerStore, storageListsCache, type ComputerView, type ListsCache } from '../../connection/computerStore'
+import { deviceNetworkSignals } from '../../connection/networkSignals'
 import type { AccountState, Computer, ComputerSession, MousseConnection } from '../../connection/types'
 import { errorMessage } from './useAsync'
 
@@ -83,17 +84,6 @@ export function ConnectionProvider({ connection, listsCache, children }: { conne
   }, [connection, closeAll, computers, cache])
   useEffect(() => closeAll, [closeAll])
 
-  // Coming back to the app reconnects dropped computers at once instead of waiting for a retry.
-  useEffect(() => {
-    if (typeof document === 'undefined') return undefined
-    const onVisible = () => {
-      if (document.visibilityState !== 'visible') return
-      for (const store of stores.current.values()) store.resume()
-    }
-    document.addEventListener('visibilitychange', onVisible)
-    return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [])
-
   const value = useMemo<ConnectionContextValue>(() => {
     const session = (nodeId: string): Promise<ComputerSession> => {
       const cached = sessions.current.get(nodeId)
@@ -121,7 +111,8 @@ export function ConnectionProvider({ connection, listsCache, children }: { conne
         const key = `${accountId}:${nodeId}`
         let store = stores.current.get(key)
         if (!store) {
-          store = new ComputerStore({ nodeId, accountId, cache, open: () => session(nodeId), drop: () => dropSession(nodeId) })
+          // Coming back to the app or to a network reconnects a dropped computer at once instead of waiting for a retry.
+          store = new ComputerStore({ nodeId, accountId, cache, network: deviceNetworkSignals, open: () => session(nodeId), drop: () => dropSession(nodeId) })
           stores.current.set(key, store)
         }
         return store

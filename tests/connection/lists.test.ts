@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { RealComputerSession } from '../../src/connection/computerSession'
 import { ComputerStore, memoryListsCache } from '../../src/connection/computerStore'
 import { LISTS_THREAD_ID, parseLists } from '../../src/connection/lists'
+import { manualNetworkSignals } from '../../src/connection/networkSignals'
 import type { ComputerLists, ComputerSession, ListsHandlers, SessionEndReason, SessionState } from '../../src/connection/types'
 import { isUnreachable, unreachable } from '../../src/connection/types'
 import { NetError } from '../../src/net/errors'
@@ -273,6 +274,55 @@ describe('computer store', () => {
       sessions[1].close('lost', 'The relay closed the connection (code 1006).')
       await vi.advanceTimersByTimeAsync(20_000)
       expect(store.view()).toMatchObject({ link: 'error', error: 'Studio Mac is offline. Open Mousse on it and try again.' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('never stops reconnecting a dropped link, and tries at once when the network changes', async () => {
+    vi.useFakeTimers()
+    try {
+      let down = false
+      let attempts = 0
+      const sessions: StubSession[] = []
+      const network = manualNetworkSignals()
+      const store = new ComputerStore({
+        nodeId: 'node',
+        accountId: 'acct',
+        cache: memoryListsCache(),
+        reconnectDelaysMs: [1_000, 30_000],
+        network,
+        drop: () => undefined,
+        open: async () => {
+          attempts++
+          if (down) throw unreachable(new Error('Studio Mac is offline. Open Mousse on it and try again.'))
+          sessions.push(new StubSession())
+          return sessions.at(-1)!
+        },
+      })
+      store.subscribe(vi.fn())
+      await vi.advanceTimersByTimeAsync(0)
+      down = true
+      sessions[0].close('lost', 'The relay closed the connection (code 1006).')
+      // The computer stays away for ten minutes; the phone keeps trying at the longest wait.
+      await vi.advanceTimersByTimeAsync(10 * 60_000)
+      expect(attempts).toBeGreaterThanOrEqual(20)
+      expect(store.view()).toMatchObject({ link: 'error' })
+      down = false
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(store.view().link).toBe('open')
+
+      // Wi-Fi comes back while a retry is still far off: the phone tries again at once.
+      down = true
+      sessions[1].close('lost', 'The relay closed the connection (code 1006).')
+      await vi.advanceTimersByTimeAsync(2_000)
+      down = false
+      const before = attempts
+      network.fire()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(attempts).toBe(before + 1)
+      expect(store.view().link).toBe('open')
+      store.dispose()
     } finally {
       vi.useRealTimers()
     }
