@@ -26,13 +26,13 @@ import type { AccountState, Computer, ComputerSession, EnrollmentProgress, Mouss
 import { isUnreachable, unreachable } from './types'
 
 /**
- * The longest wait between registration renewals while a session is open. A registration lasts 60
- * seconds. The hosted relay renews the phone's admission every 30 seconds but never past the
- * registration's end, and closes the circuit when the admission runs out. So the registration must
- * always outlast the relay's next renewal: like the computer, the phone renews at a third of the
- * remaining lifetime, and at least this often.
+ * The longest wait between registration renewals while a session is open. A registration lasts 10
+ * minutes (60 seconds on older Mousse ID). The hosted relay renews the phone's admission every 30
+ * seconds but never past the registration's end, and closes the circuit when the admission runs
+ * out. So the registration must always outlast the relay's next renewal: like the computer, the
+ * phone renews at a third of the remaining lifetime, and at least this often.
  */
-export const RENEW_INTERVAL_MS = 20_000
+export const RENEW_INTERVAL_MS = 5 * 60_000
 /** The shortest wait before the next renewal. */
 const RENEW_MIN_MS = 100
 /** The wait before retrying a renewal that failed for a passing reason. */
