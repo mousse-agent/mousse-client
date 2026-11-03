@@ -19,7 +19,7 @@ import { browserPeerConnectionFactory, dialWebRtc, type PeerConnectionFactory } 
 import { connectTls, type SecureChannel } from '../net/tls13/client'
 import { RealComputerSession } from './computerSession'
 import { indexedDbThreadCacheBackend, ThreadCache } from './threadCache'
-import { EnrollmentStore, type LoadedEnrollment } from './enrollmentStore'
+import { EnrollmentStore, type LoadedEnrollment, type StoredEnrollment } from './enrollmentStore'
 import type { NetworkSignals } from './networkSignals'
 import { DIRECT_OPEN_TIMEOUT_MS, DIRECT_PING_INTERVAL_MS, PathSession, type DirectLink, type PathSessionOptions } from './pathSession'
 import type { AccountState, Computer, ComputerSession, EnrollmentProgress, MousseConnection, SessionEndReason } from './types'
@@ -577,12 +577,13 @@ class RealConnection implements MousseConnection {
     return this.grantTask(node, async () => {
       const { net } = this.signedIn()
       const stored = (await this.store.list()).find((row) => row.enrollment.node === node)
+      const current = this.currentIdentity(entry, identity, stored)
       let grant = stored?.grant
       if (grant && grant.registration.accountId !== accountId) grant = undefined
       if (grant && grant.registration.expiresAt - this.now() > LEASE_MARGIN_MS) return grant
       if (grant) {
         try {
-          const registration = await net.renew(identity, grant, accountId)
+          const registration = await net.renew(current, grant, accountId)
           const renewed = { ...grant, registration }
           await this.store.setGrant(node, renewed)
           return renewed
@@ -590,11 +591,27 @@ class RealConnection implements MousseConnection {
           if (!REREGISTER.has(codeOf(error) ?? '')) throw error
         }
       }
-      const fresh = await net.registerPhone(identity)
+      const fresh = await net.registerPhone(current)
       await this.store.setGrant(node, fresh)
       entry.stored.grant = fresh
       return fresh
     })
+  }
+
+  /**
+   * What this phone proves to Mousse ID, from the newest roster it holds for its user: a computer
+   * sends a newer one while a session is open (a computer joined, a device was renamed), and
+   * Mousse ID refuses an older roster than the account's. `fallback` is the identity the session
+   * opened with, kept when the stored roster no longer names this phone as current.
+   */
+  private currentIdentity(entry: LoadedEnrollment, fallback: ControlIdentity, stored?: StoredEnrollment): ControlIdentity {
+    if (!stored) return fallback
+    try {
+      const roster = verifyRoster(stored.enrollment.roster, stored.enrollment.rootKey)
+      return controlIdentity({ ...entry, stored, roster }, this.now())
+    } catch {
+      return fallback
+    }
   }
 
   /**
@@ -614,7 +631,7 @@ class RealConnection implements MousseConnection {
     return this.grantTask(node, async () => {
       const stored = (await this.store.list()).find((row) => row.enrollment.node === node)
       if (!stored?.grant) throw new MousseIdError('unauthorized', 'This phone has no Mousse ID registration.')
-      const registration = await net.renew(identity, stored.grant, accountId)
+      const registration = await net.renew(this.currentIdentity(entry, identity, stored), stored.grant, accountId)
       const renewed = { ...stored.grant, registration }
       entry.stored.grant = renewed
       await this.store.setGrant(node, renewed)

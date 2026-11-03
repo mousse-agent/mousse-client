@@ -555,6 +555,29 @@ describe('real connection', () => {
     await expect(connection.openComputer(w.computer.node)).rejects.toThrow('Add this phone to that computer first.')
   })
 
+  it('renews with the newest roster a computer sent during the session, not the one it enrolled with', async () => {
+    const { w, connection, deps, server } = await enrolled(undefined, { renewMs: 20 })
+    let remote: ReturnType<typeof fakeComputer> | undefined
+    deps.openChannel = async () => {
+      const [a, b] = streamPair()
+      remote = fakeComputer(b, w.user, w.computer, roster(w.user, w.computer.node))
+      void remote.handshake()
+      return channelOf(a, w.computer.keys.transport.spki)
+    }
+    const session = await connection.openComputer(w.computer.node)
+    expect(session.state()).toBe('open')
+    // Another computer joins: the account's roster moves on while this session stays open.
+    testComputer(w.user, 'Mac mini')
+    const newer = roster(w.user, w.computer.node)
+    await remote!.send({ t: 'rosterUpdate', roster: newer })
+    const renewals = () => server.calls.filter((call) => call.path === '/v1/net/registrations/reg_p/renew')
+    const before = renewals().length
+    await until(() => renewals().length > before + 1, 400)
+    expect(renewals().at(-1)!.body!.roster).toEqual(newer)
+    expect(session.state()).toBe('open')
+    session.close()
+  })
+
   it('ends the session and forgets the computer when a roster removing this phone arrives', async () => {
     const { w, connection, storage, deps } = await enrolled()
     let remote: ReturnType<typeof fakeComputer> | undefined
