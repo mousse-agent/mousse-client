@@ -1,6 +1,6 @@
 import { cleanup, render } from '@testing-library/react'
 import { afterEach } from 'vitest'
-import { App } from '../../src/ui/App'
+import { App, type AppProps } from '../../src/ui/App'
 import type { Route } from '../../src/ui/state/router'
 import { createFakeConnection, type FakeConnectionOptions } from '../../src/ui/dev/fakeConnection'
 
@@ -26,9 +26,9 @@ export function installMatchMedia(matches: (query: string) => boolean = () => fa
   })
 }
 
-export function renderApp(options: FakeConnectionOptions & { routes?: Route[] } = {}) {
-  const { routes, ...fake } = options
+export function renderApp(options: FakeConnectionOptions & { routes?: Route[]; joinOptions?: AppProps['joinOptions'] } = {}) {
+  const { routes, joinOptions, ...fake } = options
   const connection = createFakeConnection({ latencyMs: 0, stageDelayMs: 15, tickMs: 5, ...fake })
-  const utils = render(<App connection={connection} initialRoutes={routes} />)
+  const utils = render(<App connection={connection} initialRoutes={routes} joinOptions={joinOptions} />)
   return { connection, ...utils }
 }

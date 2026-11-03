@@ -8,11 +8,11 @@ import { matchCode, openOfferSeal, openRequestSeal, parseJoinQr } from '../mouss
 import { MousseIdSession, type AuthBrowser } from '../mousseId/session'
 import { b64url, fromB64url } from '../net/bytes'
 import { newId } from '../net/canonical'
-import { sha256, type Signed } from '../net/crypto'
+import { peekDocument, sha256, type Signed } from '../net/crypto'
 import { parseInvite, redeemInvite, type Enrollment, type RedeemOptions } from '../net/enrollment'
 import { NetError } from '../net/errors'
 import { currentNode, removesNode, verifyDelegation, verifyRoster, type Roster } from '../net/identity'
-import { generateNodeKeys, SecureKeyStorage, serializeNodeKeys, type KeyStorage, type NodeKeys } from '../net/keys'
+import { generateNodeKeys, readJson, SecureKeyStorage, serializeNodeKeys, writeJson, type KeyStorage, type NodeKeys } from '../net/keys'
 import { dialRelay, type RelaySocketFactory } from '../net/relay'
 import { LeafSession, type LeafIdentity } from '../net/session'
 import { browserPeerConnectionFactory, dialWebRtc, type PeerConnectionFactory } from '../net/webrtc'
@@ -22,7 +22,7 @@ import { indexedDbThreadCacheBackend, ThreadCache } from './threadCache'
 import { EnrollmentStore, type LoadedEnrollment, type StoredEnrollment } from './enrollmentStore'
 import type { NetworkSignals } from './networkSignals'
 import { DIRECT_OPEN_TIMEOUT_MS, DIRECT_PING_INTERVAL_MS, PathSession, type DirectLink, type PathSessionOptions } from './pathSession'
-import type { AccountState, Computer, ComputerSession, EnrollmentProgress, MousseConnection, SessionEndReason } from './types'
+import type { AccountState, Computer, ComputerSession, EnrollmentProgress, JoinPlan, MousseConnection, SessionEndReason } from './types'
 import { isUnreachable, unreachable } from './types'
 
 /**
@@ -44,6 +44,8 @@ const RENEW_RETRY_MS = 2_000
 const LEASE_MARGIN_MS = 45_000
 const POLL_INTERVAL_MS = 2_000
 const DEFAULT_PHONE_NAME = 'Phone'
+/** Accounts whose computers removed this phone; it does not join them again on its own. */
+const REMOVED_KEY = 'net.removedFrom'
 /** Mousse ID errors that mean the registration is gone and the phone must register again. */
 /** Mousse ID refusals of a stored registration that a fresh registration may fix. */
 const REREGISTER = new Set(['not_found', 'forbidden', 'expired', 'unauthorized'])
@@ -141,6 +143,7 @@ function removedError(name: string): Error {
 class RealConnection implements MousseConnection {
   private readonly listeners = new Set<(state: AccountState) => void>()
   private readonly store: EnrollmentStore
+  private readonly storage: KeyStorage
   private readonly now: () => number
   private readonly session?: MousseIdSession
   private readonly net?: MousseIdNet
@@ -159,6 +162,7 @@ class RealConnection implements MousseConnection {
   ) {
     this.now = deps.now ?? Date.now
     const storage = deps.storage ?? new SecureKeyStorage()
+    this.storage = storage
     this.store = new EnrollmentStore(storage)
     this.threads = deps.threadCache ?? new ThreadCache(indexedDbThreadCacheBackend())
     if (configError) return
@@ -201,12 +205,15 @@ class RealConnection implements MousseConnection {
     return () => this.listeners.delete(listener)
   }
 
+  // Signing in again is a fresh start: a phone the computers removed may join them on its own again.
   async signInWithPassword(email: string, password: string): Promise<void> {
     await this.configured().session.signInWithPassword(email, password)
+    await this.allowRejoin().catch(() => undefined)
   }
 
   async signInWithGoogle(): Promise<void> {
     await this.configured().session.signInWithGoogle(this.deps.openBrowser ?? defaultOpenBrowser)
+    await this.allowRejoin().catch(() => undefined)
   }
 
   /** Signs out of Mousse ID and forgets this phone's relay credentials. Enrollments stay on the phone. */
@@ -245,13 +252,65 @@ class RealConnection implements MousseConnection {
       if (!held || (row.online && !held.online) || (row.online === held.online && row.expiresAt > held.expiresAt)) rows.set(row.nodeId, row)
     }
     const now = this.now()
+    const authority = chooseNetwork(inventory.bindings, now)?.roster.authorityNode
     return [...rows.values()].map((row) => ({
       nodeId: row.nodeId,
       name: row.deviceName || (row.kind === 'phone' ? 'Phone' : 'Computer'),
       kind: row.kind,
       online: row.online,
       enrolled: row.kind === 'computer' && enrollments.some((entry) => reaches(entry, row.nodeId, now)),
+      ...(row.kind === 'computer' && row.nodeId === authority ? { authority: true } : {}),
     }))
+  }
+
+  /**
+   * Whether this phone still has to join the account's computers. The computers share one roster;
+   * when Mousse ID holds several (computers set up apart), the one with the most devices counts.
+   * Its authority is the computer that adds devices, and it approves a request from its own
+   * Mousse ID account on its own. A phone that holds an enrollment for that roster's user never
+   * asks again, and one the computers removed waits until the user signs in again.
+   */
+  async joinPlan(): Promise<JoinPlan> {
+    const { net } = this.signedIn()
+    const accountId = this.accountId()
+    const inventory = await net.inventory()
+    this.setDevices(inventory.devices)
+    await this.adoptRosters(inventory.bindings)
+    await this.forgetRemoved(accountId)
+    const now = this.now()
+    const network = chooseNetwork(inventory.bindings, now)
+    if (!network) return { status: 'none' }
+    const enrollments = await this.store.loaded(accountId)
+    if (enrollments.some((entry) => entry.stored.enrollment.user === network.userId && !removesSelf(entry))) return { status: 'joined' }
+    const nodeId = network.roster.authorityNode
+    const rows = inventory.registrations.filter((row) => row.nodeId === nodeId && row.revokedAt === null)
+    const name = rows.find((row) => row.deviceName)?.deviceName || nodeName(network.roster, nodeId, now) || 'your computer'
+    if (await this.removedFrom(accountId)) return { status: 'removed', computer: name }
+    return { status: 'needed', target: { nodeId, name, online: rows.some((row) => row.online) } }
+  }
+
+  async allowRejoin(): Promise<void> {
+    const accountId = this.session?.current()?.account.id
+    if (!accountId) return
+    const accounts = await this.removedAccounts()
+    if (accounts.includes(accountId)) await writeJson(this.storage, REMOVED_KEY, accounts.filter((id) => id !== accountId))
+  }
+
+  private async removedAccounts(): Promise<string[]> {
+    const value = await readJson<unknown>(this.storage, REMOVED_KEY).catch(() => undefined)
+    return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []
+  }
+
+  private async removedFrom(accountId: string): Promise<boolean> {
+    return (await this.removedAccounts()).includes(accountId)
+  }
+
+  /** Remembers that the account's computers removed this phone, so it does not join them again on its own. */
+  private async markRemoved(): Promise<void> {
+    const accountId = this.session?.current()?.account.id
+    if (!accountId) return
+    const accounts = await this.removedAccounts()
+    if (!accounts.includes(accountId)) await writeJson(this.storage, REMOVED_KEY, [...accounts, accountId]).catch(() => undefined)
   }
 
   async enrollWithComputer(nodeId: string, deviceName: string, onProgress: (progress: EnrollmentProgress) => void): Promise<void> {
@@ -522,8 +581,10 @@ class RealConnection implements MousseConnection {
     return removed
   }
 
+  /** Forgets an enrollment the user's computers removed. */
   private async forget(node: string): Promise<void> {
     this.forgotten.add(node)
+    await this.markRemoved()
     await this.forgetThreads(node).catch(() => undefined)
     await this.store.forget(node)
   }
@@ -768,6 +829,38 @@ function nodeName(roster: Roster, nodeId: string, now: number): string | undefin
   } catch {
     return undefined
   }
+}
+
+/**
+ * The roster the account's computers share, from the ones Mousse ID holds: the one with the most
+ * current devices. Each is checked against the root key it names; the phone pins that key only
+ * when it joins, through the authority's invite.
+ */
+function chooseNetwork(bindings: InventoryBinding[], now: number): { userId: string; roster: Roster } | undefined {
+  let best: { userId: string; roster: Roster; size: number } | undefined
+  for (const binding of bindings) {
+    if (!binding.roster) continue
+    let roster: Roster
+    try {
+      const rootKey = peekDocument<{ rootKey?: unknown }>(binding.roster).rootKey
+      if (typeof rootKey !== 'string') continue
+      roster = verifyRoster(binding.roster, rootKey)
+    } catch {
+      continue
+    }
+    if (roster.owner !== binding.userId) continue
+    const subjects = new Set<string>()
+    for (const signed of roster.nodes) {
+      try {
+        subjects.add(verifyDelegation(signed, roster.rootKey).subject)
+      } catch {
+        // A damaged row is not a device.
+      }
+    }
+    const size = [...subjects].filter((node) => nodeName(roster, node, now) !== undefined).length
+    if (!best || size > best.size) best = { userId: binding.userId, roster, size }
+  }
+  return best
 }
 
 function controlIdentity(entry: LoadedEnrollment, now: number): ControlIdentity {

@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { installMatchMedia, renderApp } from './helpers'
-import { chatPreview, projectInitials, sidebarModel, threadAge } from '../../src/ui/sidebar/model'
+import { chatPreview, mergedKey, mergeLists, projectHue, projectInitials, sidebarModel, splitKey, threadAge } from '../../src/ui/sidebar/model'
 import type { ComputerLists } from '../../src/connection/types'
 
 beforeEach(() => installMatchMedia())
 
-const computer = [{ name: 'computers' as const }, { name: 'computer' as const, nodeId: 'node-studio' }]
+const computer = [{ name: 'home' as const }]
 
-describe('computer sidebar', () => {
+describe('thread list', () => {
   it('has Projects, Threads and Chats tabs that all work', async () => {
     renderApp({ signedIn: true, routes: computer })
     const tabs = await screen.findByRole('tablist', { name: 'Sidebar view' })
@@ -29,7 +29,7 @@ describe('computer sidebar', () => {
 
     // Projects: tap a project to see its threads.
     fireEvent.click(within(tabs).getByRole('tab', { name: 'Projects' }))
-    const project = screen.getByRole('button', { name: /^mousse( \d+)?$/ })
+    const project = screen.getByRole('button', { name: /^mousse Studio Mac( \d+)?$/ })
     expect(project).toHaveAttribute('aria-expanded', 'false')
     fireEvent.click(project)
     expect(project).toHaveAttribute('aria-expanded', 'true')
@@ -106,5 +106,30 @@ describe('sidebar model', () => {
     expect(chatPreview({ ...lists.chats[0], run: { id: 'r', state: 'running', startedAt: 0 } })).toBe('Working…')
     expect(chatPreview({ ...lists.chats[0], network: true })).toBe('Space conversation')
     expect(chatPreview(lists.chats[0])).toBe('1 agent')
+  })
+
+  it('merges several computers into one list ordered by recent activity, pinned first', () => {
+    const other: ComputerLists = {
+      projects: [{ id: 'p', name: 'notes', order: 0, pinned: false }],
+      threads: [
+        { id: 'a', title: 'Newest', projectId: 'p', createdAt: 0, updatedAt: 50, order: 9, pinned: false, settled: false, started: true },
+      ],
+      chats: [],
+      status: { a: { state: 'processing' } },
+      receivedAt: 7,
+    }
+    const dated = { ...lists, threads: lists.threads.map((thread, index) => ({ ...thread, updatedAt: index * 10, pinned: thread.id === 'loose' })) }
+    const merged = mergeLists([{ nodeId: 'n1', lists: dated }, { nodeId: 'n2', lists: other }])
+    // The same thread id on two computers stays two threads.
+    expect(merged.threads.filter((thread) => splitKey(thread.id)?.id === 'a')).toHaveLength(2)
+    expect(merged.status[mergedKey('n2', 'a')]).toEqual({ state: 'processing' })
+    expect(merged.status[mergedKey('n1', 'a')]).toBeUndefined()
+    expect(merged.chats[0].threadId).toBe(mergedKey('n1', 'chat'))
+    expect(projectHue(mergedKey('n1', 'p'))).toBe(projectHue('p'))
+    const model = sidebarModel(merged, '', 'recent')
+    expect(model.threads.map((thread) => thread.id)).toEqual([mergedKey('n1', 'loose'), mergedKey('n2', 'a'), mergedKey('n1', 'a'), mergedKey('n1', 'b')])
+    // Each computer's project keeps its own threads in the desktop order.
+    expect(model.byProject.get(mergedKey('n1', 'p'))!.map((thread) => splitKey(thread.id)?.id)).toEqual(['a', 'b'])
+    expect(merged.projects.map((project) => project.name)).toEqual(['mousse-client', 'notes'])
   })
 })

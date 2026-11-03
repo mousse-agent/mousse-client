@@ -6,7 +6,7 @@ import { FAKE_TRANSCRIPT } from '../../src/ui/dev/fakeSpeech'
 import { readAloud } from '../../src/ui/speech/readAloud'
 
 const thread = (threadId: string) => [
-  { name: 'computers' as const },
+  { name: 'home' as const },
   { name: 'thread' as const, nodeId: 'node-studio', threadId }
 ]
 

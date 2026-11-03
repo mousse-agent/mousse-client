@@ -149,6 +149,13 @@
   font-size: 12px;
   line-height: 1.3;
 }
+/* The computer a row runs on, quiet like the desktop's computer badge; offline rows come from the saved lists. */
+.m-sb-computer { display: inline-flex; align-items: center; gap: 4px; min-width: 0; flex-shrink: 1; color: var(--text-secondary); font-size: 12px; font-weight: 400; }
+.m-sb-computer > .mousse-icon { flex: none; }
+.m-sb-computer__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-sb-computer__state { flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
+.m-sb-computer[data-state='offline'] { color: var(--status-waiting); }
+.m-sb-project__row .m-sb-computer { margin-left: 2px; }
 .m-sb-card__project { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .m-sb-card__status,
 .m-sb-card__age { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; flex-shrink: 0; font-variant-numeric: tabular-nums; }

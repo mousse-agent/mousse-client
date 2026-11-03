@@ -21,8 +21,24 @@ export interface Computer {
   online: boolean
   /** This phone holds a delegation for the computer and can open it. */
   enrolled: boolean
+  /** The computer that adds devices for the account's computers (the roster authority). */
+  authority?: boolean
   lastSeenAt?: number
 }
+
+/**
+ * Whether this phone still has to join the account's computers, and where. One join reaches every
+ * computer of the account: the authority adds the phone to the list all of them share.
+ * - `joined`: the phone is already among them.
+ * - `none`: the account has no computer that can add it yet.
+ * - `removed`: the user's computers removed this phone; it does not join again on its own.
+ * - `needed`: the phone asks `target`, the authority, to add it.
+ */
+export type JoinPlan =
+  | { status: 'joined' }
+  | { status: 'none' }
+  | { status: 'removed'; computer?: string }
+  | { status: 'needed'; target: { nodeId: string; name: string; online: boolean } }
 
 export type EnrollmentStage =
   | 'requesting'
@@ -445,6 +461,10 @@ export interface MousseConnection {
     deviceName: string,
     onProgress: (progress: EnrollmentProgress) => void,
   ): Promise<void>
+  /** Whether this phone still has to join the account's computers, read from Mousse ID. */
+  joinPlan(): Promise<JoinPlan>
+  /** Lets the phone join on its own again after the user's computers removed it. */
+  allowRejoin(): Promise<void>
   /** Accepts the text of a `mousse://net/join?...` QR code. */
   enrollFromQr(payload: string, onProgress: (progress: EnrollmentProgress) => void): Promise<void>
   openComputer(nodeId: string): Promise<ComputerSession>

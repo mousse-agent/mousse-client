@@ -14,6 +14,13 @@ export function compareThreads(a: ListThread, b: ListThread): number {
   return a.id.localeCompare(b.id)
 }
 
+/** Merged lists: pinned first, then the most recent activity. Positions of different computers cannot be compared. */
+export function compareRecent(a: ListThread, b: ListThread): number {
+  if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
+  if (a.updatedAt !== b.updatedAt) return b.updatedAt - a.updatedAt
+  return a.id.localeCompare(b.id)
+}
+
 /** Threads that back an agent chat; they appear under Chats, never under Threads or Projects. */
 export function chatThreadIds(lists: ComputerLists): Set<string> {
   return new Set(lists.chats.map((chat) => chat.threadId).filter((id): id is string => !!id))
@@ -31,17 +38,18 @@ export interface SidebarModel {
   direct: ListChat[]
 }
 
-export function sidebarModel(lists: ComputerLists, query = ''): SidebarModel {
+/** `recent` orders the Threads tab by activity, for lists merged from several computers. Projects keep the desktop order. */
+export function sidebarModel(lists: ComputerLists, query = '', order: 'desktop' | 'recent' = 'desktop'): SidebarModel {
   const hidden = chatThreadIds(lists)
   const needle = query.trim().toLowerCase()
   const projectNames = new Map(lists.projects.map((project) => [project.id, project.name]))
   const matches = (thread: ListThread) =>
     !needle || thread.title.toLowerCase().includes(needle) || (projectNames.get(thread.projectId ?? '') ?? '').toLowerCase().includes(needle)
   const visible = lists.threads.filter((thread) => thread.started && !hidden.has(thread.id) && matches(thread)).sort(compareThreads)
-  const threads = visible.filter((thread) => !thread.settled)
+  const unsettled = visible.filter((thread) => !thread.settled)
   const byProject = new Map<string, ListThread[]>()
   const standalone: ListThread[] = []
-  for (const thread of threads) {
+  for (const thread of unsettled) {
     if (thread.projectId && projectNames.has(thread.projectId)) {
       const list = byProject.get(thread.projectId) ?? []
       list.push(thread)
@@ -51,9 +59,10 @@ export function sidebarModel(lists: ComputerLists, query = ''): SidebarModel {
   const chats = lists.chats
     .filter((chat) => !needle || chat.name.toLowerCase().includes(needle) || (chat.preview ?? '').toLowerCase().includes(needle))
     .sort((a, b) => b.updatedAt - a.updatedAt)
+  const feed = order === 'recent' ? (list: ListThread[]) => [...list].sort(compareRecent) : (list: ListThread[]) => list
   return {
-    threads,
-    settled: visible.filter((thread) => thread.settled),
+    threads: feed(unsettled),
+    settled: feed(visible.filter((thread) => thread.settled)),
     byProject,
     standalone,
     projectNames,
@@ -91,9 +100,56 @@ function hashText(value: string): number {
   return hash
 }
 
-/** The project's colour, 1 to 6 (var(--hue-N)), stable across devices. */
+/** The project's colour, 1 to 6 (var(--hue-N)), stable across devices. Merged keys use the computer's own project id. */
 export function projectHue(projectId: string): number {
-  return (Math.abs(hashText(projectId)) % 6) + 1
+  return (Math.abs(hashText(splitKey(projectId)?.id ?? projectId)) % 6) + 1
+}
+
+// ---------- One list from several computers ----------
+
+/** One computer's lists, to merge into the home screen's single list. */
+export interface ListsSource {
+  nodeId: string
+  lists: ComputerLists
+}
+
+const KEY_SEPARATOR = '\u001f'
+
+/** The id of a project, thread or chat in merged lists: unique across computers. */
+export function mergedKey(nodeId: string, id: string): string {
+  return `${nodeId}${KEY_SEPARATOR}${id}`
+}
+
+/** The computer and its own id behind a merged key; undefined for an id that is not one. */
+export function splitKey(key: string): { nodeId: string; id: string } | undefined {
+  const at = key.indexOf(KEY_SEPARATOR)
+  return at < 0 ? undefined : { nodeId: key.slice(0, at), id: key.slice(at + 1) }
+}
+
+/** Positions of one computer's projects stay together, in the order of the computers. */
+const PROJECT_ORDER_SPAN = 1_000_000
+
+/**
+ * The lists of several computers as one: every id becomes a merged key, so threads of different
+ * computers never collide, and each computer's projects stay together in the computers' order.
+ */
+export function mergeLists(sources: readonly ListsSource[]): ComputerLists {
+  const merged: ComputerLists = { projects: [], threads: [], chats: [], status: {}, receivedAt: 0 }
+  sources.forEach(({ nodeId, lists }, index) => {
+    const key = (id: string) => mergedKey(nodeId, id)
+    for (const project of lists.projects) merged.projects.push({ ...project, id: key(project.id), order: index * PROJECT_ORDER_SPAN + project.order })
+    for (const thread of lists.threads) merged.threads.push({ ...thread, id: key(thread.id), ...(thread.projectId ? { projectId: key(thread.projectId) } : {}) })
+    for (const chat of lists.chats)
+      merged.chats.push({
+        ...chat,
+        id: key(chat.id),
+        ...(chat.threadId ? { threadId: key(chat.threadId) } : {}),
+        ...(chat.projectId ? { projectId: key(chat.projectId) } : {}),
+      })
+    for (const [id, status] of Object.entries(lists.status)) merged.status[key(id)] = status
+    merged.receivedAt = Math.max(merged.receivedAt, lists.receivedAt)
+  })
+  return merged
 }
 
 /** The chat avatar's colour, 0 to 4 (.m-chat-color-N). */

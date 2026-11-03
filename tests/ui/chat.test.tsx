@@ -5,7 +5,7 @@ import { installMatchMedia, renderApp } from './helpers'
 beforeEach(() => installMatchMedia())
 
 const thread = (threadId: string) => [
-  { name: 'computers' as const },
+  { name: 'home' as const },
   { name: 'thread' as const, nodeId: 'node-studio', threadId }
 ]
 

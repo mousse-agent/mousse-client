@@ -61,7 +61,10 @@ function idServer(world: World) {
             ? [{ id: 'reg_p', userId: world.user.user, nodeId: world.phoneNode, kind: 'phone', deviceName: 'Pixel', online: false, generation: 1, expiresAt: now + 60_000, revokedAt: world.phoneRevokedAt ?? null }]
             : []),
         ],
-        bindings: world.hostedRoster ? [{ userId: world.user.user, rootKey: world.user.rootKey, roster: world.hostedRoster, revocations: {} }] : [],
+        bindings: [
+          ...(world.hostedRoster ? [{ userId: world.user.user, rootKey: world.user.rootKey, roster: world.hostedRoster, revocations: {} }] : []),
+          ...(world.otherBindings ?? []),
+        ],
         limits: { maxComputers: 3 },
         devices: { used: 1, limit: 5 },
       })
@@ -149,6 +152,8 @@ interface World {
   phoneRevokedAt?: number
   /** The roster the user's computers last pushed to Mousse ID. */
   hostedRoster?: Signed
+  /** Rosters of other computers on the account, set up apart from the world's computer. */
+  otherBindings?: Array<{ userId: string; roster: Signed; revocations: Record<string, unknown> }>
   onRequest?: (id: string, body: Record<string, unknown>) => void
   decide?: (id: string, polls: number) => { status?: string; sealedInvite?: string } | undefined
   /** How long a registration or renewal lasts; Mousse ID uses 60 seconds. */
@@ -742,5 +747,74 @@ describe('real connection', () => {
     const after = await read()
     expect(after).toHaveLength(1)
     expect(after[0].grant).toBeUndefined()
+  })
+
+  it('plans to join through the computer that adds devices, and never again once joined', async () => {
+    const w = world()
+    w.hostedRoster = roster(w.user, w.computer.node)
+    let boxKey = ''
+    w.onRequest = (_id, body) => {
+      boxKey = String(body.boxPublicKey)
+    }
+    w.decide = (id) => (boxKey ? { status: 'approved', sealedInvite: sealForRequest(invite(w), fromB64url(boxKey, 32), id) } : undefined)
+    const { connection } = await connect(w)
+    await connection.signInWithPassword('a@b.test', 'pw')
+
+    expect(await connection.joinPlan()).toEqual({ status: 'needed', target: { nodeId: w.computer.node, name: 'Studio', online: true } })
+    expect((await connection.listComputers()).find((c) => c.nodeId === w.computer.node)).toMatchObject({ authority: true, enrolled: false })
+
+    await connection.enrollWithComputer(w.computer.node, 'Pixel', () => undefined)
+    expect(await connection.joinPlan()).toEqual({ status: 'joined' })
+  })
+
+  it('has nothing to join while the account has no computer roster', async () => {
+    const { connection } = await connect(world())
+    await connection.signInWithPassword('a@b.test', 'pw')
+    expect(await connection.joinPlan()).toEqual({ status: 'none' })
+  })
+
+  it('joins the roster with the most devices when the account has several', async () => {
+    const w = world()
+    testComputer(w.user, 'Laptop')
+    w.hostedRoster = roster(w.user, w.computer.node)
+    const other = testUser()
+    const lone = testComputer(other, 'Lone')
+    w.otherBindings = [{ userId: other.user, roster: roster(other, lone.node), revocations: {} }]
+    const { connection } = await connect(w)
+    await connection.signInWithPassword('a@b.test', 'pw')
+    expect(await connection.joinPlan()).toMatchObject({ status: 'needed', target: { nodeId: w.computer.node } })
+
+    // The same account with the other roster larger.
+    testComputer(other, 'Two')
+    testComputer(other, 'Three')
+    w.otherBindings = [{ userId: other.user, roster: roster(other, lone.node), revocations: {} }]
+    // That computer has no registration with Mousse ID: it is offline and named from the roster.
+    expect(await connection.joinPlan()).toEqual({ status: 'needed', target: { nodeId: lone.node, name: 'Lone', online: false } })
+  })
+
+  it('does not join again on its own after the computers removed the phone, until the user signs in again', async () => {
+    const { w, connection } = await enrolled((world) => {
+      world.hostedRoster = roster(world.user, world.computer.node)
+    })
+    expect(await connection.joinPlan()).toEqual({ status: 'joined' })
+    w.user.revoked.push({ subject: w.phoneNode!, throughKeyEpoch: 1, revokedAt: Date.now() - 500 })
+    w.hostedRoster = roster(w.user, w.computer.node)
+    expect(await connection.joinPlan()).toEqual({ status: 'removed', computer: 'Studio' })
+    expect(await connection.joinPlan()).toEqual({ status: 'removed', computer: 'Studio' })
+
+    await connection.allowRejoin()
+    expect(await connection.joinPlan()).toMatchObject({ status: 'needed', target: { nodeId: w.computer.node } })
+  })
+
+  it('lets a removed phone join again after signing in again', async () => {
+    const { w, connection } = await enrolled((world) => {
+      world.hostedRoster = roster(world.user, world.computer.node)
+    })
+    w.user.revoked.push({ subject: w.phoneNode!, throughKeyEpoch: 1, revokedAt: Date.now() - 500 })
+    w.hostedRoster = roster(w.user, w.computer.node)
+    expect(await connection.joinPlan()).toMatchObject({ status: 'removed' })
+    await connection.signOut()
+    await connection.signInWithPassword('a@b.test', 'pw')
+    expect(await connection.joinPlan()).toMatchObject({ status: 'needed' })
   })
 })

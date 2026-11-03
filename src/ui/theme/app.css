@@ -685,6 +685,8 @@ html[data-keyboard='open'] .m-thread__composer { padding-bottom: 8px; }
 .m-composer__footer { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-width: 0; container-type: inline-size; }
 .m-composer__pills { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 1; overflow: hidden; }
 .m-composer__tools { display: flex; align-items: center; gap: 2px; flex: none; }
+/* The new thread's computer and project items, above the composer (the desktop's workspace toolbar). */
+.m-new-thread__where { flex: none; padding: 0 4px; }
 .m-composer[data-controls] .m-composer__action { width: 36px; height: 36px; border-radius: 10px; }
 .m-pill {
   display: inline-flex;

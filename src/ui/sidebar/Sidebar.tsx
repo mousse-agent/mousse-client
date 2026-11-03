@@ -15,6 +15,7 @@ import {
   Loader2,
   MessageSquarePlus,
   MessagesSquare,
+  Monitor,
   Pin,
   type IconComponent,
 } from '../components/icons'
@@ -122,12 +123,32 @@ function CardStatus({ thread, status, now }: { thread: ListThread; status?: Thre
   }
 }
 
-function ThreadCard({ thread, projectName, status, active, now, onOpen }: {
+/** Which computer a row is on, as the desktop marks a thread of another computer. */
+export interface RowComputer {
+  name: string
+  /** The computer cannot be reached; the row comes from the saved lists. */
+  offline?: boolean
+}
+
+/** The computer's name beside its icon, and "offline" when the row comes from the saved lists. */
+function ComputerMark({ computer }: { computer: RowComputer }) {
+  const title = computer.offline ? `Runs on ${computer.name} · Offline` : `Runs on ${computer.name}`
+  return (
+    <span className="m-sb-computer" data-state={computer.offline ? 'offline' : 'online'} title={title}>
+      <Monitor size={11} strokeWidth={2} aria-hidden="true" />
+      <span className="m-sb-computer__name">{computer.name}</span>
+      {computer.offline && <span className="m-sb-computer__state">offline</span>}
+    </span>
+  )
+}
+
+function ThreadCard({ thread, projectName, status, active, now, computer, onOpen }: {
   thread: ListThread
   projectName?: string
   status?: ThreadStatus
   active: boolean
   now: number
+  computer?: RowComputer
   onOpen(): void
 }) {
   return (
@@ -146,7 +167,12 @@ function ThreadCard({ thread, projectName, status, active, now, onOpen }: {
           {thread.pinned && <Pin size={11} strokeWidth={2} aria-label="Pinned" />}
           {thread.title}
         </span>
-        {thread.worktree && <span className="m-sb-card__sub"><GitBranch size={11} strokeWidth={2} aria-hidden="true" />Worktree</span>}
+        {(thread.worktree || computer) && (
+          <span className="m-sb-card__sub">
+            {computer && <ComputerMark computer={computer} />}
+            {thread.worktree && <><GitBranch size={11} strokeWidth={2} aria-hidden="true" />Worktree</>}
+          </span>
+        )}
       </span>
     </button>
   )
@@ -178,11 +204,12 @@ function Collapsible({ title, count, open, onToggle, children }: { title: string
   )
 }
 
-function ProjectGroup({ project, threads, lists, selectedId, expanded, onToggle, onOpen, onNewThread }: {
+function ProjectGroup({ project, threads, lists, selectedId, computer, expanded, onToggle, onOpen, onNewThread }: {
   project: ListProject
   threads: ListThread[]
   lists: ComputerLists
   selectedId?: string
+  computer?: RowComputer
   expanded: boolean
   onToggle(): void
   onOpen(thread: ListThread): void
@@ -197,6 +224,7 @@ function ProjectGroup({ project, threads, lists, selectedId, expanded, onToggle,
         <button type="button" className="m-sb-project__row" aria-expanded={expanded} onClick={onToggle}>
           {expanded ? <FolderOpen size={17} className="m-sb-project__icon" aria-hidden="true" /> : <Folder size={17} className="m-sb-project__icon" aria-hidden="true" />}
           <span className="m-sb-project__name">{project.name}</span>
+          {computer && <ComputerMark computer={computer} />}
           {!expanded && busy && <Loader2 size={14} className="m-sb-status m-sb-status--running m-sb-spin" aria-label="Working" />}
           {!expanded && threads.length > 0 && <span className="m-sb-project__count">{threads.length}</span>}
         </button>
@@ -226,14 +254,14 @@ export function ChatAvatar({ chat }: { chat: ListChat }) {
   return <span className={`m-chat-avatar m-chat-color-${chatColor(chat.name)}${group ? ' is-group' : ''}`} aria-hidden="true">{group ? '#' : chat.name.slice(0, 1).toUpperCase()}</span>
 }
 
-function ChatRow({ chat, active, onOpen }: { chat: ListChat; active: boolean; onOpen(): void }) {
+function ChatRow({ chat, active, computer, onOpen }: { chat: ListChat; active: boolean; computer?: RowComputer; onOpen(): void }) {
   const working = chat.run?.state === 'running'
   return (
     <button type="button" className={`m-chat-row${active ? ' is-active' : ''}${chat.network ? ' is-network' : ''}`} aria-current={active ? 'true' : undefined} onClick={onOpen}>
       <ChatAvatar chat={chat} />
       <span className="m-chat-row__text">
         <span className="m-chat-row__name">{chat.name}</span>
-        <span className="m-chat-row__preview">{chatPreview(chat)}</span>
+        <span className="m-chat-row__preview">{computer && <span>{`${computer.name}${computer.offline ? ' (offline)' : ''} · `}</span>}{chatPreview(chat)}</span>
       </span>
       {working && <span className="m-chat-working-dot" role="img" aria-label="Working" />}
       {!working && chat.run?.state === 'failed' && <CircleAlert size={14} className="m-sb-status m-sb-status--error" aria-label="Failed" />}
@@ -251,6 +279,10 @@ export interface SidebarProps {
   onNewThread?(project: ListProject): void
   /** Shown above the list, under the tabs: connection notices and the like. */
   banner?: ReactNode
+  /** For lists merged from several computers: the computer of a row, by its id. Rows then name their computer. */
+  computerOf?(id: string): RowComputer | undefined
+  /** `recent` orders the Threads tab by activity, for merged lists. */
+  order?: 'desktop' | 'recent'
 }
 
 function useNow(ms = 30_000): number {
@@ -262,13 +294,13 @@ function useNow(ms = 30_000): number {
   return now
 }
 
-export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenChat, onNewThread, banner }: SidebarProps) {
+export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenChat, onNewThread, banner, computerOf, order = 'desktop' }: SidebarProps) {
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [settledOpen, setSettledOpen] = useState(false)
   const [standaloneOpen, setStandaloneOpen] = useState(false)
   const now = useNow()
-  const model = useMemo(() => sidebarModel(lists, query), [lists, query])
+  const model = useMemo(() => sidebarModel(lists, query, order), [lists, query, order])
 
   // Like the desktop, the project holding the open thread starts expanded.
   const selectedProject = lists.threads.find((thread) => thread.id === selectedId)?.projectId
@@ -290,6 +322,7 @@ export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenCha
       status={lists.status[thread.id]}
       active={thread.id === selectedId}
       now={now}
+      computer={computerOf?.(thread.id)}
       onOpen={() => onOpenThread(thread)}
     />
   )
@@ -304,7 +337,7 @@ export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenCha
       <div className="m-sidebar__panel" role="tabpanel" id={`m-sidebar-panel-${tab}`} aria-labelledby={`m-sidebar-tab-${tab}`}>
         {tab === 'projects' && (
           <>
-            {projects.length === 0 && <p className="m-sb-empty">No projects on this computer yet.</p>}
+            {projects.length === 0 && <p className="m-sb-empty">No projects yet.</p>}
             {projects.map((project) => {
               const threads = model.byProject.get(project.id) ?? []
               if (searching && !threads.length && !project.name.toLowerCase().includes(query.trim().toLowerCase())) return null
@@ -315,6 +348,7 @@ export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenCha
                   threads={threads}
                   lists={lists}
                   selectedId={selectedId}
+                  computer={computerOf?.(project.id)}
                   expanded={searching || expanded.has(project.id)}
                   onToggle={() => toggle(project.id)}
                   onOpen={onOpenThread}
@@ -354,13 +388,13 @@ export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenCha
             {model.groups.length > 0 && (
               <>
                 <SectionHeading>Groups</SectionHeading>
-                <div className="m-chat-list">{model.groups.map((chat) => <ChatRow key={chat.id} chat={chat} active={!!chat.threadId && chat.threadId === selectedId} onOpen={() => onOpenChat(chat)} />)}</div>
+                <div className="m-chat-list">{model.groups.map((chat) => <ChatRow key={chat.id} chat={chat} active={!!chat.threadId && chat.threadId === selectedId} computer={computerOf?.(chat.id)} onOpen={() => onOpenChat(chat)} />)}</div>
               </>
             )}
             {model.direct.length > 0 && (
               <>
                 <SectionHeading>Recent</SectionHeading>
-                <div className="m-chat-list">{model.direct.map((chat) => <ChatRow key={chat.id} chat={chat} active={!!chat.threadId && chat.threadId === selectedId} onOpen={() => onOpenChat(chat)} />)}</div>
+                <div className="m-chat-list">{model.direct.map((chat) => <ChatRow key={chat.id} chat={chat} active={!!chat.threadId && chat.threadId === selectedId} computer={computerOf?.(chat.id)} onOpen={() => onOpenChat(chat)} />)}</div>
               </>
             )}
           </>

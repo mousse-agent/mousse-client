@@ -5,9 +5,10 @@ import { App as CapacitorApp } from '@capacitor/app'
 import { Capacitor } from '@capacitor/core'
 
 export type Route =
-  | { name: 'computers' }
-  | { name: 'computer'; nodeId: string }
+  | { name: 'home' }
   | { name: 'thread'; nodeId: string; threadId: string }
+  /** A new thread; the computer and project start as given, or as last used. */
+  | { name: 'new'; nodeId?: string; projectId?: string }
   | { name: 'settings' }
 
 interface RouterValue {
@@ -20,7 +21,7 @@ interface RouterValue {
 }
 
 const RouterContext = createContext<RouterValue | null>(null)
-const ROOT: Route = { name: 'computers' }
+const ROOT: Route = { name: 'home' }
 
 export function RouterProvider({ children, initial = [ROOT] }: { children: ReactNode; initial?: Route[] }) {
   const [stack, setStack] = useState<Route[]>(initial.length ? initial : [ROOT])
@@ -28,7 +29,7 @@ export function RouterProvider({ children, initial = [ROOT] }: { children: React
   const push = useCallback((route: Route) => setStack((current) => [...current, route]), [])
   const pop = useCallback(() => setStack((current) => (current.length > 1 ? current.slice(0, -1) : current)), [])
   const replace = useCallback((route: Route) => setStack((current) => [...current.slice(0, -1), route]), [])
-  const reset = useCallback((route: Route = ROOT) => setStack(route.name === 'computers' ? [route] : [ROOT, route]), [])
+  const reset = useCallback((route: Route = ROOT) => setStack(route.name === 'home' ? [route] : [ROOT, route]), [])
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return

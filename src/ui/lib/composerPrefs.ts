@@ -51,3 +51,21 @@ export function loadFavorites(nodeId: string): Set<string> {
 export function saveFavorites(nodeId: string, favorites: Set<string>): void {
   write(`mousse.composer.favorites.${nodeId}`, favorites.size ? JSON.stringify([...favorites]) : null)
 }
+
+/** The computer the user last opened or started a thread on: a new thread starts there. */
+export function loadLastComputer(): string | undefined {
+  return read('mousse.newThread.computer') ?? undefined
+}
+
+export function saveLastComputer(nodeId: string): void {
+  write('mousse.newThread.computer', nodeId)
+}
+
+/** The project a new thread on this computer last went to; an empty string is no project. */
+export function loadLastProject(nodeId: string): string | undefined {
+  return read(`mousse.newThread.project.${nodeId}`) ?? undefined
+}
+
+export function saveLastProject(nodeId: string, projectId: string): void {
+  write(`mousse.newThread.project.${nodeId}`, projectId)
+}

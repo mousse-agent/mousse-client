@@ -140,6 +140,8 @@ export interface ComputerStoreOptions {
 export class ComputerStore {
   private current: ComputerView
   private readonly listeners = new Set<() => void>()
+  /** Listeners that follow the view without connecting, such as a list of computers that are offline. */
+  private readonly watchers = new Set<() => void>()
   private attached?: { session: ComputerSession; stop: () => void }
   private retryTimer?: ReturnType<typeof setTimeout>
   private saveTimer?: ReturnType<typeof setTimeout>
@@ -169,6 +171,14 @@ export class ComputerStore {
     this.connect()
     return () => {
       this.listeners.delete(listener)
+    }
+  }
+
+  /** Follows the view without connecting: the saved lists, and the live ones while something else keeps the link up. */
+  watch(listener: () => void): () => void {
+    this.watchers.add(listener)
+    return () => {
+      this.watchers.delete(listener)
     }
   }
 
@@ -227,6 +237,7 @@ export class ComputerStore {
     this.flushSave()
     this.detach()
     this.listeners.clear()
+    this.watchers.clear()
   }
 
   private attach(session: ComputerSession): void {
@@ -336,6 +347,6 @@ export class ComputerStore {
     const changed = (Object.keys({ ...this.current, ...next }) as Array<keyof ComputerView>).some((key) => this.current[key] !== next[key])
     if (!changed) return
     this.current = next
-    for (const listener of this.listeners) listener()
+    for (const listener of [...this.listeners, ...this.watchers]) listener()
   }
 }

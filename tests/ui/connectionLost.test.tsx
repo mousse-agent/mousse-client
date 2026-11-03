@@ -17,7 +17,7 @@ describe('lost connection', () => {
       opened.push(session)
       return session
     }
-    render(<App connection={connection} initialRoutes={[{ name: 'computers' }, { name: 'thread', nodeId: 'node-studio', threadId: 't-voices' }]} />)
+    render(<App connection={connection} initialRoutes={[{ name: 'home' }, { name: 'thread', nodeId: 'node-studio', threadId: 't-voices' }]} />)
     await screen.findByLabelText('Message')
     act(() => (opened[0] as ComputerSession & { close(message?: string): void }).close('The relay closed the connection (code 1008).'))
     expect(await screen.findByText(/^Lost the connection to .+: The relay closed the connection \(code 1008\)\.$/)).toBeInTheDocument()

@@ -5,13 +5,13 @@ import { installMatchMedia, renderApp } from './helpers'
 beforeEach(() => installMatchMedia())
 
 describe('sign in', () => {
-  it('signs in with email and password and shows the computers', async () => {
+  it('signs in with email and password and shows the threads', async () => {
     renderApp()
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'ada@example.com' } })
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'hunter22' } })
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
-    expect(await screen.findByRole('heading', { name: 'Computers' })).toBeInTheDocument()
-    expect(await screen.findByText('Studio Mac')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Threads' })).toBeInTheDocument()
+    expect(await screen.findByText('Phone app redesign')).toBeInTheDocument()
   })
 
   it('shows the error when the password is rejected', async () => {
@@ -20,7 +20,7 @@ describe('sign in', () => {
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'wrong' } })
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('do not match')
-    expect(screen.queryByRole('heading', { name: 'Computers' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Threads' })).not.toBeInTheDocument()
   })
 
   it('offers only Google and password sign-in', () => {
@@ -34,12 +34,12 @@ describe('sign in', () => {
     expect(separator.compareDocumentPosition(screen.getByLabelText('Password')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('signs in with Google and shows the computers', async () => {
+  it('signs in with Google and shows the threads', async () => {
     const { connection } = renderApp()
     const signInWithGoogle = vi.spyOn(connection, 'signInWithGoogle')
     fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }))
     expect(signInWithGoogle).toHaveBeenCalledTimes(1)
-    expect(await screen.findByRole('heading', { name: 'Computers' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Threads' })).toBeInTheDocument()
   })
 
   it('shows a notice and stays on sign-in when Google sign-in is cancelled', async () => {
@@ -50,7 +50,7 @@ describe('sign in', () => {
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeDisabled()
     expect(await screen.findByRole('alert')).toHaveTextContent('cancelled')
     await waitFor(() => expect(google).not.toHaveAttribute('aria-busy'))
-    expect(screen.queryByRole('heading', { name: 'Computers' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Threads' })).not.toBeInTheDocument()
   })
 
   it('shows the error when Google sign-in fails', async () => {

@@ -14,6 +14,7 @@ import type {
   SendOptions,
   ThreadDetails,
   EnrollmentProgress,
+  JoinPlan,
   ListChat,
   ListsHandlers,
   ThreadStatus,
@@ -44,6 +45,8 @@ export interface FakeConnectionOptions {
   now?: number
   /** How "Continue with Google" ends: signed in (default), cancelled in the browser, or refused. */
   googleSignIn?: 'ok' | 'cancelled' | 'failed'
+  /** Whether this phone is already among the account's computers (default true). Otherwise it joins through Studio Mac. */
+  phoneJoined?: boolean
 }
 
 export const FAKE_PASSWORD_REJECTED = 'wrong'
@@ -56,11 +59,14 @@ let BASE_TIME = Date.now()
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
-function initialComputers(): Computer[] {
+/** Studio Mac adds devices; Travel laptop shares its list. Linux workstation was set up apart and this phone never reaches it. */
+const NETWORK = new Set(['node-studio', 'node-laptop'])
+
+function initialComputers(joined = true): Computer[] {
   return [
-    { nodeId: 'node-studio', name: 'Studio Mac', kind: 'computer', online: true, enrolled: true, lastSeenAt: BASE_TIME },
+    { nodeId: 'node-studio', name: 'Studio Mac', kind: 'computer', online: true, enrolled: joined, authority: true, lastSeenAt: BASE_TIME },
     { nodeId: 'node-workstation', name: 'Linux workstation', kind: 'computer', online: true, enrolled: false, lastSeenAt: BASE_TIME },
-    { nodeId: 'node-laptop', name: 'Travel laptop', kind: 'computer', online: false, enrolled: true, lastSeenAt: BASE_TIME - 3 * 86_400_000 },
+    { nodeId: 'node-laptop', name: 'Travel laptop', kind: 'computer', online: false, enrolled: joined, lastSeenAt: BASE_TIME - 3 * 86_400_000 },
     { nodeId: 'node-pixel', name: 'Pixel 9', kind: 'phone', online: true, enrolled: false, lastSeenAt: BASE_TIME }
   ]
 }
@@ -498,11 +504,16 @@ export class FakeMousseConnection implements MousseConnection {
   private computers = initialComputers()
   private threadsByNode = new Map<string, ThreadSummary[]>()
   private readonly opts: Required<Omit<FakeConnectionOptions, 'now' | 'email'>>
+  /** The user's computers removed this phone; it does not join again until the user signs in. */
+  removed = false
+  /** Enrollment requests sent, for tests. */
+  readonly enrollRequests: string[] = []
 
   constructor(options: FakeConnectionOptions = {}) {
     BASE_TIME = options.now ?? Date.now()
-    this.computers = initialComputers()
+    this.computers = initialComputers(options.phoneJoined ?? true)
     this.opts = {
+      phoneJoined: options.phoneJoined ?? true,
       signedIn: options.signedIn ?? false,
       stageDelayMs: options.stageDelayMs ?? 1200,
       tickMs: options.tickMs ?? 60,
@@ -552,6 +563,7 @@ export class FakeMousseConnection implements MousseConnection {
 
   async enrollWithComputer(nodeId: string, _deviceName: string, onProgress: (progress: EnrollmentProgress) => void): Promise<void> {
     this.requireAccount()
+    this.enrollRequests.push(nodeId)
     const computer = this.computers.find((entry) => entry.nodeId === nodeId)
     if (!computer) throw new Error('That computer is no longer on this account.')
     if (!computer.online) {
@@ -559,7 +571,29 @@ export class FakeMousseConnection implements MousseConnection {
       throw new Error(`${computer.name} is offline.`)
     }
     await this.runStages(onProgress)
+    // One join reaches every computer that shares the authority's list.
+    for (const entry of this.computers) if (NETWORK.has(entry.nodeId) && NETWORK.has(nodeId)) entry.enrolled = true
     computer.enrolled = true
+  }
+
+  async joinPlan(): Promise<JoinPlan> {
+    await sleep(this.opts.latencyMs)
+    this.requireAccount()
+    const authority = this.computers.find((entry) => entry.authority)
+    if (!authority) return { status: 'none' }
+    if (authority.enrolled) return { status: 'joined' }
+    if (this.removed) return { status: 'removed', computer: authority.name }
+    return { status: 'needed', target: { nodeId: authority.nodeId, name: authority.name, online: authority.online } }
+  }
+
+  async allowRejoin(): Promise<void> {
+    this.removed = false
+  }
+
+  /** Sets a computer's presence, for tests. */
+  setOnline(nodeId: string, online: boolean): void {
+    const computer = this.computers.find((entry) => entry.nodeId === nodeId)
+    if (computer) computer.online = online
   }
 
   async enrollFromQr(payload: string, onProgress: (progress: EnrollmentProgress) => void): Promise<void> {

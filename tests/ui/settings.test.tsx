@@ -7,7 +7,7 @@ describe('settings', () => {
   beforeEach(() => installMatchMedia())
 
   it('shows the Mousse ID, device usage and the Mousse ID server, with no plan', async () => {
-    renderApp({ signedIn: true, routes: [{ name: 'computers' }, { name: 'settings' }] })
+    renderApp({ signedIn: true, routes: [{ name: 'home' }, { name: 'settings' }] })
 
     expect(screen.getByText('demo@mousse.dev')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByTestId('device-usage')).toHaveTextContent('4 of 5 devices'))
@@ -19,7 +19,7 @@ describe('settings', () => {
   })
 
   it('handles a Mousse ID without an email', async () => {
-    renderApp({ signedIn: true, email: null, routes: [{ name: 'computers' }, { name: 'settings' }] })
+    renderApp({ signedIn: true, email: null, routes: [{ name: 'home' }, { name: 'settings' }] })
 
     expect(screen.getByText('Signed in, no email on file')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByTestId('device-usage')).toHaveTextContent('of 5 devices'))
