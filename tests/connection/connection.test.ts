@@ -578,6 +578,25 @@ describe('real connection', () => {
     session.close()
   })
 
+  it('refuses a request from the computer and keeps the session open', async () => {
+    const { w, connection, deps } = await enrolled()
+    let remote: ReturnType<typeof fakeComputer> | undefined
+    deps.openChannel = async () => {
+      const [a, b] = streamPair()
+      remote = fakeComputer(b, w.user, w.computer, roster(w.user, w.computer.node))
+      void remote.handshake()
+      return channelOf(a, w.computer.keys.transport.spki)
+    }
+    const session = await connection.openComputer(w.computer.node)
+    expect(session.state()).toBe('open')
+    // A computer asks every device for its version once a session opens.
+    await remote!.send({ t: 'rpc.request', id: 'rpc_version', method: 'net.info', params: {}, deadlineMs: 10_000 })
+    const answer = await remote!.next('rpc.result')
+    expect(answer).toMatchObject({ id: 'rpc_version', error: { code: 'forbidden' } })
+    expect(session.state()).toBe('open')
+    session.close()
+  })
+
   it('ends the session and forgets the computer when a roster removing this phone arrives', async () => {
     const { w, connection, storage, deps } = await enrolled()
     let remote: ReturnType<typeof fakeComputer> | undefined

@@ -420,6 +420,17 @@ export class LeafSession {
         return
       case 'presence':
         return
+      case 'rpc.request':
+        // A phone serves no methods. A computer may still ask one (an older one asks every device for
+        // its version): refuse that request and keep the session, instead of ending it.
+        void this.send({
+          t: 'rpc.result',
+          id: h.id,
+          error: { code: 'forbidden', message: 'A phone answers no requests.', retryable: false },
+        }).catch(() => {})
+        return
+      case 'rpc.cancel':
+        return
       default:
         throw new NetError('forbidden', `Unexpected ${h.t} from the computer.`)
     }
