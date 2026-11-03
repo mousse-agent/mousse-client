@@ -162,6 +162,25 @@ describe('relay dial', () => {
     expect(await ended).toMatchObject({ code: 'route_unreachable', message: 'The relay closed the connection (code 1008).' })
   })
 
+  it('ends a paired circuit with the code the relay names in its close reason', async () => {
+    let socket!: FakeSocket
+    const ticket = b64url(new Uint8Array(32).fill(7))
+    const dialing = dialRelay({
+      route: `${audience}?node=${target}`,
+      identity,
+      registration: rendezvousRegistration(ticket),
+      ticket,
+      socketFactory: (url) => (socket = new FakeSocket(url)),
+    })
+    socket.server({ v: 1, t: 'challenge', audience, nonce: b64url(new Uint8Array(32).fill(1)) })
+    socket.server({ v: 1, t: 'ready' })
+    socket.server({ v: 1, t: 'paired', peer: target, circuitId: 'c1' })
+    const stream = await dialing
+    const ended = new Promise<Error | undefined>((resolve) => stream.listen({ data: () => {}, close: resolve }))
+    socket.onclose?.({ code: 1008, reason: 'quota_exceeded' })
+    expect(await ended).toMatchObject({ code: 'quota_exceeded', message: 'The relay closed the connection (quota_exceeded).' })
+  })
+
   it('refuses a challenge for another service and maps relay errors', async () => {
     let socket!: FakeSocket
     const options = { route: `${audience}?node=${target}`, identity, registration: { registrationId: 'reg_1', generation: 2 } }

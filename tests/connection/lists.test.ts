@@ -279,6 +279,33 @@ describe('computer store', () => {
     }
   })
 
+  it('waits at least a minute after Mousse ID refuses a connection for the account\'s budget', async () => {
+    vi.useFakeTimers()
+    try {
+      let attempts = 0
+      const store = new ComputerStore({
+        nodeId: 'node',
+        accountId: 'acct',
+        cache: memoryListsCache(),
+        reconnectDelaysMs: [1_000, 2_000, 5_000, 10_000, 30_000],
+        drop: () => undefined,
+        open: async () => {
+          attempts++
+          throw Object.assign(new Error('Relay refused the connection (quota_exceeded).'), { code: 'quota_exceeded' })
+        },
+      })
+      store.subscribe(() => undefined)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(attempts).toBe(1)
+      await vi.advanceTimersByTimeAsync(59_000)
+      expect(attempts).toBe(1)
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(attempts).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('never stops reconnecting a dropped link, and tries at once when the network changes', async () => {
     vi.useFakeTimers()
     try {

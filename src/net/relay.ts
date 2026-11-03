@@ -93,6 +93,10 @@ export function rendezvousRegistration(ticket: string): { registrationId: string
 
 const RELAY_CODES = new Set([
   'bad_request',
+  'bad_signature',
+  'bad_delegation',
+  'invite_invalid',
+  'conflict',
   'forbidden',
   'not_enrolled',
   'revoked',
@@ -223,11 +227,14 @@ export function dialRelay(options: RelayDialOptions): Promise<ByteStream> {
     }
     socket.onerror = () => fail(new NetError('route_unreachable', 'Relay connection failed.'))
     socket.onclose = (event) => {
+      // The relay names why it ended a circuit in the close reason: a policy code, or `closed`.
+      const reason = String((event as { reason?: unknown } | null)?.reason ?? '')
+      const why = RELAY_CODES.has(reason) ? reason : 'route_unreachable'
       if (state === 'paired') {
         state = 'failed'
         const code = (event as { code?: unknown } | null)?.code
-        stream!.end(new NetError('route_unreachable', `The relay closed the connection${typeof code === 'number' ? ` (code ${code})` : ''}.`))
-      } else fail(new NetError('route_unreachable', 'Relay closed the connection.'))
+        stream!.end(new NetError(why, `The relay closed the connection${RELAY_CODES.has(reason) ? ` (${reason})` : typeof code === 'number' ? ` (code ${code})` : ''}.`))
+      } else fail(new NetError(why, RELAY_CODES.has(reason) ? `Relay refused the connection (${reason}).` : 'Relay closed the connection.'))
     }
   })
 }

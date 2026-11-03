@@ -113,6 +113,8 @@ export function memoryListsCache(): ListsCache {
  * for as long as a screen shows the computer, and at once when the network changes or the app returns.
  */
 export const RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000]
+/** The shortest wait after Mousse ID refused a connection for the account's hourly budget. */
+export const QUOTA_RETRY_MS = 60_000
 /**
  * How long after an open link dropped the phone keeps reconnecting without saying so: a relay
  * restart (Mousse ID deploys restart it) or a network change heals within this time. A failure
@@ -190,7 +192,9 @@ export class ComputerStore {
         if (isUnreachable(error) && this.quietRetry()) return
         this.quietUntil = undefined
         this.set({ link: 'error', error: error instanceof Error && error.message ? error.message : 'Could not connect.' })
-        this.scheduleRetry()
+        // Each attempt uses one of the account's relay connections for the hour: after a refusal
+        // for that, quick retries would only keep the account over its budget.
+        this.scheduleRetry((error as { code?: unknown } | null)?.code === 'quota_exceeded' ? QUOTA_RETRY_MS : 0)
       },
     )
   }
@@ -299,9 +303,10 @@ export class ComputerStore {
     return delays[Math.min(this.attempts, delays.length - 1)]
   }
 
-  private scheduleRetry(): void {
-    const delay = this.nextDelay()
-    if (delay === undefined) return
+  private scheduleRetry(atLeastMs = 0): void {
+    const next = this.nextDelay()
+    if (next === undefined) return
+    const delay = Math.max(next, atLeastMs)
     this.attempts++
     clearTimeout(this.retryTimer)
     this.retryTimer = setTimeout(() => {
