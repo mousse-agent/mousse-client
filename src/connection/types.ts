@@ -326,6 +326,12 @@ export interface ComposerCommand {
   argsHint?: string
 }
 
+/**
+ * How much the agent may do without asking (the desktop's PermissionMode): `ask`, `accept_edits`
+ * (edits go ahead, commands ask), `auto` (the agent's own auto mode decides) or `full` (nothing asks).
+ */
+export type PermissionMode = 'ask' | 'accept_edits' | 'auto' | 'full'
+
 /** What the computer's composer offers: its models, default model, modes, skills and slash commands. */
 export interface ComposerOptions {
   providers: LlmProviderOption[]
@@ -333,6 +339,8 @@ export interface ComposerOptions {
   modes: string[]
   skills: ComposerSkill[]
   commands: ComposerCommand[]
+  /** The computer's default permission mode, and the most it lets this phone have. */
+  permission?: { defaultMode: PermissionMode; limit?: PermissionMode }
 }
 
 /** An image to send, as base64 without a `data:` prefix. */
@@ -364,6 +372,8 @@ export interface ThreadDetails {
   id: string
   projectId?: string
   model?: ModelSelection
+  /** The thread's own permission mode; without one it follows the computer's default. */
+  permissionMode?: PermissionMode
 }
 
 export interface ContextUsage {
@@ -408,7 +418,7 @@ export interface ComputerSession {
   endMessage?(): string | undefined
   listProjects(): Promise<Project[]>
   listThreads(filter?: { projectId?: string; query?: string }): Promise<ThreadSummary[]>
-  createThread(input: { projectId: string; title?: string }): Promise<ThreadSummary>
+  createThread(input: { projectId: string; title?: string; worktreeEnabled?: boolean }): Promise<ThreadSummary>
   /**
    * Calls onItems with the full item list, and the thread's display state when the session knows
    * it, on open and after every change. Returns an unsubscribe.

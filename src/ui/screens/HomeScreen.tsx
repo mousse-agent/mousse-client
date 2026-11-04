@@ -272,7 +272,7 @@ function ThreadPane({ nodeId, threadId, name, wide }: { nodeId: string; threadId
       </div></div>
     )
   } else if (session) {
-    body = <ThreadView session={session} threadId={threadId} />
+    body = <ThreadView session={session} threadId={threadId} computerName={name} />
   } else {
     const failed = link === 'error' || link === 'closed'
     body = (

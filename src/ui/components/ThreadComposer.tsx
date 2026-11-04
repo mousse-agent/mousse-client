@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ComposerOptions, ComputerSession, ContextUsage, ModelSelection, QueuedMessage, SendOptions } from '../../connection/types'
+import type { ComposerOptions, ComputerSession, ContextUsage, ModelSelection, PermissionMode, QueuedMessage, SendOptions } from '../../connection/types'
 import type { ThreadState } from '../hooks/useThread'
 import { errorMessage } from '../hooks/useAsync'
 import { useRouter } from '../state/router'
-import { loadFavorites, loadMode, saveFavorites, saveMode } from '../lib/composerPrefs'
+import { loadFavorites, saveFavorites } from '../lib/composerPrefs'
 import { Composer, type ComposerControls } from './Composer'
 import { QueuedMessages } from './QueuedMessages'
-import { isPlanless } from './ComposerSheets'
+import { shownPermission } from './ComposerSheets'
 import { Notice } from './primitives'
 
 const QUEUE_POLL_MS = 4_000
@@ -30,12 +30,12 @@ function composerOptions(session: ComputerSession, threadId: string): Promise<Co
  * every device sees the same choice), mode, skills, slash commands, images, the queue and context.
  * A computer without these controls (an older Mousse) still gets a working text composer.
  */
-export function ThreadComposer({ session, threadId, thread, addition }: { session: ComputerSession; threadId: string; thread: ThreadState; addition?: { text: string; key: number } }) {
+export function ThreadComposer({ session, threadId, thread, addition, computerName }: { session: ComputerSession; threadId: string; thread: ThreadState; addition?: { text: string; key: number }; computerName?: string }) {
   const router = useRouter()
   const [options, setOptions] = useState<ComposerOptions>()
   const [model, setModel] = useState<ModelSelection>()
   const [projectId, setProjectId] = useState<string>()
-  const [mode, setMode] = useState(() => loadMode(session.nodeId))
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>()
   const [favorites, setFavorites] = useState(() => loadFavorites(session.nodeId))
   const [queue, setQueue] = useState<QueuedMessage[]>([])
   const [usage, setUsage] = useState<ContextUsage>()
@@ -51,6 +51,7 @@ export function ThreadComposer({ session, threadId, thread, addition }: { sessio
     alive.current = true
     let cancelled = false
     setModel(undefined)
+    setPermissionMode(undefined)
     setQueue([])
     setUsage(undefined)
     setError(undefined)
@@ -59,6 +60,7 @@ export function ThreadComposer({ session, threadId, thread, addition }: { sessio
       if (cancelled) return
       setModel(details.model)
       setProjectId(details.projectId)
+      setPermissionMode(details.permissionMode)
     }, () => undefined)
     return () => { cancelled = true; alive.current = false }
   }, [session, threadId])
@@ -96,22 +98,19 @@ export function ThreadComposer({ session, threadId, thread, addition }: { sessio
     const next: ModelSelection = { ...(provider?.instanceId ? { instanceId: provider.instanceId } : {}), llmProvider: nextProvider, model: modelId }
     const previous = model
     setModel(next)
-    if (isPlanless(nextProvider) && mode === 'plan') { setMode('agent'); saveMode(session.nodeId, 'agent') }
     session.setThreadModel(threadId, next).then(() => refreshUsage(), (cause) => {
       if (!alive.current) return
       setModel(previous)
       setError(errorMessage(cause))
     })
-  }, [options, model, mode, session, threadId, refreshUsage])
+  }, [options, model, session, threadId, refreshUsage])
 
   const controls: ComposerControls | undefined = options && {
     providers: options.providers,
     providerId,
     modelId: selection?.model,
     onSelectModel: selectModel,
-    modes: options.modes,
-    mode,
-    onSelectMode: (next) => { setMode(next); saveMode(session.nodeId, next) },
+    permission: shownPermission(options.permission, permissionMode, computerName),
     skills: options.skills,
     commands: options.commands,
     usage,

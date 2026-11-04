@@ -141,6 +141,7 @@ export const FAKE_COMPOSER_OPTIONS: ComposerOptions = {
   ],
   defaultModel: { instanceId: 'pi:anthropic', llmProvider: 'anthropic', model: 'claude-opus-4-8:high' },
   modes: ['plan', 'agent', 'build'],
+  permission: { defaultMode: 'accept_edits' },
   skills: [
     { id: 'skill-review', name: 'Code review', description: 'Review the current diff for bugs' },
     { id: 'skill-release', name: 'Release notes', description: 'Write release notes from merged PRs' }
@@ -181,6 +182,8 @@ export class FakeSession implements ComputerSession {
   readonly speech = new FakeComputerSpeech()
   /** Every send, queued message and steer, with its options, for tests. */
   readonly sent: Array<{ kind: 'send' | 'queue' | 'steer'; threadId: string; text: string; options?: SendOptions }> = []
+  /** What each new thread was created with, for tests. */
+  readonly created: Array<{ projectId: string; title?: string; worktreeEnabled?: boolean }> = []
 
   constructor(readonly nodeId: string, private threads: ThreadSummary[], private opts: Required<Omit<FakeConnectionOptions, 'now' | 'email'>>) {}
 
@@ -256,8 +259,9 @@ export class FakeSession implements ComputerSession {
       .sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
-  async createThread(input: { projectId: string; title?: string }): Promise<ThreadSummary> {
+  async createThread(input: { projectId: string; title?: string; worktreeEnabled?: boolean }): Promise<ThreadSummary> {
     await sleep(this.opts.latencyMs)
+    this.created.push({ ...input })
     const thread: ThreadSummary = {
       id: `t-new-${this.nextId++}`,
       projectId: input.projectId,

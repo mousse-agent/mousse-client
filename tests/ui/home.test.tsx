@@ -107,6 +107,33 @@ describe('new thread', () => {
     expect(localStorage.getItem('mousse.newThread.project.node-studio')).toBe('p-site')
   })
 
+  it('looks like the desktop start page and starts the thread with the picked model and a worktree', async () => {
+    const { connection } = renderApp({ signedIn: true, routes: [{ name: 'home' }, { name: 'new', nodeId: 'node-studio' }] })
+    // The desktop's start page: the outline logo and its title over the composer, no orb.
+    expect(await screen.findByRole('heading', { name: 'What should we build?' })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'Mousse' })).toBeInTheDocument()
+    expect(document.querySelector('.liquid-orb')).toBeNull()
+    expect(screen.getByRole('group', { name: 'New thread workspace' })).toBeInTheDocument()
+
+    // The model is picked before the thread exists, in the same picker as a thread's.
+    fireEvent.click(await screen.findByRole('button', { name: 'Model: Opus 4.8 High' }))
+    fireEvent.click(within(await screen.findByRole('menu', { name: 'Models' })).getByRole('menuitemradio', { name: 'GPT 5.5, OpenAI' }))
+    expect(await screen.findByRole('button', { name: 'Model: GPT 5.5 High' })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Project: mousse' })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Start in a worktree' }))
+    expect(screen.getByRole('button', { name: 'Start in a worktree' })).toHaveAttribute('aria-pressed', 'true')
+
+    const field = screen.getByLabelText('Message')
+    await waitFor(() => expect(field).not.toBeDisabled())
+    fireEvent.change(field, { target: { value: 'Tidy the build script' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(await screen.findByText('Tidy the build script')).toBeInTheDocument()
+    const session = (connection as FakeMousseConnection).lastSession!
+    expect(session.created).toEqual([{ projectId: 'p-mousse', worktreeEnabled: true }])
+    const threadId = session.sent[0].threadId
+    expect((await session.getThread(threadId)).model).toEqual({ instanceId: 'pi:openai', llmProvider: 'openai', model: 'gpt-5.5:high' })
+  })
+
   it('offers the user’s computers in its computer menu', async () => {
     renderApp({ signedIn: true, routes: [{ name: 'home' }, { name: 'new' }] })
     fireEvent.click(await screen.findByRole('button', { name: 'Computer: Studio Mac' }))

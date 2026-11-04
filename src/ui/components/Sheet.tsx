@@ -8,12 +8,14 @@ export interface SheetProps {
   title: string
   onClose(): void
   children: ReactNode
+  /** Stays under the scrolling body, like the desktop picker's footer. */
+  footer?: ReactNode
   /** Prevent closing by backdrop tap or Escape, e.g. while waiting on a computer. */
   dismissible?: boolean
 }
 
 /** Bottom sheet on phones, centred dialog on wide screens (see app.css). */
-export function Sheet({ open, title, onClose, children, dismissible = true }: SheetProps) {
+export function Sheet({ open, title, onClose, children, footer, dismissible = true }: SheetProps) {
   const titleId = useId()
   const panel = useRef<HTMLDivElement>(null)
 
@@ -47,6 +49,7 @@ export function Sheet({ open, title, onClose, children, dismissible = true }: Sh
           {dismissible && <IconButton label="Close" onClick={onClose}><X /></IconButton>}
         </div>
         <div className="m-sheet__body">{children}</div>
+        {footer && <div className="m-sheet__footer">{footer}</div>}
       </div>
     </div>,
     document.body

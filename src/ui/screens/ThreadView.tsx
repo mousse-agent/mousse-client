@@ -4,7 +4,7 @@ import { useThread } from '../hooks/useThread'
 import { JumpToLatest, Timeline } from '../timeline/Timeline'
 import { planApprovalText } from '../timeline/context'
 import { ThreadComposer } from '../components/ThreadComposer'
-import { EmptyState } from '../components/EmptyState'
+import { MousseLogoOutline } from '../components/MousseLogoOutline'
 import { Notice, Spinner } from '../components/primitives'
 import { SpeechProvider } from '../speech/readAloud'
 
@@ -13,9 +13,11 @@ export interface ThreadViewProps {
   threadId: string
   /** Called when a turn starts or ends so lists can refresh their indicators. */
   onActivityChange?(active: boolean): void
+  /** The computer's name, for the composer's permission note. */
+  computerName?: string
 }
 
-export function ThreadView({ session, threadId, onActivityChange }: ThreadViewProps) {
+export function ThreadView({ session, threadId, onActivityChange, computerName }: ThreadViewProps) {
   const thread = useThread(session, threadId)
   const scroller = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
@@ -61,7 +63,10 @@ export function ThreadView({ session, threadId, onActivityChange }: ThreadViewPr
         <div className="m-transcript" role="log" aria-live="polite" aria-busy={thread.active || undefined}>
           {thread.loading && <div className="m-loading m-loading--late"><Spinner label="Loading thread" /></div>}
           {!thread.loading && thread.items.length === 0 && (
-            <EmptyState title="What should we work on?" body="Your message goes to the computer, which runs the work and streams the reply here." />
+            <div className="m-start-hero">
+              <MousseLogoOutline className="m-new-thread__logo" />
+              <h2 className="m-new-thread__title">What should we build?</h2>
+            </div>
           )}
           {!thread.loading && (thread.items.length > 0 || thread.display.questions.length > 0) && (
             <Timeline
@@ -80,7 +85,7 @@ export function ThreadView({ session, threadId, onActivityChange }: ThreadViewPr
       {away && <JumpToLatest live={thread.active} onClick={jump} />}
       <div className="m-thread__composer">
         {thread.error && <Notice>{thread.error}</Notice>}
-        <ThreadComposer session={session} threadId={threadId} thread={thread} addition={addition} />
+        <ThreadComposer session={session} threadId={threadId} thread={thread} addition={addition} computerName={computerName} />
       </div>
     </div>
     </SpeechProvider>

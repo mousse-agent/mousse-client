@@ -523,6 +523,7 @@ html[data-keyboard='open'] .m-sheet__panel { padding-bottom: 12px; }
 .m-sheet__header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px 0 20px; min-height: 52px; }
 .m-sheet__header h2 { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
 .m-sheet__body { overflow-y: auto; padding: 4px 20px 8px; display: flex; flex-direction: column; gap: 14px; }
+.m-sheet__footer { flex: none; padding: 10px 20px 4px; border-top: 1px solid var(--ui-line); }
 .m-sheet__lead { color: var(--text-secondary); }
 .m-sheet__actions { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
 
@@ -681,12 +682,10 @@ html[data-keyboard='open'] .m-thread__composer { padding-bottom: 8px; }
 }
 .m-composer__action:active:not(:disabled) { transform: scale(0.94); }
 
-/* Footer: mode, model and effort pills on the left, context, attach and send on the right (ComposerFooter). */
+/* Footer: the model button on the left, context, attach and send on the right (ComposerFooter). */
 .m-composer__footer { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-width: 0; container-type: inline-size; }
 .m-composer__pills { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 1; overflow: hidden; }
 .m-composer__tools { display: flex; align-items: center; gap: 2px; flex: none; }
-/* The new thread's computer and project items, above the composer (the desktop's workspace toolbar). */
-.m-new-thread__where { flex: none; padding: 0 4px; }
 .m-composer[data-controls] .m-composer__action { width: 36px; height: 36px; border-radius: 10px; }
 .m-pill {
   display: inline-flex;
@@ -711,11 +710,10 @@ html[data-keyboard='open'] .m-thread__composer { padding-bottom: 8px; }
 .m-pill--model { flex: 0 1 auto; color: var(--text-primary); }
 .m-pill__model { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
 .m-pill__context { color: var(--text-secondary); }
-/* Narrow phones: the mode pill keeps its icon so the model name fits (as the desktop under 440px). */
-@container (max-width: 380px) {
-  .m-pill__label { display: none; }
-}
-@container (max-width: 320px) {
+/* The desktop's model button: a lightning icon when a faster speed is on, then the reasoning level. */
+.m-pill__speed { flex: none; color: var(--accent); }
+.m-pill__level { flex: none; color: var(--text-secondary); font-weight: 500; }
+@container (max-width: 300px) {
   .m-pill__context { display: none; }
 }
 .m-composer__icon {
@@ -817,7 +815,6 @@ html[data-theme='light'] .m-provider-icon--mono { filter: none; }
 .m-option__title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 500; }
 .m-option__detail { font-size: 12.5px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; }
 .m-option__check { flex: none; color: var(--accent); }
-.m-tag { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 999px; background: rgba(var(--accent-rgb), 0.16); color: var(--accent); }
 .m-model-search { display: flex; align-items: center; gap: 8px; }
 .m-model-search .m-search { flex: 1; }
 .m-model-search__favorites { flex: none; display: inline-flex; align-items: center; justify-content: center; width: var(--touch-target); height: var(--touch-target); border-radius: 12px; border: 1px solid var(--ui-line-strong); background: transparent; color: var(--text-secondary); }
@@ -927,3 +924,157 @@ html[data-theme='light'] .m-provider-icon--mono { filter: none; }
     transition-duration: 1ms !important;
   }
 }
+
+/* ---------- New thread (polish.css start page: .chat--empty) ---------- */
+/* The composer sits at the screen's middle under the outline logo and the title, in an accent aura. */
+.m-new-thread__stage {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 16px 12px calc(16px + var(--safe-bottom));
+  background-image: radial-gradient(52% 46% at 50% 44%, rgba(var(--accent-rgb), var(--ui-aura-strength)) 0%, transparent 72%);
+}
+.m-new-thread__center {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.m-new-thread__logo {
+  align-self: center;
+  width: 76px;
+  height: 76px;
+  margin-bottom: 28px;
+  color: var(--accent);
+  filter: drop-shadow(0 0 22px rgba(var(--accent-rgb), 0.45));
+  pointer-events: none;
+}
+.m-new-thread__logo svg { display: block; width: 100%; height: 100%; }
+.m-new-thread__title {
+  margin: 0 0 24px;
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  text-align: center;
+}
+.m-start-hero { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100%; padding-top: 12vh; }
+.m-new-thread__notices { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.m-new-thread__composer { display: flex; flex-direction: column; }
+/* Short screens and an open keyboard: the composer moves down to the keyboard, as the desktop under 560px. */
+@media (max-height: 560px) {
+  .m-new-thread__title { display: none; }
+  .m-new-thread__logo { width: 48px; height: 48px; margin-bottom: 16px; }
+}
+html[data-keyboard='open'] .m-new-thread__stage { justify-content: flex-end; padding-bottom: 8px; }
+html[data-keyboard='open'] .m-new-thread__logo,
+html[data-keyboard='open'] .m-new-thread__title { display: none; }
+
+/* The start page lights the composer: its top light and sheen take the accent. */
+.m-new-thread .m-composer {
+  --ui-specular: inset 0 1px 0 color-mix(in srgb, rgba(var(--accent-rgb), 0.6) 75%, rgba(255, 255, 255, 0.14)), inset 0 -1px 0 rgba(0, 0, 0, 0.48);
+  --ui-glint: color-mix(in srgb, rgba(var(--accent-rgb), 0.95) 75%, rgba(255, 255, 255, 0.36));
+  --ui-sheen: radial-gradient(125% 80% at 50% -10%, rgba(var(--accent-rgb), 0.16) 0%, rgba(var(--accent-rgb), 0.04) 36%, transparent 66%);
+  --ui-raised-shadow: var(--ui-specular), 0 10px 32px rgba(0, 0, 0, 0.32);
+}
+html[data-theme='light'] .m-new-thread .m-composer {
+  --ui-specular: inset 0 1px 0 rgba(255, 255, 255, 0.11), inset 0 -1px 0 rgba(0, 0, 0, 0.27);
+  --ui-glint: transparent;
+  --ui-sheen: none;
+  --ui-raised-shadow: 0 1px 2px rgba(20, 16, 30, 0.06), 0 8px 24px rgba(20, 16, 30, 0.08);
+}
+.m-new-thread .m-composer__input { min-height: 52px; }
+
+/* The workspace strip (composer-workspace.css): a tab meeting the composer card's top border. */
+.m-workspace {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  margin: 0 12px -1px;
+  padding: 3px 4px 4px 6px;
+  border: 1px solid var(--ui-line);
+  border-bottom: 0;
+  border-radius: 12px 12px 0 0;
+  background: color-mix(in srgb, var(--ui-raised) 55%, transparent);
+  box-shadow: inset 0 1px 0 rgba(var(--accent-rgb), 0.2);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+html[data-theme='light'] .m-workspace { box-shadow: none; }
+.m-workspace__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  position: relative;
+}
+.m-workspace__item::after { content: ''; position: absolute; inset: -6px 0; }
+.m-workspace__item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-workspace__item > .mousse-icon { flex: none; }
+.m-workspace__item--project { color: var(--text-primary); }
+.m-workspace__item:active:not(:disabled) { background: var(--ui-pressed); }
+.m-workspace__item:disabled { opacity: 0.5; }
+.m-workspace__worktree {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  position: relative;
+}
+.m-workspace__worktree::after { content: ''; position: absolute; inset: -6px -2px; }
+.m-workspace__worktree[aria-pressed='true'] { color: var(--accent); background: rgba(var(--accent-rgb), 0.16); }
+.m-workspace__worktree:disabled { opacity: 0.4; }
+
+/* ---------- Model sheet run settings (ComposerEffortPicker: reasoning column, speed toggle, permission) ---------- */
+.m-run-settings { display: flex; flex-direction: column; gap: 10px; }
+.m-run-settings__head { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.m-run-settings__model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: var(--ui-faint); }
+.m-run-levels { display: flex; gap: 6px; padding: 6px 0 2px; overflow-x: auto; scrollbar-width: none; }
+.m-run-levels::-webkit-scrollbar { display: none; }
+.m-run-level { flex: none; }
+.m-run-level,
+.m-speed__option {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--ui-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  position: relative;
+}
+.m-run-level::after,
+.m-speed__option::after { content: ''; position: absolute; inset: -5px 0; }
+.m-run-level[aria-checked='true'] { border-color: transparent; background: var(--ui-selected); color: var(--accent); }
+.m-run-settings__foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.m-speed { display: inline-flex; padding: 2px; gap: 2px; border-radius: 999px; background: color-mix(in srgb, var(--text-primary) 6%, transparent); }
+.m-speed__option { height: 30px; border: 0; }
+.m-speed__option[aria-checked='true'] { background: var(--ui-raised); color: var(--text-primary); box-shadow: var(--ui-specular); }
+.m-speed__option[aria-checked='true'] > .mousse-icon { color: var(--accent); }
+.m-run-permission { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: 12.5px; color: var(--text-secondary); }
+.m-run-permission span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+

@@ -22,6 +22,7 @@ import type {
   LlmModelOption,
   LlmProviderOption,
   ModelSelection,
+  PermissionMode,
   Project,
   QuestionAnswers,
   QueuedMessage,
@@ -68,6 +69,12 @@ function project(value: unknown): Project | undefined {
     name: typeof value.name === 'string' && value.name ? value.name : value.id,
     ...(typeof value.path === 'string' && value.path ? { path: value.path } : {}),
   }
+}
+
+const PERMISSION_MODES: readonly PermissionMode[] = ['ask', 'accept_edits', 'auto', 'full']
+
+function isPermissionMode(value: unknown): value is PermissionMode {
+  return typeof value === 'string' && (PERMISSION_MODES as readonly string[]).includes(value)
 }
 
 function threadSummary(value: unknown): ThreadSummary | undefined {
@@ -155,6 +162,9 @@ function composerOptionsOf(value: unknown): ComposerOptions {
   const named = <T extends { name: string }>(rows: unknown, map: (row: Record<string, unknown>) => T | undefined): T[] =>
     Array.isArray(rows) ? rows.flatMap((row) => (isObject(row) && typeof row.name === 'string' ? [map(row)].filter((entry): entry is T => !!entry) : [])) : []
   const defaultModel = selection(value.defaultModel)
+  const permission = isObject(value.permission) && isPermissionMode(value.permission.defaultMode)
+    ? { defaultMode: value.permission.defaultMode, ...(isPermissionMode(value.permission.limit) ? { limit: value.permission.limit } : {}) }
+    : undefined
   return {
     providers,
     ...(defaultModel ? { defaultModel } : {}),
@@ -167,6 +177,7 @@ function composerOptionsOf(value: unknown): ComposerOptions {
       ...(stringList(row.aliases) ? { aliases: stringList(row.aliases) } : {}),
       ...(typeof row.argsHint === 'string' ? { argsHint: row.argsHint } : {}),
     })),
+    ...(permission ? { permission } : {}),
   }
 }
 
@@ -524,11 +535,11 @@ export class RealComputerSession implements ComputerSession {
     return out
   }
 
-  async createThread(input: { projectId: string; title?: string }): Promise<ThreadSummary> {
+  async createThread(input: { projectId: string; title?: string; worktreeEnabled?: boolean }): Promise<ThreadSummary> {
     const name = input.title?.trim() || 'New thread'
     const value = await this.leaf.rpc(
       'threads.create',
-      { name, ...(input.projectId ? { projectId: input.projectId } : {}) },
+      { name, ...(input.projectId ? { projectId: input.projectId, ...(input.worktreeEnabled ? { worktreeEnabled: true } : {}) } : {}) },
       { idem: crypto.randomUUID() },
     )
     const thread = isObject(value) ? threadSummary(value.thread) : undefined
@@ -693,6 +704,7 @@ export class RealComputerSession implements ComputerSession {
       id: threadId,
       ...(typeof thread.projectId === 'string' && thread.projectId ? { projectId: thread.projectId } : {}),
       ...(model ? { model } : {}),
+      ...(isPermissionMode(thread.permissionMode) ? { permissionMode: thread.permissionMode } : {}),
     }
   }
 

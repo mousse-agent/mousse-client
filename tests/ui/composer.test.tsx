@@ -25,53 +25,54 @@ function type(text: string) {
 }
 
 describe('composer controls', () => {
-  it('shows the computer default model and effort, and stores a picked model on the thread', async () => {
+  it('shows the model and its level on one button, and stores a picked model on the thread', async () => {
     const { session } = await open()
-    expect(screen.getByRole('button', { name: 'Model: Claude Opus 4.8' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Reasoning effort: High' })).toBeInTheDocument()
+    // As the desktop's model button: the short name, then the reasoning level. No mode or effort pills.
+    expect(screen.getByRole('button', { name: 'Model: Opus 4.8 High' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Mode: / })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Reasoning effort: / })).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Model: Claude Opus 4.8' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Model: Opus 4.8 High' }))
     const models = await screen.findByRole('menu', { name: 'Models' })
     // Grouped by provider like the desktop: a rail with All and each provider.
     expect(screen.getByRole('tab', { name: /OpenAI/ })).toBeInTheDocument()
     fireEvent.click(within(models).getByRole('menuitemradio', { name: 'GPT 5.5, OpenAI' }))
 
-    // The effort carries over when the new model has it.
-    expect(await screen.findByRole('button', { name: 'Model: GPT 5.5' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Reasoning effort: High' })).toBeInTheDocument()
+    // The level carries over when the new model has it.
+    expect(await screen.findByRole('button', { name: 'Model: GPT 5.5 High' })).toBeInTheDocument()
     await waitFor(async () => expect((await session().getThread('t-voices')).model).toEqual({ instanceId: 'pi:openai', llmProvider: 'openai', model: 'gpt-5.5:high' }))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reasoning effort: High' }))
-    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Extra high' }))
-    expect(await screen.findByRole('button', { name: 'Reasoning effort: XHigh' })).toBeInTheDocument()
+    // The picker's reasoning levels are the selected model's.
+    fireEvent.click(screen.getByRole('button', { name: 'Model: GPT 5.5 High' }))
+    const levels = await screen.findByRole('radiogroup', { name: 'Reasoning for GPT 5.5' })
+    fireEvent.click(within(levels).getByRole('radio', { name: 'Extra high' }))
+    expect(await screen.findByRole('button', { name: 'Model: GPT 5.5 Extra high' })).toBeInTheDocument()
     await waitFor(async () => expect((await session().getThread('t-voices')).model?.model).toBe('gpt-5.5:xhigh'))
   })
 
-  it('offers Fast and long-context variants and filters by search and favorites', async () => {
+  it('offers Fast and long-context variants, shows the permission mode, and filters by search and favorites', async () => {
     await open()
-    fireEvent.click(screen.getByRole('button', { name: 'Reasoning effort: High' }))
-    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Fast' }))
-    expect(await screen.findByRole('button', { name: 'Reasoning effort: High · Fast' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /^Model: / }))
+    // Under the list, as in the desktop picker's footer: the speed, then the thread's permission mode.
+    expect(await screen.findByRole('note', { name: 'Permission mode: Auto-accept edits' })).toBeInTheDocument()
+    fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Speed' })).getByRole('radio', { name: 'Fast' }))
+    expect(await screen.findByRole('button', { name: 'Model: Opus 4.8 Fast High' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /^Model: / }))
     fireEvent.click(await screen.findByRole('button', { name: '1M' }))
-    expect(await screen.findByRole('button', { name: 'Model: Claude Sonnet 4.6' })).toHaveTextContent('1M')
+    expect(await screen.findByRole('button', { name: /^Model: Sonnet 4.6 · 1M/ })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /^Model: / }))
     fireEvent.change(await screen.findByLabelText('Search models'), { target: { value: 'mini' } })
-    expect(screen.getAllByRole('menuitemradio').map((row) => row.getAttribute('aria-label'))).toEqual(['GPT 5.5 mini, OpenAI'])
+    expect(within(screen.getByRole('menu', { name: 'Models' })).getAllByRole('menuitemradio').map((row) => row.getAttribute('aria-label'))).toEqual(['GPT 5.5 mini, OpenAI'])
     fireEvent.change(screen.getByLabelText('Search models'), { target: { value: '' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add Claude Haiku 4.5 to favorites' }))
     fireEvent.click(screen.getByRole('button', { name: 'Favorites only' }))
-    expect(screen.getAllByRole('menuitemradio').map((row) => row.getAttribute('aria-label'))).toEqual(['Claude Haiku 4.5, Anthropic'])
+    expect(within(screen.getByRole('menu', { name: 'Models' })).getAllByRole('menuitemradio').map((row) => row.getAttribute('aria-label'))).toEqual(['Claude Haiku 4.5, Anthropic'])
   })
 
-  it('sends with the picked mode, a skill and an image', async () => {
+  it('sends an image with no chat mode, as the desktop does', async () => {
     const { session } = await open()
-    fireEvent.click(screen.getByRole('button', { name: 'Mode: Agent' }))
-    fireEvent.click(await screen.findByRole('menuitemradio', { name: /Plan/ }))
-    expect(await screen.findByRole('button', { name: 'Mode: Plan' })).toBeInTheDocument()
-
     const png = new File([new Uint8Array([137, 80, 78, 71, 1, 2, 3])], 'shot.png', { type: 'image/png' })
     fireEvent.change(screen.getByTestId('composer-file-input'), { target: { files: [png] } })
     expect(await screen.findByRole('button', { name: 'Remove shot.png' })).toBeInTheDocument()
@@ -81,8 +82,9 @@ describe('composer controls', () => {
     expect(session().sent[0]).toMatchObject({
       kind: 'send',
       text: 'What is wrong here?',
-      options: { mode: 'plan', images: [{ name: 'shot.png', mimeType: 'image/png', data: 'iVBORwECAw==' }] }
+      options: { images: [{ name: 'shot.png', mimeType: 'image/png', data: 'iVBORwECAw==' }] }
     })
+    expect(session().sent[0].options).not.toHaveProperty('mode')
     expect(screen.queryByRole('button', { name: 'Remove shot.png' })).not.toBeInTheDocument()
   })
 
