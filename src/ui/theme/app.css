@@ -656,6 +656,8 @@ html[data-keyboard='open'] .m-thread__composer { padding-bottom: 8px; }
   font-size: var(--chat-font-size);
   line-height: 1.45;
 }
+/* The composer card shows focus with its border, as on the desktop; the text box draws no ring of its own. */
+.m-composer__input:focus-visible { box-shadow: none; }
 .m-composer__input::placeholder { color: var(--an-input-placeholder-color, var(--ui-faint)); }
 .m-composer__actions { display: flex; align-items: center; }
 .m-composer__action {
