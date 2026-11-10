@@ -142,4 +142,18 @@ describe('timeline', () => {
     fireEvent.click(button)
     expect(onClick).toHaveBeenCalled()
   })
+
+  it('opens a reply image large on a tap and closes it', () => {
+    const reply: ChatItem = { id: 'img', role: 'assistant', kind: 'message', text: 'Here:\n\n![Chart of sales](https://example.com/chart.png)', createdAt: at, status: 'done' }
+    render(<Timeline items={[reply]} display={idle} active={false} />)
+    const open = screen.getByRole('button', { name: 'Open image: Chart of sales' })
+    open.focus()
+    fireEvent.click(open)
+    const viewer = screen.getByRole('dialog', { name: 'Chart of sales' })
+    expect(viewer.querySelector('img')).toHaveAttribute('src', 'https://example.com/chart.png')
+    expect(screen.getByRole('button', { name: 'Close image' })).toHaveFocus()
+    fireEvent.click(screen.getByRole('button', { name: 'Close image' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(open).toHaveFocus()
+  })
 })
