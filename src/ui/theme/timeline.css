@@ -563,35 +563,50 @@ button.m-tl-card__header:active { background: var(--ui-pressed); }
 .m-tl-question button:disabled, .m-tl-question input:disabled { opacity: 0.5; }
 .m-tl-question__note { margin: 0; color: var(--an-foreground-muted); font-size: 13px; }
 
-/* ---------- Jump to latest (polish.css .chat-jump) ---------- */
+/* ---------- Go to latest (polish.css .chat-jump) ---------- */
+/* Floats centred a few px above the composer's top edge and takes no height. A quiet pill: chevron and
+   label in the secondary text colour on a subtle fill, no border. It fades out (data-hidden) while the
+   view follows the end, so it never covers the last line there. */
+.m-thread__composer { position: relative; }
 .m-tl-jump {
   position: absolute;
-  right: 16px;
-  bottom: calc(100px + var(--safe-bottom));
+  left: 50%;
+  bottom: calc(100% + 8px);
   z-index: 5;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border: 1px solid var(--ui-line-strong);
-  border-radius: 50%;
-  background: var(--floating-surface);
-  box-shadow: var(--ui-raised-shadow);
-  color: var(--text-primary);
-  animation: m-fade 160ms ease-out;
+  gap: 4px;
+  height: 30px;
+  padding: 0 13px 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-primary) 9%, var(--surface-base));
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  transition: opacity 160ms ease, transform 160ms ease, background-color 160ms ease, color 160ms ease;
+  -webkit-tap-highlight-color: transparent;
 }
-.m-tl-jump__icon { transform: rotate(90deg); }
-.m-tl-jump__live { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--floating-surface); }
+.m-tl-jump:active { background: color-mix(in srgb, var(--text-primary) 15%, var(--surface-base)); color: var(--text-primary); }
+.m-tl-jump:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; color: var(--text-primary); }
+.m-tl-jump[data-hidden] { opacity: 0; transform: translate(-50%, 4px); pointer-events: none; }
+.m-tl-jump__icon { flex: none; transform: rotate(90deg); }
+.m-tl-jump__live { position: absolute; top: -1px; right: 2px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 
 @media (hover: hover) and (pointer: fine) {
   button.m-tl-row__header:hover, button.m-tl-card__header:hover, .m-tl-edits__header:hover { background: var(--ui-hover); }
   .m-tl-chrome:hover { opacity: 1; }
   .m-tl-action:hover { opacity: 1; background: var(--ui-hover); }
+  .m-tl-jump:hover { background: color-mix(in srgb, var(--text-primary) 15%, var(--surface-base)); color: var(--text-primary); }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .m-tl-shimmer--active { animation: none; background: none; color: var(--text-secondary) !important; }
   .m-tl-shimmer--active * { color: inherit !important; }
   .m-tl-spin, .m-tl-waiting__dot { animation: none; }
+  .m-tl-jump { transition: none; }
 }

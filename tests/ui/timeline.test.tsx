@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach } from 'vitest'
 import type { ChatItem, ThreadDisplayState } from '../../src/connection/types'
-import { Timeline } from '../../src/ui/timeline/Timeline'
+import { JumpToLatest, Timeline } from '../../src/ui/timeline/Timeline'
 
 afterEach(() => cleanup())
 
@@ -125,5 +125,21 @@ describe('timeline', () => {
     expect(container.querySelector('.m-tl-assistant .m-md')).not.toHaveAttribute('data-streaming')
     rerender(<Timeline items={[items[0], reply]} display={idle} active={false} />)
     expect(container.querySelector('.m-tl-assistant .m-md')).not.toHaveAttribute('data-streaming')
+  })
+
+  it('fades Go to latest out and makes it inert while the view follows the end', () => {
+    const onClick = vi.fn()
+    const { container, rerender } = render(<JumpToLatest live={false} shown={false} onClick={onClick} />)
+    const pill = container.querySelector('.m-tl-jump')!
+    expect(pill).toHaveAttribute('data-hidden')
+    expect(pill).toHaveAttribute('inert')
+    expect(screen.queryByRole('button', { name: 'Go to latest' })).not.toBeInTheDocument()
+    rerender(<JumpToLatest live shown onClick={onClick} />)
+    const button = screen.getByRole('button', { name: 'Go to latest' })
+    expect(button).not.toHaveAttribute('data-hidden')
+    expect(button).not.toHaveAttribute('inert')
+    expect(button.querySelector('.m-tl-jump__live')).toBeInTheDocument()
+    fireEvent.click(button)
+    expect(onClick).toHaveBeenCalled()
   })
 })

@@ -491,13 +491,29 @@ export function Timeline({ items, display, active, onApprovePlan, onAddToDraft, 
   )
 }
 
-/** The round "jump to latest" button, with a live dot while a reply streams. */
-export function JumpToLatest({ live, onClick }: { live: boolean; onClick: () => void }) {
+/**
+ * Go to latest, as the desktop's quiet pill: chevron and label on a subtle fill, with a live dot while a
+ * reply streams. Mounted while the thread has messages so it fades both ways; hidden and inert while the
+ * view follows the end of the thread.
+ */
+export function JumpToLatest({ live, shown, onClick }: { live: boolean; shown: boolean; onClick: () => void }) {
   const ref = useRef<HTMLButtonElement>(null)
+  // React 18 has no `inert` prop; set the attribute so a hidden pill takes no taps or focus.
+  useEffect(() => {
+    ref.current?.toggleAttribute('inert', !shown)
+  }, [shown])
   return (
-    <button ref={ref} type="button" className="m-tl-jump" aria-label="Jump to latest" onClick={onClick}>
-      <ChevronRight size={18} className="m-tl-jump__icon" />
+    <button
+      ref={ref}
+      type="button"
+      className="m-tl-jump"
+      data-hidden={shown ? undefined : true}
+      aria-hidden={!shown || undefined}
+      onClick={onClick}
+    >
       {live && <span className="m-tl-jump__live" aria-hidden />}
+      <ChevronRight size={14} className="m-tl-jump__icon" aria-hidden />
+      <span>Go to latest</span>
     </button>
   )
 }
