@@ -23,6 +23,7 @@ import {
 } from './format'
 import { Bot, Check, ChevronRight, CircleX, Copy, FileText, Folder, Globe, Image as ImageIcon, Info, Link, Monitor, MessageSquare, Paperclip, VolumeHigh, X } from './icons'
 import { Markdown } from './Markdown'
+import { ImageLightbox } from './ImageLightbox'
 import { AppletCard, AppletPending } from './AppletCard'
 import { ReadAloudButton as ComputerReadAloudButton, useComputerSpeech } from '../speech/readAloud'
 import { QuestionPrompt } from './QuestionPrompt'
@@ -141,22 +142,6 @@ function MetadataButton({ item }: { item: ChatItem }) {
 
 // ---- User messages ----
 
-function Lightbox({ src, name, onClose }: { src: string; name: string; onClose: () => void }) {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => event.key === 'Escape' && onClose()
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-  return (
-    <div className="m-tl-lightbox" role="dialog" aria-label={name} onClick={onClose}>
-      <img src={src} alt={name} />
-      <button type="button" className="m-tl-lightbox__close" aria-label="Close image" onClick={onClose}>
-        <X size={20} />
-      </button>
-    </div>
-  )
-}
-
 const REFERENCE_ICONS = { file: FileText, project: Folder, thread: MessageSquare, terminal: Monitor, browser: Globe, agent: Bot } as const
 
 const UserMessage = memo(function UserMessage({ item }: { item: ChatItem }) {
@@ -201,7 +186,7 @@ const UserMessage = memo(function UserMessage({ item }: { item: ChatItem }) {
         {item.createdAt > 0 && <time className="m-tl-toolbar__time" dateTime={new Date(item.createdAt).toISOString()}>{formatTimestamp(item.createdAt)}</time>}
         {item.text.trim() && <CopyButton text={item.text} />}
       </div>
-      {viewing && <Lightbox src={viewing.src} name={viewing.name} onClose={() => setViewing(undefined)} />}
+      {viewing && <ImageLightbox src={viewing.src} name={viewing.name} onClose={() => setViewing(undefined)} />}
     </div>
   )
 })
@@ -232,14 +217,14 @@ const AssistantMessage = memo(function AssistantMessage({ item, live }: { item: 
           ) : part.type === 'applet-pending' ? (
             <AppletPending key={`p${index}`} />
           ) : part.text.trim() ? (
-            <div key={`t${index}`} className={`m-tl-assistant__text${streaming ? ' m-tl-assistant__text--streaming' : ''}`}>
-              <Markdown text={part.text} />
+            <div key={`t${index}`} className="m-tl-assistant__text">
+              <Markdown text={part.text} streaming={streaming} />
             </div>
           ) : null,
         )
       ) : item.text.trim() && (
-        <div className={`m-tl-assistant__text${streaming ? ' m-tl-assistant__text--streaming' : ''}`}>
-          <Markdown text={item.text} />
+        <div className="m-tl-assistant__text">
+          <Markdown text={item.text} streaming={streaming} />
         </div>
       )}
       {item.error && <ErrorBox message={item.error.message} />}
@@ -491,13 +476,29 @@ export function Timeline({ items, display, active, onApprovePlan, onAddToDraft, 
   )
 }
 
-/** The round "jump to latest" button, with a live dot while a reply streams. */
-export function JumpToLatest({ live, onClick }: { live: boolean; onClick: () => void }) {
+/**
+ * Go to latest, as the desktop's quiet pill: chevron and label on a subtle fill, with a live dot while a
+ * reply streams. Mounted while the thread has messages so it fades both ways; hidden and inert while the
+ * view follows the end of the thread.
+ */
+export function JumpToLatest({ live, shown, onClick }: { live: boolean; shown: boolean; onClick: () => void }) {
   const ref = useRef<HTMLButtonElement>(null)
+  // React 18 has no `inert` prop; set the attribute so a hidden pill takes no taps or focus.
+  useEffect(() => {
+    ref.current?.toggleAttribute('inert', !shown)
+  }, [shown])
   return (
-    <button ref={ref} type="button" className="m-tl-jump" aria-label="Jump to latest" onClick={onClick}>
-      <ChevronRight size={18} className="m-tl-jump__icon" />
+    <button
+      ref={ref}
+      type="button"
+      className="m-tl-jump"
+      data-hidden={shown ? undefined : true}
+      aria-hidden={!shown || undefined}
+      onClick={onClick}
+    >
       {live && <span className="m-tl-jump__live" aria-hidden />}
+      <ChevronRight size={14} className="m-tl-jump__icon" aria-hidden />
+      <span>Go to latest</span>
     </button>
   )
 }

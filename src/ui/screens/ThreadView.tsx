@@ -79,11 +79,11 @@ export function ThreadView({ session, threadId, onActivityChange, computerName }
               onDismiss={thread.dismiss}
             />
           )}
-          {thread.active && <div className="m-tl-breathing" aria-hidden />}
+          {thread.active && <div className="m-tl-reply-gap" data-reply-gap aria-hidden />}
         </div>
       </div>
-      {away && <JumpToLatest live={thread.active} onClick={jump} />}
       <div className="m-thread__composer">
+        {thread.items.length > 0 && <JumpToLatest live={thread.active} shown={away} onClick={jump} />}
         {thread.error && <Notice>{thread.error}</Notice>}
         <ThreadComposer session={session} threadId={threadId} thread={thread} addition={addition} computerName={computerName} />
       </div>

@@ -156,6 +156,36 @@ export function showcaseItems(base: number): ChatItem[] {
       },
     },
     {
+      id: 's-ap1',
+      role: 'assistant',
+      kind: 'message',
+      text: 'Here is the backoff curve to try out.\n\nThe logo for scale:',
+      createdAt: t(27.5),
+      status: 'done',
+      parts: [
+        { type: 'text', text: 'Here is the backoff curve to try out.' },
+        {
+          type: 'applet',
+          applet: {
+            appletId: 'applet_backoff',
+            revisionId: 'rev_1',
+            title: 'Backoff curve',
+            description: 'Drag the jitter to see each retry delay.',
+            source: {
+              schemaVersion: 1,
+              title: 'Backoff curve',
+              description: 'Drag the jitter to see each retry delay.',
+              html: "<label>Jitter <input id='j' type='range' min='0' max='50' value='20'> <output id='o'></output></label><ol id='l'></ol>",
+              css: 'main,body{padding:12px;font:14px system-ui;color:var(--text-primary)}input{width:100%}li{margin:4px 0}',
+              js: "const j=document.getElementById('j'),o=document.getElementById('o'),l=document.getElementById('l');function u(){o.textContent=j.value+'%';l.innerHTML='';for(let i=0;i<5;i++){const b=500*2**i;const li=document.createElement('li');li.textContent=Math.round(b*(1-j.value/100))+'–'+Math.round(b*(1+j.value/100))+' ms';l.appendChild(li)}window.mousseApplet.resize(document.body.scrollHeight)}j.addEventListener('input',u);u();",
+              stateVersion: 1,
+            },
+          },
+        },
+        { type: 'text', text: `The logo for scale:\n\n![Mousse logo](${typeof location === 'undefined' ? 'https://mousse.work' : location.origin}/mousse-logo.svg)` },
+      ],
+    },
+    {
       id: 's-a2',
       role: 'assistant',
       kind: 'message',

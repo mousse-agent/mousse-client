@@ -40,6 +40,10 @@ html[data-theme='blacksphere-plus'] {
   --an-tool-color: #e6e6e6;
 }
 html[data-theme='light'] {
+  /* global.css: the running shimmer gets its own pair in light, a light resting grey with a dark
+     band sweeping it, so the "Working for" line and running rows stay readable. */
+  --an-shimmer-base: color-mix(in srgb, var(--text-primary) 48%, var(--surface-base));
+  --an-shimmer-peak: var(--text-primary);
   --an-border-color: rgba(0, 0, 0, 0.08);
   --an-tool-border-color: rgba(0, 0, 0, 0.1);
   --an-tool-color: #1a1a1a;
@@ -69,12 +73,23 @@ html[data-theme='light'] {
 .m-tl { display: flex; flex-direction: column; gap: 22px; }
 .m-tl-turn { display: flex; flex-direction: column; gap: 10px; }
 .m-tl-answer { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.m-tl-breathing { flex: none; height: 96px; }
+/* message-list.tsx REPLY_GAP: a small, fixed gap under the reply in progress, so the newest text sits
+   about two lines above the composer. With the transcript's gap it is the height of the toolbar that
+   takes its place when the reply ends, so the text does not move then. */
+.m-tl-reply-gap { flex: none; height: 20px; }
 
 /* ---------- Shimmer (agent-ui.css .an-text-shimmer) ---------- */
 @keyframes m-tl-shimmer { from { background-position: 100% center; } to { background-position: 0% center; } }
 .m-tl-shimmer--active {
-  background-image: linear-gradient(90deg, var(--an-foreground-subtle) 0%, var(--an-foreground-subtle) 40%, var(--an-foreground-muted) 50%, var(--an-foreground-subtle) 60%, var(--an-foreground-subtle) 100%);
+  /* The resting colour and the band that sweeps it; light sets its own pair above. */
+  background-image: linear-gradient(
+    90deg,
+    var(--an-shimmer-base, var(--an-foreground-subtle)) 0%,
+    var(--an-shimmer-base, var(--an-foreground-subtle)) 40%,
+    var(--an-shimmer-peak, var(--an-foreground-muted)) 50%,
+    var(--an-shimmer-base, var(--an-foreground-subtle)) 60%,
+    var(--an-shimmer-base, var(--an-foreground-subtle)) 100%
+  );
   background-size: 250% 100%;
   background-repeat: no-repeat;
   -webkit-background-clip: text;
@@ -83,6 +98,20 @@ html[data-theme='light'] {
   animation: m-tl-shimmer 1.2s linear infinite;
 }
 .m-tl-shimmer--active * { color: transparent !important; }
+
+/* thinking-icon.css: while the model thinks the orbits turn around the still centre (2s a turn) and the
+   icon takes the label's shimmer colours, swept just before the band enters the label. Still with
+   reduced motion and once the thought is done. */
+.m-thinking-icon .m-thinking-icon__orbit { transform-box: view-box; transform-origin: 12px 12px; }
+.m-thinking-icon.is-thinking { color: var(--an-shimmer-base, var(--an-foreground-subtle)); animation: m-thinking-sweep 1.2s linear infinite; }
+.m-thinking-icon.is-thinking .m-thinking-icon__orbit { animation: m-tl-spin 2s linear infinite; will-change: transform; }
+@keyframes m-thinking-sweep {
+  0%, 15%, 100% { color: var(--an-shimmer-base, var(--an-foreground-subtle)); }
+  5% { color: var(--an-shimmer-peak, var(--an-foreground-muted)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .m-thinking-icon.is-thinking, .m-thinking-icon.is-thinking .m-thinking-icon__orbit { animation: none; }
+}
 
 @keyframes m-tl-spin { to { transform: rotate(360deg); } }
 .m-tl-spin { flex: none; color: var(--an-tool-color-muted); animation: m-tl-spin 0.8s linear infinite; }
@@ -292,7 +321,9 @@ button.m-tl-card__header:active { background: var(--ui-pressed); }
 .m-md-link { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); text-underline-offset: 2px; }
 .m-md-quote { margin: 0 0 0.75em; padding: 0.1em 0 0.1em 0.9em; border-left: 3px solid var(--ui-line-strong); color: var(--text-secondary); }
 .m-md-hr { border: 0; border-top: 1px solid var(--an-border-color); margin: 1em 0; }
-.m-md-img { display: block; max-width: 100%; border-radius: 8px; margin: 0.5em 0; }
+.m-md-image { display: inline-block; max-width: 100%; margin: 0.5em 0; padding: 0; border: 0; border-radius: 8px; background: none; vertical-align: top; cursor: zoom-in; -webkit-tap-highlight-color: transparent; }
+.m-md-image:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.m-md-img { display: block; max-width: 100%; border-radius: 8px; }
 .m-md-raw { white-space: pre-wrap; font-family: var(--font-mono); font-size: 0.86em; color: var(--text-secondary); }
 .m-md-table-wrap { margin: 0 0 0.75em; overflow-x: auto; border: 1px solid var(--an-border-color); border-radius: 8px; }
 .m-md-table { border-collapse: collapse; min-width: 100%; font-size: 0.9em; }
@@ -301,21 +332,35 @@ button.m-tl-card__header:active { background: var(--ui-pressed); }
 .m-md-table tr:last-child td { border-bottom: 0; }
 
 /* In-response applets, like the desktop's .mousse-applet card. */
-.m-applet { margin: 12px 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface-base); color: var(--text-primary); }
-.m-applet__header { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 6px 6px 12px; border-bottom: 1px solid var(--border); }
-.m-applet__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
-.m-applet__actions { display: flex; flex: 0 0 auto; gap: 4px; }
+/* Inline, an applet is only its content: no card, border or padding, under a quiet name (desktop applets.css). */
+.m-applet { margin: 12px 0; color: var(--text-primary); }
+.m-applet__name { display: inline-flex; max-width: 100%; min-height: 28px; align-items: center; margin: 0 0 4px -6px; padding: 0 6px; overflow: hidden; border: 0; border-radius: var(--ui-control-radius, 6px); background: none; color: var(--ui-faint, var(--text-secondary)); font: inherit; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
+button.m-applet__name:active { background: var(--ui-pressed); color: var(--text-secondary); }
+button.m-applet__name:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .m-applet__button { min-height: 32px; padding: 0 12px; border: 1px solid var(--ui-line-strong); border-radius: var(--ui-control-radius, 6px); background: transparent; color: inherit; font: inherit; font-size: 13px; }
 .m-applet__button--primary { border-color: transparent; background: var(--accent); color: var(--ui-on-accent, #fff); }
-.m-applet__frame { display: block; width: 100%; border: 0; background: var(--surface-base); }
-.m-applet__idle { display: grid; place-items: center; min-height: 96px; padding: 16px; color: var(--text-secondary); font-size: 13px; text-align: center; }
-.m-applet--pending .m-applet__idle { background: var(--surface-strong); }
-.m-applet__error { margin: 0; padding: 8px 12px; color: var(--danger); font-size: 13px; }
-.m-applet__request { padding: 10px 12px; border-top: 1px solid var(--border); font-size: 13px; }
+.m-applet__frame { display: block; width: 100%; border: 0; background: transparent; }
+.m-applet__idle { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 96px; padding: 16px; border-radius: 10px; background: var(--surface-soft, var(--surface-strong)); color: var(--text-secondary); font-size: 13px; text-align: center; }
+.m-applet__error { margin: 0; padding: 4px 0; color: var(--danger); font-size: 13px; }
+.m-applet__request { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; font-size: 13px; }
 .m-applet__request p { margin: 0; max-height: 140px; overflow: auto; white-space: pre-wrap; }
 .m-applet__link { display: inline-block; margin: 8px 16px 0 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-decoration: underline; }
-.m-applet__error .m-applet__link { display: block; }
-.m-applet__footer { padding: 6px 12px; font-size: 11px; opacity: 0.6; }
+.m-applet__error { overflow-wrap: anywhere; }
+.m-applet__error-actions { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 6px; }
+.m-applet__error-actions .m-applet__link { margin: 0; min-height: 32px; }
+/* The applet open large: the phone's side panel is the whole screen. */
+.m-applet-view { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; padding: var(--safe-top) 0 var(--safe-bottom); background: var(--surface-base); color: var(--text-primary); animation: m-fade 160ms ease-out; }
+.m-applet-view__header { flex: none; display: flex; align-items: center; gap: 6px; min-height: 52px; padding: 4px 6px 4px 16px; border-bottom: 1px solid var(--ui-line); }
+.m-applet-view__titles { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.m-applet-view__title, .m-applet-view__description { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-applet-view__title { font-size: 15px; font-weight: 600; }
+.m-applet-view__description { color: var(--text-secondary); font-size: 12px; }
+.m-applet-view__close { flex: none; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 50%; background: none; color: inherit; }
+.m-applet-view__close:active { background: var(--ui-pressed); }
+.m-applet-view__body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
+.m-applet-view__body .m-applet__frame { flex: 1; min-height: 0; }
+.m-applet-view__body .m-applet__idle { flex: 1; border-radius: 0; background: none; }
+.m-applet-view__footer { flex: none; padding: 6px 16px; color: var(--text-secondary); font-size: 11px; }
 
 /* Code blocks: bordered, 28px header on the tool background. */
 .m-code { margin: 0 0 0.75em; border: 1px solid var(--an-border-color); border-radius: var(--an-tool-border-radius); overflow: hidden; background: var(--an-code-background); }
@@ -388,20 +433,14 @@ button.m-tl-card__header:active { background: var(--ui-pressed); }
 /* ---------- Assistant messages ---------- */
 .m-tl-assistant { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .m-tl-assistant__text { font-size: var(--chat-font-size); line-height: var(--chat-line-height); color: var(--text-primary); }
-.m-tl-assistant__text--streaming .m-md > :last-child::after {
-  content: '';
-  display: inline-block;
-  width: 0.5em;
-  height: 1em;
-  margin-left: 3px;
-  vertical-align: -0.12em;
-  border-radius: 2px;
-  background: var(--accent);
-  animation: m-tl-blink 1s steps(2, start) infinite;
+/* global.css: a block that appears in the live reply fades in. Opacity only, so nothing around it
+   moves; only the live reply has data-streaming, so opening a finished thread replays nothing. */
+@media (prefers-reduced-motion: no-preference) {
+  .m-md[data-streaming] > * { transition: opacity 240ms ease-out; }
+  @starting-style {
+    .m-md[data-streaming] > * { opacity: 0; }
+  }
 }
-.m-tl-assistant__text--streaming .m-md > .m-code:last-child::after,
-.m-tl-assistant__text--streaming .m-md > .m-md-table-wrap:last-child::after { display: none; }
-@keyframes m-tl-blink { to { visibility: hidden; } }
 .m-tl-note { color: var(--an-foreground-muted); font-size: 13px; }
 
 /* Message toolbar: always visible on touch, quiet until used. */
@@ -554,36 +593,50 @@ button.m-tl-card__header:active { background: var(--ui-pressed); }
 .m-tl-question button:disabled, .m-tl-question input:disabled { opacity: 0.5; }
 .m-tl-question__note { margin: 0; color: var(--an-foreground-muted); font-size: 13px; }
 
-/* ---------- Jump to latest (polish.css .chat-jump) ---------- */
+/* ---------- Go to latest (polish.css .chat-jump) ---------- */
+/* Floats centred a few px above the composer's top edge and takes no height. A quiet pill: chevron and
+   label in the secondary text colour on a subtle fill, no border. It fades out (data-hidden) while the
+   view follows the end, so it never covers the last line there. */
+.m-thread__composer { position: relative; }
 .m-tl-jump {
   position: absolute;
-  right: 16px;
-  bottom: calc(100px + var(--safe-bottom));
+  left: 50%;
+  bottom: calc(100% + 8px);
   z-index: 5;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border: 1px solid var(--ui-line-strong);
-  border-radius: 50%;
-  background: var(--floating-surface);
-  box-shadow: var(--ui-raised-shadow);
-  color: var(--text-primary);
-  animation: m-fade 160ms ease-out;
+  gap: 4px;
+  height: 30px;
+  padding: 0 13px 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-primary) 9%, var(--surface-base));
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  transition: opacity 160ms ease, transform 160ms ease, background-color 160ms ease, color 160ms ease;
+  -webkit-tap-highlight-color: transparent;
 }
-.m-tl-jump__icon { transform: rotate(90deg); }
-.m-tl-jump__live { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--floating-surface); }
+.m-tl-jump:active { background: color-mix(in srgb, var(--text-primary) 15%, var(--surface-base)); color: var(--text-primary); }
+.m-tl-jump:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; color: var(--text-primary); }
+.m-tl-jump[data-hidden] { opacity: 0; transform: translate(-50%, 4px); pointer-events: none; }
+.m-tl-jump__icon { flex: none; transform: rotate(90deg); }
+.m-tl-jump__live { position: absolute; top: -1px; right: 2px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 
 @media (hover: hover) and (pointer: fine) {
   button.m-tl-row__header:hover, button.m-tl-card__header:hover, .m-tl-edits__header:hover { background: var(--ui-hover); }
   .m-tl-chrome:hover { opacity: 1; }
   .m-tl-action:hover { opacity: 1; background: var(--ui-hover); }
+  .m-tl-jump:hover { background: color-mix(in srgb, var(--text-primary) 15%, var(--surface-base)); color: var(--text-primary); }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .m-tl-shimmer--active { animation: none; background: none; color: var(--text-secondary) !important; }
   .m-tl-shimmer--active * { color: inherit !important; }
   .m-tl-spin, .m-tl-waiting__dot { animation: none; }
-  .m-tl-assistant__text--streaming .m-md > :last-child::after { animation: none; }
+  .m-tl-jump { transition: none; }
 }

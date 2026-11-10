@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach } from 'vitest'
 import type { ChatItem, ThreadDisplayState } from '../../src/connection/types'
-import { Timeline } from '../../src/ui/timeline/Timeline'
+import { JumpToLatest, Timeline } from '../../src/ui/timeline/Timeline'
 
 afterEach(() => cleanup())
 
@@ -114,5 +114,56 @@ describe('timeline', () => {
     rerender(<Timeline items={live} display={{ questions: [], phase: 'failed', turnError: 'Rate limited', connectionFailed: 'Provider unreachable.' }} active={false} />)
     expect(screen.getByText('Rate limited')).toBeInTheDocument()
     expect(screen.getByTestId('connection-failed')).toHaveTextContent('Provider unreachable.')
+  })
+
+  it('marks only the live reply so its new blocks fade in', () => {
+    const reply: ChatItem = { id: 'r1', role: 'assistant', kind: 'message', text: 'First block.\n\nSecond block.', createdAt: at + 1000, status: 'streaming' }
+    const { container, rerender } = render(<Timeline items={[items[0], reply]} display={{ questions: [], phase: 'streaming' }} active />)
+    expect(container.querySelector('.m-tl-assistant .m-md')).toHaveAttribute('data-streaming', 'true')
+    // A finished reply, or one in a thread that stopped, replays nothing when opened.
+    rerender(<Timeline items={[items[0], { ...reply, status: 'done' }]} display={idle} active={false} />)
+    expect(container.querySelector('.m-tl-assistant .m-md')).not.toHaveAttribute('data-streaming')
+    rerender(<Timeline items={[items[0], reply]} display={idle} active={false} />)
+    expect(container.querySelector('.m-tl-assistant .m-md')).not.toHaveAttribute('data-streaming')
+  })
+
+  it('fades Go to latest out and makes it inert while the view follows the end', () => {
+    const onClick = vi.fn()
+    const { container, rerender } = render(<JumpToLatest live={false} shown={false} onClick={onClick} />)
+    const pill = container.querySelector('.m-tl-jump')!
+    expect(pill).toHaveAttribute('data-hidden')
+    expect(pill).toHaveAttribute('inert')
+    expect(screen.queryByRole('button', { name: 'Go to latest' })).not.toBeInTheDocument()
+    rerender(<JumpToLatest live shown onClick={onClick} />)
+    const button = screen.getByRole('button', { name: 'Go to latest' })
+    expect(button).not.toHaveAttribute('data-hidden')
+    expect(button).not.toHaveAttribute('inert')
+    expect(button.querySelector('.m-tl-jump__live')).toBeInTheDocument()
+    fireEvent.click(button)
+    expect(onClick).toHaveBeenCalled()
+  })
+
+  it('opens a reply image large on a tap and closes it', () => {
+    const reply: ChatItem = { id: 'img', role: 'assistant', kind: 'message', text: 'Here:\n\n![Chart of sales](https://example.com/chart.png)', createdAt: at, status: 'done' }
+    render(<Timeline items={[reply]} display={idle} active={false} />)
+    const open = screen.getByRole('button', { name: 'Open image: Chart of sales' })
+    open.focus()
+    fireEvent.click(open)
+    const viewer = screen.getByRole('dialog', { name: 'Chart of sales' })
+    expect(viewer.querySelector('img')).toHaveAttribute('src', 'https://example.com/chart.png')
+    expect(screen.getByRole('button', { name: 'Close image' })).toHaveFocus()
+    fireEvent.click(screen.getByRole('button', { name: 'Close image' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(open).toHaveFocus()
+  })
+
+  it('turns the thinking atom only while the model thinks', () => {
+    const thought: ChatItem = { id: 'th', role: 'assistant', kind: 'thinking', text: 'Weighing options', createdAt: at + 1000, status: 'streaming' }
+    const { container, rerender } = render(<Timeline items={[items[0], thought]} display={{ questions: [], phase: 'streaming' }} active />)
+    const icon = () => container.querySelector('.m-thinking-icon')!
+    expect(icon()).toHaveAttribute('data-thinking', 'active')
+    expect(icon().querySelector('.m-thinking-icon__orbit')).not.toBeNull()
+    rerender(<Timeline items={[items[0], { ...thought, status: 'done' }]} display={idle} active={false} />)
+    expect(icon()).toHaveAttribute('data-thinking', 'done')
   })
 })

@@ -30,7 +30,7 @@ import {
 } from './format'
 import { languageForPath, useHighlight } from './useHighlight'
 import {
-  Brain,
+  ThinkingIcon,
   Check,
   ChevronRight,
   ClipboardList,
@@ -151,7 +151,7 @@ export function ThinkingRow({ item, live }: { item: ChatItem; live: boolean }) {
   const running = item.status === 'streaming' && live
   const heading = thoughtHeading(item.text)
   return (
-    <ToolRow icon={<Brain size={18} />} label={running || !heading ? 'Thinking' : heading} animating={running} testId="tool-thinking">
+    <ToolRow icon={<ThinkingIcon size={18} active={running} />} label={running || !heading ? 'Thinking' : heading} animating={running} testId="tool-thinking">
       {item.text.trim() ? (
         <div className="m-tl-thought">
           <Markdown text={item.text} />
@@ -566,7 +566,7 @@ export function ToolGroup({ label, count, running, children }: { label: string; 
   return (
     <ToolRow
       testId="tool-group"
-      icon={label ? <Brain size={18} /> : <Wrench size={18} />}
+      icon={label ? <ThinkingIcon size={18} active={running} /> : <Wrench size={18} />}
       label={title}
       detail={label ? undefined : `${count}`}
       animating={running}
