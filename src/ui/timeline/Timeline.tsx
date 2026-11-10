@@ -232,14 +232,14 @@ const AssistantMessage = memo(function AssistantMessage({ item, live }: { item: 
           ) : part.type === 'applet-pending' ? (
             <AppletPending key={`p${index}`} />
           ) : part.text.trim() ? (
-            <div key={`t${index}`} className={`m-tl-assistant__text${streaming ? ' m-tl-assistant__text--streaming' : ''}`}>
-              <Markdown text={part.text} />
+            <div key={`t${index}`} className="m-tl-assistant__text">
+              <Markdown text={part.text} streaming={streaming} />
             </div>
           ) : null,
         )
       ) : item.text.trim() && (
-        <div className={`m-tl-assistant__text${streaming ? ' m-tl-assistant__text--streaming' : ''}`}>
-          <Markdown text={item.text} />
+        <div className="m-tl-assistant__text">
+          <Markdown text={item.text} streaming={streaming} />
         </div>
       )}
       {item.error && <ErrorBox message={item.error.message} />}

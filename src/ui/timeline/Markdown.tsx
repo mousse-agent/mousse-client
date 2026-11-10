@@ -202,9 +202,11 @@ function blocks(tokens: Token[], key = 'b'): ReactNode[] {
 export interface MarkdownProps {
   text: string
   className?: string
+  /** The live reply: blocks that appear in it fade in (timeline.css). */
+  streaming?: boolean
 }
 
-export const Markdown = memo(function Markdown({ text, className = '' }: MarkdownProps) {
+export const Markdown = memo(function Markdown({ text, className = '', streaming }: MarkdownProps) {
   const tokens = useMemo(() => marked.lexer(prepare(text), { gfm: true, breaks: false }), [text])
-  return <div className={`m-md ${className}`.trim()}>{blocks(tokens)}</div>
+  return <div className={`m-md ${className}`.trim()} data-streaming={streaming || undefined}>{blocks(tokens)}</div>
 })

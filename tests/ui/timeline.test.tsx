@@ -115,4 +115,15 @@ describe('timeline', () => {
     expect(screen.getByText('Rate limited')).toBeInTheDocument()
     expect(screen.getByTestId('connection-failed')).toHaveTextContent('Provider unreachable.')
   })
+
+  it('marks only the live reply so its new blocks fade in', () => {
+    const reply: ChatItem = { id: 'r1', role: 'assistant', kind: 'message', text: 'First block.\n\nSecond block.', createdAt: at + 1000, status: 'streaming' }
+    const { container, rerender } = render(<Timeline items={[items[0], reply]} display={{ questions: [], phase: 'streaming' }} active />)
+    expect(container.querySelector('.m-tl-assistant .m-md')).toHaveAttribute('data-streaming', 'true')
+    // A finished reply, or one in a thread that stopped, replays nothing when opened.
+    rerender(<Timeline items={[items[0], { ...reply, status: 'done' }]} display={idle} active={false} />)
+    expect(container.querySelector('.m-tl-assistant .m-md')).not.toHaveAttribute('data-streaming')
+    rerender(<Timeline items={[items[0], reply]} display={idle} active={false} />)
+    expect(container.querySelector('.m-tl-assistant .m-md')).not.toHaveAttribute('data-streaming')
+  })
 })

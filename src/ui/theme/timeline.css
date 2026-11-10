@@ -400,20 +400,14 @@ button.m-tl-card__header:active { background: var(--ui-pressed); }
 /* ---------- Assistant messages ---------- */
 .m-tl-assistant { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .m-tl-assistant__text { font-size: var(--chat-font-size); line-height: var(--chat-line-height); color: var(--text-primary); }
-.m-tl-assistant__text--streaming .m-md > :last-child::after {
-  content: '';
-  display: inline-block;
-  width: 0.5em;
-  height: 1em;
-  margin-left: 3px;
-  vertical-align: -0.12em;
-  border-radius: 2px;
-  background: var(--accent);
-  animation: m-tl-blink 1s steps(2, start) infinite;
+/* global.css: a block that appears in the live reply fades in. Opacity only, so nothing around it
+   moves; only the live reply has data-streaming, so opening a finished thread replays nothing. */
+@media (prefers-reduced-motion: no-preference) {
+  .m-md[data-streaming] > * { transition: opacity 240ms ease-out; }
+  @starting-style {
+    .m-md[data-streaming] > * { opacity: 0; }
+  }
 }
-.m-tl-assistant__text--streaming .m-md > .m-code:last-child::after,
-.m-tl-assistant__text--streaming .m-md > .m-md-table-wrap:last-child::after { display: none; }
-@keyframes m-tl-blink { to { visibility: hidden; } }
 .m-tl-note { color: var(--an-foreground-muted); font-size: 13px; }
 
 /* Message toolbar: always visible on touch, quiet until used. */
@@ -597,5 +591,4 @@ button.m-tl-card__header:active { background: var(--ui-pressed); }
   .m-tl-shimmer--active { animation: none; background: none; color: var(--text-secondary) !important; }
   .m-tl-shimmer--active * { color: inherit !important; }
   .m-tl-spin, .m-tl-waiting__dot { animation: none; }
-  .m-tl-assistant__text--streaming .m-md > :last-child::after { animation: none; }
 }
