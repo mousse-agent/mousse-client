@@ -6,6 +6,7 @@ import { marked, type Token, type Tokens } from 'marked'
 import { copyText, openLink, safeHref } from './actions'
 import { useHighlight } from './useHighlight'
 import { Check, Copy } from './icons'
+import { MessageImage } from './ImageLightbox'
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'" }
 
@@ -112,7 +113,8 @@ function inlineToken(token: Token, key: string): ReactNode {
     case 'image': {
       const image = token as Tokens.Image
       const src = safeHref(image.href)
-      return src && !src.startsWith('mailto:') ? <img key={key} className="m-md-img" src={src} alt={image.text} loading="lazy" /> : image.text
+      // Images open large on a tap, as the desktop's MessageImage.
+      return src && !src.startsWith('mailto:') ? <MessageImage key={key} src={src} alt={image.text} title={image.title ?? undefined} /> : image.text
     }
     case 'html': {
       const text = (token as Tokens.HTML).text

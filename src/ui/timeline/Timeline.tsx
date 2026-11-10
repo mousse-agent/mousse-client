@@ -23,6 +23,7 @@ import {
 } from './format'
 import { Bot, Check, ChevronRight, CircleX, Copy, FileText, Folder, Globe, Image as ImageIcon, Info, Link, Monitor, MessageSquare, Paperclip, VolumeHigh, X } from './icons'
 import { Markdown } from './Markdown'
+import { ImageLightbox } from './ImageLightbox'
 import { AppletCard, AppletPending } from './AppletCard'
 import { ReadAloudButton as ComputerReadAloudButton, useComputerSpeech } from '../speech/readAloud'
 import { QuestionPrompt } from './QuestionPrompt'
@@ -141,22 +142,6 @@ function MetadataButton({ item }: { item: ChatItem }) {
 
 // ---- User messages ----
 
-function Lightbox({ src, name, onClose }: { src: string; name: string; onClose: () => void }) {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => event.key === 'Escape' && onClose()
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-  return (
-    <div className="m-tl-lightbox" role="dialog" aria-label={name} onClick={onClose}>
-      <img src={src} alt={name} />
-      <button type="button" className="m-tl-lightbox__close" aria-label="Close image" onClick={onClose}>
-        <X size={20} />
-      </button>
-    </div>
-  )
-}
-
 const REFERENCE_ICONS = { file: FileText, project: Folder, thread: MessageSquare, terminal: Monitor, browser: Globe, agent: Bot } as const
 
 const UserMessage = memo(function UserMessage({ item }: { item: ChatItem }) {
@@ -201,7 +186,7 @@ const UserMessage = memo(function UserMessage({ item }: { item: ChatItem }) {
         {item.createdAt > 0 && <time className="m-tl-toolbar__time" dateTime={new Date(item.createdAt).toISOString()}>{formatTimestamp(item.createdAt)}</time>}
         {item.text.trim() && <CopyButton text={item.text} />}
       </div>
-      {viewing && <Lightbox src={viewing.src} name={viewing.name} onClose={() => setViewing(undefined)} />}
+      {viewing && <ImageLightbox src={viewing.src} name={viewing.name} onClose={() => setViewing(undefined)} />}
     </div>
   )
 })
