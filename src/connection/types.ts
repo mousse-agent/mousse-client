@@ -1,3 +1,4 @@
+import type { ComputerBots, ListBot } from './bots'
 // The boundary between the phone UI and the connection layer. The UI only
 // talks to MousseConnection; the Net and Mousse ID implementation lives in src/net and
 // src/mousseId. Keep this file small and stable: both sides depend on it.
@@ -127,6 +128,8 @@ export interface ComputerLists {
   projects: ListProject[]
   threads: ListThread[]
   chats: ListChat[]
+  /** The owner's personal bots; empty on a computer that does not list them. */
+  bots: ListBot[]
   /** Run status of the threads that are not idle, by thread id. */
   status: Record<string, ThreadStatus>
   receivedAt: number
@@ -453,6 +456,8 @@ export interface ComputerSession {
   contextUsage(threadId: string): Promise<ContextUsage | undefined>
   /** Dictation and read aloud with the computer's speech models; absent when unavailable. */
   readonly speech?: ComputerSpeech
+  /** The owner's personal bots on this computer. */
+  readonly bots?: ComputerBots
   close(): void
 }
 

@@ -51,7 +51,8 @@ export function storageListsCache(storage: Storage | undefined = safeLocalStorag
         const text = storage?.getItem(keyOf(accountId, nodeId))
         if (!text) return undefined
         const value: unknown = JSON.parse(text)
-        return validLists(value) ? value : undefined
+        // Lists saved before bots were listed have none.
+        return validLists(value) ? { ...value, bots: Array.isArray(value.bots) ? value.bots : [] } : undefined
       } catch {
         return undefined
       }

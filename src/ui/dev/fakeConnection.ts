@@ -1,6 +1,7 @@
 // A deterministic, in-memory MousseConnection for development, screenshots and
 // UI tests. It simulates sign-in, enrollment stages and streamed replies; it
 // never touches the network. Replace it with the real connection in main.tsx.
+import { FakeBots } from './fakeBots'
 import type {
   AccountState,
   ChatItem,
@@ -180,6 +181,8 @@ export class FakeSession implements ComputerSession {
   private queues = new Map<string, QueuedMessage[]>()
   /** The computer's speech models (dictation and read aloud). */
   readonly speech = new FakeComputerSpeech()
+  /** The owner's bots on this computer. */
+  readonly bots = new FakeBots(() => this.emitLists())
   /** Every send, queued message and steer, with its options, for tests. */
   readonly sent: Array<{ kind: 'send' | 'queue' | 'steer'; threadId: string; text: string; options?: SendOptions }> = []
   /** What each new thread was created with, for tests. */
@@ -222,6 +225,7 @@ export class FakeSession implements ComputerSession {
         started: true
       })),
       chats,
+      bots: this.bots.list(),
       status,
       receivedAt: Date.now()
     }

@@ -1,6 +1,7 @@
 // A ComputerSession over a LeafSession: the phone's view of one computer, through the desktop's
 // bridge RPCs (projects.list, threads.*, orchestrator.*, bridge.thread.open) and its signed thread
 // display stream.
+import { SessionBots, type ComputerBots } from './bots'
 import { newId } from '../net/canonical'
 import { NetError } from '../net/errors'
 import type { SessionLink, StreamHead, StreamRecord } from '../net/session'
@@ -451,6 +452,7 @@ export interface RealSessionOptions {
 export class RealComputerSession implements ComputerSession {
   readonly nodeId: string
   readonly speech: ComputerSpeech
+  readonly bots: ComputerBots
   private readonly leaf: SessionLink
   private readonly watches = new Map<string, WatchEntry>()
   /** Runs this phone started, by thread: the `orchestrator.send` RPC id that `orchestrator.abort` names. */
@@ -471,6 +473,7 @@ export class RealComputerSession implements ComputerSession {
     this.leaf = options.leaf
     this.cache = options.threadCache
     this.speech = new LeafComputerSpeech((method, params, rpcOptions) => this.leaf.rpc(method, params, rpcOptions))
+    this.bots = new SessionBots((method, params, rpcOptions) => this.leaf.rpc(method, params, rpcOptions))
     const decide = (error?: Error) => {
       this.ended ??= options.endReason?.(error) ?? 'ended'
       this.endedWith ??= shortMessage(error)

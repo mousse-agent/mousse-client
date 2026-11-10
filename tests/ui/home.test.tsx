@@ -32,6 +32,7 @@ function saveLaptopLists(updatedAt: number): void {
     projects: [{ id: 'p-notes', name: 'notes', order: 0, pinned: false }],
     threads: [{ id: 't-hotel', title: 'Hotel wifi notes', projectId: 'p-notes', createdAt: updatedAt, updatedAt, order: 0, pinned: false, settled: false, started: true }],
     chats: [],
+    bots: [],
     status: {},
     receivedAt: updatedAt,
   }

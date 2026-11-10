@@ -17,6 +17,7 @@ function Screen() {
   switch (route.name) {
     case 'home': return <HomeScreen />
     case 'thread': return <HomeScreen selected={{ nodeId: route.nodeId, threadId: route.threadId }} />
+    case 'bot': return <HomeScreen selectedBot={{ nodeId: route.nodeId, botId: route.botId }} />
     case 'new': return <NewThreadScreen key={`${route.nodeId ?? ''}:${route.projectId ?? ''}`} nodeId={route.nodeId} projectId={route.projectId} />
     case 'settings': return <SettingsScreen />
   }

@@ -2,7 +2,10 @@
 // lists, drawn from a computer's live lists. Rows, status icons and colours follow
 // mousse/src/renderer/components/ThreadsSidebar.tsx and chats/ChatsSidebar.tsx.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import '../bots/bots.css'
+import type { ListBot } from '../../connection/bots'
 import type { ComputerLists, ListChat, ListProject, ListThread, ThreadStatus } from '../../connection/types'
+import { BotFace } from '../bots/face/BotFace'
 import {
   ChevronDown,
   CircleAlert,
@@ -17,9 +20,10 @@ import {
   MessagesSquare,
   Monitor,
   Pin,
+  Plus,
   type IconComponent,
 } from '../components/icons'
-import { SearchField, SectionHeading } from '../components/primitives'
+import { IconButton, SearchField, SectionHeading } from '../components/primitives'
 import {
   chatColor,
   chatPreview,
@@ -269,6 +273,20 @@ function ChatRow({ chat, active, computer, onOpen }: { chat: ListChat; active: b
   )
 }
 
+/** A bot's row: its face holds the state's pose, and the row says the state in words. */
+function BotRow({ bot, active, computer, onOpen }: { bot: ListBot; active: boolean; computer?: RowComputer; onOpen(): void }) {
+  return (
+    <button type="button" className={`m-chat-row${active ? ' is-active' : ''}`} aria-current={active ? 'true' : undefined} onClick={onOpen}>
+      <BotFace look={bot.look} state={bot.state} size={40} view="head" still />
+      <span className="m-chat-row__text">
+        <span className="m-chat-row__name">{bot.name}</span>
+        <span className="m-chat-row__preview">{computer && <span>{`${computer.name}${computer.offline ? ' (offline)' : ''} · `}</span>}{bot.stateText || bot.last?.text || bot.description}</span>
+      </span>
+      {bot.unread > 0 && <span className="bot-unread" aria-label={`${bot.unread} unread`}>{bot.unread}</span>}
+    </button>
+  )
+}
+
 export interface SidebarProps {
   lists: ComputerLists
   tab: SidebarTab
@@ -277,6 +295,12 @@ export interface SidebarProps {
   onOpenThread(thread: ListThread): void
   onOpenChat(chat: ListChat): void
   onNewThread?(project: ListProject): void
+  /** Opens a bot's chat; without it the Chats tab lists no bots. */
+  onOpenBot?(bot: ListBot): void
+  /** New bot; without it there is no + beside Bots. */
+  onNewBot?(): void
+  /** The open bot's id. */
+  selectedBotId?: string
   /** Shown above the list, under the tabs: connection notices and the like. */
   banner?: ReactNode
   /** For lists merged from several computers: the computer of a row, by its id. Rows then name their computer. */
@@ -294,7 +318,7 @@ function useNow(ms = 30_000): number {
   return now
 }
 
-export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenChat, onNewThread, banner, computerOf, order = 'desktop' }: SidebarProps) {
+export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenChat, onNewThread, onOpenBot, onNewBot, selectedBotId, banner, computerOf, order = 'desktop' }: SidebarProps) {
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [settledOpen, setSettledOpen] = useState(false)
@@ -313,6 +337,13 @@ export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenCha
     return next
   })
   const searching = !!query.trim()
+  const needle = query.trim().toLowerCase()
+  const bots = onOpenBot ? (lists.bots ?? []).filter((bot) => !needle || bot.name.toLowerCase().includes(needle)) : []
+  // Recent: bot chats and direct chats together, the latest first (like the desktop).
+  const recent = [
+    ...model.direct.map((chat) => ({ at: chat.updatedAt, key: chat.id, row: () => <ChatRow key={chat.id} chat={chat} active={!!chat.threadId && chat.threadId === selectedId} computer={computerOf?.(chat.id)} onOpen={() => onOpenChat(chat)} /> })),
+    ...bots.map((bot) => ({ at: Date.parse(bot.last?.at ?? bot.createdAt) || 0, key: bot.id, row: () => <BotRow key={`bot:${bot.id}`} bot={bot} active={bot.id === selectedBotId} computer={computerOf?.(bot.id)} onOpen={() => onOpenBot!(bot)} /> })),
+  ].sort((a, b) => b.at - a.at)
   const projects = [...lists.projects].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
   const card = (thread: ListThread) => (
     <ThreadCard
@@ -382,7 +413,24 @@ export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenCha
 
         {tab === 'chats' && (
           <>
-            {model.groups.length + model.direct.length === 0 && (
+            {onOpenBot && (
+              <section aria-label="Bots">
+                <SectionHeading action={onNewBot && <IconButton label="New bot" onClick={onNewBot}><Plus size={18} /></IconButton>}>Bots</SectionHeading>
+                {bots.length > 0 ? (
+                  <div className="bot-roster">
+                    {bots.map((bot) => (
+                      <button key={bot.id} type="button" className={bot.id === selectedBotId ? 'is-active' : ''} aria-label={`Message ${bot.name}`} onClick={() => onOpenBot(bot)}>
+                        <BotFace look={bot.look} state={bot.state} size={48} view="head" />
+                        <span>{bot.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="m-sb-empty">{searching ? `No bots match “${query.trim()}”.` : onNewBot ? 'No bots yet. Press + to make one.' : 'No bots yet.'}</p>
+                )}
+              </section>
+            )}
+            {model.groups.length + recent.length === 0 && (
               <p className="m-sb-empty">{searching ? `No chats match “${query.trim()}”.` : 'No chats yet. Start one with an agent on the computer.'}</p>
             )}
             {model.groups.length > 0 && (
@@ -391,10 +439,10 @@ export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenCha
                 <div className="m-chat-list">{model.groups.map((chat) => <ChatRow key={chat.id} chat={chat} active={!!chat.threadId && chat.threadId === selectedId} computer={computerOf?.(chat.id)} onOpen={() => onOpenChat(chat)} />)}</div>
               </>
             )}
-            {model.direct.length > 0 && (
+            {recent.length > 0 && (
               <>
                 <SectionHeading>Recent</SectionHeading>
-                <div className="m-chat-list">{model.direct.map((chat) => <ChatRow key={chat.id} chat={chat} active={!!chat.threadId && chat.threadId === selectedId} computer={computerOf?.(chat.id)} onOpen={() => onOpenChat(chat)} />)}</div>
+                <div className="m-chat-list">{recent.map((entry) => entry.row())}</div>
               </>
             )}
           </>

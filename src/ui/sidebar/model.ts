@@ -134,7 +134,7 @@ const PROJECT_ORDER_SPAN = 1_000_000
  * computers never collide, and each computer's projects stay together in the computers' order.
  */
 export function mergeLists(sources: readonly ListsSource[]): ComputerLists {
-  const merged: ComputerLists = { projects: [], threads: [], chats: [], status: {}, receivedAt: 0 }
+  const merged: ComputerLists = { projects: [], threads: [], chats: [], bots: [], status: {}, receivedAt: 0 }
   sources.forEach(({ nodeId, lists }, index) => {
     const key = (id: string) => mergedKey(nodeId, id)
     for (const project of lists.projects) merged.projects.push({ ...project, id: key(project.id), order: index * PROJECT_ORDER_SPAN + project.order })
@@ -146,6 +146,7 @@ export function mergeLists(sources: readonly ListsSource[]): ComputerLists {
         ...(chat.threadId ? { threadId: key(chat.threadId) } : {}),
         ...(chat.projectId ? { projectId: key(chat.projectId) } : {}),
       })
+    for (const bot of lists.bots ?? []) merged.bots.push({ ...bot, id: key(bot.id) })
     for (const [id, status] of Object.entries(lists.status)) merged.status[key(id)] = status
     merged.receivedAt = Math.max(merged.receivedAt, lists.receivedAt)
   })

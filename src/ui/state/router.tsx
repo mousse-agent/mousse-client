@@ -7,6 +7,8 @@ import { Capacitor } from '@capacitor/core'
 export type Route =
   | { name: 'home' }
   | { name: 'thread'; nodeId: string; threadId: string }
+  /** A bot's chat on its computer. */
+  | { name: 'bot'; nodeId: string; botId: string }
   /** A new thread; the computer and project start as given, or as last used. */
   | { name: 'new'; nodeId?: string; projectId?: string }
   | { name: 'settings' }

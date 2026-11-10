@@ -2,6 +2,17 @@
 // stroke 1.5, exported under the desktop's names so screens read the same.
 import { forwardRef, type ForwardRefExoticComponent, type RefAttributes, type SVGProps } from 'react'
 import { HugeiconsIcon, type IconSvgElement } from '@hugeicons/react'
+import Alert02Icon from '@hugeicons/core-free-icons/Alert02Icon'
+import Robot01Icon from '@hugeicons/core-free-icons/Robot01Icon'
+import Clock01Icon from '@hugeicons/core-free-icons/Clock01Icon'
+import File02Icon from '@hugeicons/core-free-icons/File02Icon'
+import Globe02Icon from '@hugeicons/core-free-icons/Globe02Icon'
+import PauseIcon from '@hugeicons/core-free-icons/PauseIcon'
+import PlayIcon from '@hugeicons/core-free-icons/PlayIcon'
+import Shield01Icon from '@hugeicons/core-free-icons/Shield01Icon'
+import Brain01Icon from '@hugeicons/core-free-icons/Brain01Icon'
+import ArrowTurnBackwardIcon from '@hugeicons/core-free-icons/ArrowTurnBackwardIcon'
+import ShuffleIcon from '@hugeicons/core-free-icons/ShuffleIcon'
 import ArrowDown02Icon from '@hugeicons/core-free-icons/ArrowDown02Icon'
 import ArrowUp01Icon from '@hugeicons/core-free-icons/ArrowUp01Icon'
 import Attachment01Icon from '@hugeicons/core-free-icons/Attachment01Icon'
@@ -145,3 +156,16 @@ export const Zap = /* @__PURE__ */ createIcon('Zap', FlashIcon)
 export const Wand2 = /* @__PURE__ */ createIcon('Wand2', MagicWand01Icon)
 export const ShieldCheck = /* @__PURE__ */ createIcon('ShieldCheck', ShieldCheckIcon)
 export const ShieldOff = /* @__PURE__ */ createIcon('ShieldOff', ShieldOffIcon)
+
+// Bots (the desktop names, from mousse/src/renderer/lib/icons.tsx).
+export const AlertTriangle = /* @__PURE__ */ createIcon('AlertTriangle', Alert02Icon)
+export const Bot = /* @__PURE__ */ createIcon('Bot', Robot01Icon)
+export const Clock = /* @__PURE__ */ createIcon('Clock', Clock01Icon)
+export const FileText = /* @__PURE__ */ createIcon('FileText', File02Icon)
+export const Globe = /* @__PURE__ */ createIcon('Globe', Globe02Icon)
+export const Pause = /* @__PURE__ */ createIcon('Pause', PauseIcon)
+export const Play = /* @__PURE__ */ createIcon('Play', PlayIcon)
+export const Shield = /* @__PURE__ */ createIcon('Shield', Shield01Icon)
+export const Brain = /* @__PURE__ */ createIcon('Brain', Brain01Icon)
+export const Reply = /* @__PURE__ */ createIcon('Reply', ArrowTurnBackwardIcon)
+export const Shuffle = /* @__PURE__ */ createIcon('Shuffle', ShuffleIcon)
