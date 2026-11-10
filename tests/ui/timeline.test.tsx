@@ -156,4 +156,14 @@ describe('timeline', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(open).toHaveFocus()
   })
+
+  it('turns the thinking atom only while the model thinks', () => {
+    const thought: ChatItem = { id: 'th', role: 'assistant', kind: 'thinking', text: 'Weighing options', createdAt: at + 1000, status: 'streaming' }
+    const { container, rerender } = render(<Timeline items={[items[0], thought]} display={{ questions: [], phase: 'streaming' }} active />)
+    const icon = () => container.querySelector('.m-thinking-icon')!
+    expect(icon()).toHaveAttribute('data-thinking', 'active')
+    expect(icon().querySelector('.m-thinking-icon__orbit')).not.toBeNull()
+    rerender(<Timeline items={[items[0], { ...thought, status: 'done' }]} display={idle} active={false} />)
+    expect(icon()).toHaveAttribute('data-thinking', 'done')
+  })
 })

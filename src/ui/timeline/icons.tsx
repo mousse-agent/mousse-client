@@ -3,6 +3,7 @@
 import { forwardRef, type ForwardRefExoticComponent, type RefAttributes } from 'react'
 import { HugeiconsIcon, type IconSvgElement } from '@hugeicons/react'
 import ArrowDown02Icon from '@hugeicons/core-free-icons/ArrowDown02Icon'
+import Atom01Icon from '@hugeicons/core-free-icons/Atom01Icon'
 import Attachment01Icon from '@hugeicons/core-free-icons/Attachment01Icon'
 import Brain01Icon from '@hugeicons/core-free-icons/Brain01Icon'
 import BubbleChatQuestionIcon from '@hugeicons/core-free-icons/BubbleChatQuestionIcon'
@@ -80,3 +81,31 @@ export const Terminal = /* @__PURE__ */ icon('Terminal', TerminalIcon)
 export const VolumeHigh = /* @__PURE__ */ icon('VolumeHigh', VolumeHighIcon)
 export const Wrench = /* @__PURE__ */ icon('Wrench', Wrench01Icon)
 export const X = /* @__PURE__ */ icon('X', Cancel01Icon)
+
+/**
+ * The thinking icon (Hugeicons Atom 01), as the desktop's ThinkingIcon: its own SVG so the centre
+ * circle and the orbits are separate, and only the orbits turn while `active` (timeline.css).
+ */
+export function ThinkingIcon({ size = 18, active = false, className = '' }: TimelineIconProps & { active?: boolean }) {
+  const [centre, ...orbits] = Atom01Icon as unknown as Array<[string, Record<string, string>]>
+  const draw = ([tag, { key, ...attrs }]: [string, Record<string, string>]) => {
+    const shape = { ...attrs, stroke: 'currentColor', strokeWidth: 1.5 }
+    return tag === 'circle' ? <circle key={key} {...shape} /> : <path key={key} {...shape} />
+  }
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden
+      data-icon-library="hugeicons"
+      data-thinking={active ? 'active' : 'done'}
+      className={`mousse-icon m-thinking-icon${active ? ' is-thinking' : ''} ${className}`.trim()}
+    >
+      {draw(centre!)}
+      <g className="m-thinking-icon__orbit">{orbits.map(draw)}</g>
+    </svg>
+  )
+}

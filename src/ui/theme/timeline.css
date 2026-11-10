@@ -99,6 +99,20 @@ html[data-theme='light'] {
 }
 .m-tl-shimmer--active * { color: transparent !important; }
 
+/* thinking-icon.css: while the model thinks the orbits turn around the still centre (2s a turn) and the
+   icon takes the label's shimmer colours, swept just before the band enters the label. Still with
+   reduced motion and once the thought is done. */
+.m-thinking-icon .m-thinking-icon__orbit { transform-box: view-box; transform-origin: 12px 12px; }
+.m-thinking-icon.is-thinking { color: var(--an-shimmer-base, var(--an-foreground-subtle)); animation: m-thinking-sweep 1.2s linear infinite; }
+.m-thinking-icon.is-thinking .m-thinking-icon__orbit { animation: m-tl-spin 2s linear infinite; will-change: transform; }
+@keyframes m-thinking-sweep {
+  0%, 15%, 100% { color: var(--an-shimmer-base, var(--an-foreground-subtle)); }
+  5% { color: var(--an-shimmer-peak, var(--an-foreground-muted)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .m-thinking-icon.is-thinking, .m-thinking-icon.is-thinking .m-thinking-icon__orbit { animation: none; }
+}
+
 @keyframes m-tl-spin { to { transform: rotate(360deg); } }
 .m-tl-spin { flex: none; color: var(--an-tool-color-muted); animation: m-tl-spin 0.8s linear infinite; }
 
