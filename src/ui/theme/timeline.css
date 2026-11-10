@@ -73,7 +73,10 @@ html[data-theme='light'] {
 .m-tl { display: flex; flex-direction: column; gap: 22px; }
 .m-tl-turn { display: flex; flex-direction: column; gap: 10px; }
 .m-tl-answer { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.m-tl-breathing { flex: none; height: 96px; }
+/* message-list.tsx REPLY_GAP: a small, fixed gap under the reply in progress, so the newest text sits
+   about two lines above the composer. With the transcript's gap it is the height of the toolbar that
+   takes its place when the reply ends, so the text does not move then. */
+.m-tl-reply-gap { flex: none; height: 20px; }
 
 /* ---------- Shimmer (agent-ui.css .an-text-shimmer) ---------- */
 @keyframes m-tl-shimmer { from { background-position: 100% center; } to { background-position: 0% center; } }
