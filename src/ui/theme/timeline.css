@@ -40,6 +40,10 @@ html[data-theme='blacksphere-plus'] {
   --an-tool-color: #e6e6e6;
 }
 html[data-theme='light'] {
+  /* global.css: the running shimmer gets its own pair in light, a light resting grey with a dark
+     band sweeping it, so the "Working for" line and running rows stay readable. */
+  --an-shimmer-base: color-mix(in srgb, var(--text-primary) 48%, var(--surface-base));
+  --an-shimmer-peak: var(--text-primary);
   --an-border-color: rgba(0, 0, 0, 0.08);
   --an-tool-border-color: rgba(0, 0, 0, 0.1);
   --an-tool-color: #1a1a1a;
@@ -74,7 +78,15 @@ html[data-theme='light'] {
 /* ---------- Shimmer (agent-ui.css .an-text-shimmer) ---------- */
 @keyframes m-tl-shimmer { from { background-position: 100% center; } to { background-position: 0% center; } }
 .m-tl-shimmer--active {
-  background-image: linear-gradient(90deg, var(--an-foreground-subtle) 0%, var(--an-foreground-subtle) 40%, var(--an-foreground-muted) 50%, var(--an-foreground-subtle) 60%, var(--an-foreground-subtle) 100%);
+  /* The resting colour and the band that sweeps it; light sets its own pair above. */
+  background-image: linear-gradient(
+    90deg,
+    var(--an-shimmer-base, var(--an-foreground-subtle)) 0%,
+    var(--an-shimmer-base, var(--an-foreground-subtle)) 40%,
+    var(--an-shimmer-peak, var(--an-foreground-muted)) 50%,
+    var(--an-shimmer-base, var(--an-foreground-subtle)) 60%,
+    var(--an-shimmer-base, var(--an-foreground-subtle)) 100%
+  );
   background-size: 250% 100%;
   background-repeat: no-repeat;
   -webkit-background-clip: text;
