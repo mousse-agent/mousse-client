@@ -546,7 +546,7 @@ const TurnView = memo(function TurnView({
 }) {
   // Mousse's line that a Stop or a restart cut the turn off shows nothing itself: the Worked line reads it.
   const end = useMemo(() => [...turn.replies].reverse().find((item) => item.turnEnd)?.turnEnd, [turn.replies])
-  const replies = useMemo(() => (end ? turn.replies.filter((item) => !item.turnEnd) : turn.replies), [turn.replies, end])
+  const replies = useMemo(() => (end ? turn.replies.filter((item) => !item.turnEnd) : turn.replies).map(withTool), [turn.replies, end])
   const { flow, nested } = useMemo(() => nestUnderTasks(replies), [replies])
   const cutOff = endedBadly || !!end
   // A finished turn ends on its answer: the work that led to it comes above it. A cut-off one keeps its order.

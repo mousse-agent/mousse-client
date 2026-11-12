@@ -561,11 +561,13 @@ export const isSubagentItem = (item: ChatItem): boolean => item.kind === 'tool' 
 /** Thoughts and tool calls group together; questions, plans, quick actions and subagents stand alone. */
 export function isActivity(item: ChatItem): boolean {
   if (item.kind === 'thinking') return true
+  // Items from older code paths name a tool but carry no call: they are work too.
+  if (item.role === 'tool' && !item.tool) return true
   return item.kind === 'tool' && !!item.tool && !STANDALONE_TOOLS.has(item.tool.name) && !isSubagentItem(item)
 }
 
 /** A call (not a thought) that has not finished. */
-export const isRunningCall = (item: ChatItem): boolean => item.kind === 'tool' && item.status === 'streaming'
+export const isRunningCall = (item: ChatItem): boolean => (item.kind === 'tool' || item.role === 'tool') && item.status === 'streaming'
 /** A thought still being written. */
 export const isLiveThought = (item: ChatItem | undefined): boolean => item?.kind === 'thinking' && item.status === 'streaming'
 
@@ -832,7 +834,8 @@ function inputDetail(input: unknown): string | undefined {
 const PLACEHOLDER_INPUT_KEYS = new Set(['label', 'cwd'])
 
 function toolProgress(item: ChatItem): TurnProgress {
-  const tool = item.tool!
+  const tool = item.tool
+  if (!tool) return { kind: 'running-tool', label: 'Running tools…' }
   const detail = inputDetail(tool.input)
   if (isSubagentItem(item)) return { kind: 'running-tool', label: 'Running subagent…', detail }
   // A tool search loads tools for the model: the line says what its row says.
