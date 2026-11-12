@@ -370,6 +370,15 @@ export interface QueuedMessage {
   state: string
 }
 
+/**
+ * What an edit of a queued message answers: the saved message, or, with `changed`, the message as it is
+ * now when its text changed after the edit started; then nothing was saved.
+ */
+export interface QueueEditResult {
+  item: QueuedMessage
+  changed?: true
+}
+
 /** The thread fields the composer needs. */
 export interface ThreadDetails {
   id: string
@@ -451,6 +460,11 @@ export interface ComputerSession {
   listQueue(threadId: string): Promise<QueuedMessage[]>
   removeQueued(threadId: string, itemId: string): Promise<void>
   reorderQueue(threadId: string, orderedIds: string[]): Promise<void>
+  /**
+   * Replaces a queued message's text; it keeps its place in the queue. With `expectedContent` (the text the
+   * edit started from) it saves only if the message still has it, and otherwise answers it as it is now.
+   */
+  editQueued(threadId: string, itemId: string, content: string, expectedContent?: string): Promise<QueueEditResult>
   /** Moves a queued message into the running turn. */
   steerQueued(threadId: string, itemId: string): Promise<void>
   contextUsage(threadId: string): Promise<ContextUsage | undefined>

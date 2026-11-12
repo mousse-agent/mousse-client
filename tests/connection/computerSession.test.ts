@@ -358,6 +358,46 @@ describe('composer controls', () => {
     session.close()
   })
 
+  it('edits a queued message in place and keeps newer text', async () => {
+    const { session, remote } = await setup()
+    const pending = (id: string, content: string) => ({ id, content, enqueuedAt: '2026-01-01T00:00:00Z', intent: 'normal', state: 'pending' })
+    const editing = session.editQueued('t1', 'q1', ' Better ', 'Old')
+    await remote.answer('queue.list', { items: [pending('q1', 'Old')], revision: 'r7' })
+    const edit = await remote.answer('queue.edit', { item: pending('q1', 'Better'), items: [] })
+    expect(edit.params).toEqual({ threadId: 't1', itemId: 'q1', content: 'Better', expectedRevision: 'r7' })
+    expect((await editing).item.content).toBe('Better')
+
+    // Changed elsewhere since the edit started: nothing is saved.
+    const stale = session.editQueued('t1', 'q1', 'Mine', 'Old')
+    await remote.answer('queue.list', { items: [pending('q1', 'Theirs')] })
+    expect(await stale).toEqual({ item: expect.objectContaining({ content: 'Theirs' }), changed: true })
+    session.close()
+  })
+
+  it('edits by replacing the message where the computer refuses queue.edit', async () => {
+    const { session, remote } = await setup()
+    const pending = (id: string, content: string) => ({ id, content, enqueuedAt: '2026-01-01T00:00:00Z', intent: 'normal', state: 'pending' })
+    const editing = session.editQueued('t1', 'q1', 'New', 'Old')
+    await remote.answer('queue.list', { items: [pending('q1', 'Old'), pending('q2', 'Later')] })
+    const refused = await remote.next('rpc.request')
+    expect(refused.method).toBe('queue.edit')
+    await remote.send({ t: 'rpc.result', id: refused.id, error: { code: 'forbidden', message: 'forbidden', retryable: false } })
+    expect((await remote.answer('queue.enqueue', { ok: true, item: { id: 'q3' } })).params).toEqual({ threadId: 't1', content: 'New' })
+    expect((await remote.answer('queue.remove', { outcome: 'removed' })).params).toEqual({ threadId: 't1', itemId: 'q1' })
+    await remote.answer('queue.list', { items: [pending('q2', 'Later'), pending('q3', 'New')] })
+    expect((await remote.answer('queue.reorder', { items: [] })).params).toEqual({ threadId: 't1', orderedIds: ['q3', 'q2'] })
+    expect(await editing).toEqual({ item: expect.objectContaining({ id: 'q3', content: 'New' }) })
+
+    // The refusal is remembered: the next edit replaces at once, and a failed removal takes the copy back.
+    const again = session.editQueued('t1', 'q2', 'Sooner')
+    await remote.answer('queue.list', { items: [pending('q3', 'New'), pending('q2', 'Later')] })
+    await remote.answer('queue.enqueue', { ok: true, item: { id: 'q4' } })
+    await remote.answer('queue.remove', { ok: false, error: 'Queued message already started.' })
+    expect((await remote.answer('queue.remove', { outcome: 'removed' })).params).toEqual({ threadId: 't1', itemId: 'q4' })
+    await expect(again).rejects.toThrow(/already started/)
+    session.close()
+  })
+
   it('steers its own run directly', async () => {
     const { session, remote } = await setup()
     const sending = session.send('t1', 'Do it')
