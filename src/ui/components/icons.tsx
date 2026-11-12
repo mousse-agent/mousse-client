@@ -40,6 +40,7 @@ import BubbleChatIcon from '@hugeicons/core-free-icons/BubbleChatIcon'
 import Cancel01Icon from '@hugeicons/core-free-icons/Cancel01Icon'
 import CheckmarkCircle02Icon from '@hugeicons/core-free-icons/CheckmarkCircle02Icon'
 import ComputerIcon from '@hugeicons/core-free-icons/ComputerIcon'
+import PaletteIcon from '@hugeicons/core-free-icons/PaletteIcon'
 import CrownIcon from '@hugeicons/core-free-icons/CrownIcon'
 import Folder01Icon from '@hugeicons/core-free-icons/Folder01Icon'
 import InformationCircleIcon from '@hugeicons/core-free-icons/InformationCircleIcon'
@@ -134,6 +135,7 @@ export const LogOut = /* @__PURE__ */ createIcon('LogOut', Logout01Icon)
 export const Mail = /* @__PURE__ */ createIcon('Mail', Mail01Icon)
 export const MessageSquare = /* @__PURE__ */ createIcon('MessageSquare', BubbleChatIcon)
 export const Monitor = /* @__PURE__ */ createIcon('Monitor', ComputerIcon)
+export const Palette = /* @__PURE__ */ createIcon('Palette', PaletteIcon)
 export const Pin = /* @__PURE__ */ createIcon('Pin', PinIcon)
 export const Plus = /* @__PURE__ */ createIcon('Plus', Add01Icon)
 export const QrCode = /* @__PURE__ */ createIcon('QrCode', QrCodeIcon)

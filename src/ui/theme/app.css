@@ -931,19 +931,87 @@ html[data-theme='light'] .m-provider-icon--mono { filter: none; }
 .m-context__swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
 
 /* ---------- Settings ---------- */
-.m-kv { display: flex; align-items: center; gap: 12px; min-height: 40px; }
-.m-kv > div { display: flex; flex-direction: column; min-width: 0; }
-.m-kv__label { font-size: 12.5px; color: var(--text-secondary); }
-.m-kv__value { font-size: 15.5px; overflow-wrap: anywhere; }
+/* ---------- Settings (mousse/src/renderer/styles/settings.css at phone sizes) ----------
+   A heading per group, then its rows on ONE subtle surface: a fill a few percent off the page and an
+   edge drawn only by light, no border and no other cards. One row anatomy: text left, one control
+   right, a hairline between rows. Buttons sit outside the surface. Rarely needed rows fold under one
+   Advanced heading at the end. */
+.m-settings {
+  --settings-surface: color-mix(in srgb, var(--text-primary) 4.5%, transparent);
+  --settings-surface-edge: inset 0 1px 0 rgba(255, 255, 255, 0.06), inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+  --settings-section-gap: 28px;
+  gap: 0;
+  padding-top: 20px;
+}
+html[data-theme='blacksphere-plus'] .m-settings {
+  --settings-surface: color-mix(in srgb, var(--text-primary) 5%, transparent);
+  --settings-surface-edge: inset 0 1px 0 rgba(255, 255, 255, 0.07), inset 0 -1px 0 rgba(0, 0, 0, 0.5);
+}
+html[data-theme='light'] .m-settings { --settings-surface-edge: inset 0 -1px 0 rgba(20, 16, 30, 0.05); }
+.m-set-group + .m-set-group, .m-set-fold { margin-top: var(--settings-section-gap); }
+.m-set-group__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 0 4px;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-primary);
+}
+.m-set-group__title svg { color: var(--text-secondary); flex: none; }
+.m-set-rows {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0 16px;
+  border-radius: var(--ui-card-radius);
+  background: var(--settings-surface);
+  box-shadow: var(--settings-surface-edge);
+}
+.m-set-row { display: flex; flex-direction: column; gap: 10px; padding: 12px 0; min-height: 52px; justify-content: center; }
+.m-set-rows .m-set-row { border-top: 1px solid var(--ui-line); }
+.m-set-rows > .m-set-row:first-child,
+.m-set-rows > .m-set-subrows:first-child > .m-set-row:first-child { border-top: 0; }
+.m-set-row__main { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.m-set-row__leading { flex: none; display: inline-flex; color: var(--text-secondary); }
+.m-set-row__text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.m-set-row__title { font-size: 15.5px; line-height: 1.35; color: var(--text-primary); overflow-wrap: anywhere; }
+.m-set-row__desc { font-size: 13.5px; line-height: 1.45; color: color-mix(in srgb, var(--text-primary) 60%, transparent); overflow-wrap: anywhere; }
+.m-set-row__control { flex: none; display: inline-flex; align-items: center; }
+.m-set-row__value { font-size: 14px; color: var(--text-secondary); }
+.m-set-after { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
 
-.m-swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--touch-target), 1fr)); gap: 6px; }
+/* The fold: a heading-sized toggle whose chevron turns to point down when open. */
+.m-set-fold__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: var(--touch-target);
+  margin: 0 0 4px;
+  padding: 0 8px 0 4px;
+  border: 0;
+  border-radius: var(--ui-control-radius);
+  background: none;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.m-set-fold__chevron { color: var(--text-secondary); transition: transform 180ms ease; }
+.m-set-fold__toggle[aria-expanded='true'] .m-set-fold__chevron { transform: rotate(90deg); transition-duration: 160ms; }
+
+/* Accent colours: bare circles in thumb-sized targets; a neutral ring and a check mark the chosen one. */
+.m-swatches { display: grid; grid-template-columns: repeat(6, minmax(var(--touch-target), 1fr)); justify-items: center; gap: 2px; }
 .m-swatch {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: var(--touch-target);
   height: var(--touch-target);
-  border-radius: 12px;
-  border: 1px solid var(--ui-line);
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
   background: transparent;
   color: #15121b;
   position: relative;
@@ -953,32 +1021,15 @@ html[data-theme='light'] .m-provider-icon--mono { filter: none; }
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   transform: translate(-50%, -50%);
   border-radius: 50%;
   background: var(--swatch);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
 }
 .m-swatch > * { position: relative; }
-.m-swatch[aria-checked='true'] { border-color: var(--swatch); }
-
-.m-disclosure {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: var(--touch-target);
-  padding: 0;
-  border: 0;
-  background: none;
-  text-align: left;
-}
-.m-disclosure span { flex: 1; }
-.m-disclosure__chevron { transition: transform 160ms ease; color: var(--ui-faint); }
-.m-disclosure[aria-expanded='true'] .m-disclosure__chevron { transform: rotate(180deg); }
-.m-advanced { margin: 0; display: grid; gap: 4px 0; }
-.m-advanced dt { font-size: 12.5px; color: var(--text-secondary); }
-.m-advanced dd { margin: 0 0 8px; font-size: 13.5px; overflow-wrap: anywhere; }
+.m-swatch[aria-checked='true']::before { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4), 0 0 0 2px var(--app-window-bg), 0 0 0 3.5px var(--text-primary); }
 
 /* ---------- Split view (tablets, unfolded phones) ---------- */
 @media (min-width: 768px) {
