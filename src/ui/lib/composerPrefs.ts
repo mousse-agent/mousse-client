@@ -1,3 +1,4 @@
+import type { ModelSelection } from '../../connection/types'
 // Composer choices kept on this phone, like the desktop keeps them per profile: unsent drafts per
 // thread, and favourite models per computer. The thread's model and
 // effort live on the computer (the thread record), not here.
@@ -83,4 +84,44 @@ export function saveSendMode(key: string, mode: SendMode): void {
   const others = steerThreads().filter((entry) => entry !== key)
   const next = mode === 'steer' ? [...others, key].slice(-MAX_STEER_THREADS) : others
   write(STEER_THREADS, next.length ? JSON.stringify(next) : null)
+}
+
+/**
+ * What a new thread in a project starts with, as last picked on this phone for one of the project's new
+ * threads: the model (with its level) and whether it starts in a worktree. Like the desktop's per-project
+ * choice (`Project.newThread`); the computer keeps that one for its own windows, so the phone keeps its own.
+ */
+export interface ProjectChoice {
+  model?: ModelSelection
+  worktree?: boolean
+}
+
+const choiceKey = (nodeId: string, projectId: string) => `mousse.newThread.choice.${nodeId}.${projectId}`
+
+export function loadProjectChoice(nodeId: string, projectId: string): ProjectChoice {
+  if (!projectId) return {}
+  try {
+    const parsed: unknown = JSON.parse(read(choiceKey(nodeId, projectId)) ?? '{}')
+    if (typeof parsed !== 'object' || parsed === null) return {}
+    const { model, worktree } = parsed as Record<string, unknown>
+    const choice: ProjectChoice = {}
+    if (isModelSelection(model)) choice.model = model
+    if (typeof worktree === 'boolean') choice.worktree = worktree
+    return choice
+  } catch {
+    return {}
+  }
+}
+
+/** Remembers what was picked; what was not picked this time keeps what was remembered before. */
+export function rememberProjectChoice(nodeId: string, projectId: string, choice: ProjectChoice): void {
+  if (!projectId) return
+  const next = { ...loadProjectChoice(nodeId, projectId), ...Object.fromEntries(Object.entries(choice).filter(([, value]) => value !== undefined)) }
+  write(choiceKey(nodeId, projectId), JSON.stringify(next))
+}
+
+function isModelSelection(value: unknown): value is ModelSelection {
+  if (typeof value !== 'object' || value === null) return false
+  const entry = value as Record<string, unknown>
+  return typeof entry.llmProvider === 'string' && typeof entry.model === 'string' && (entry.instanceId === undefined || typeof entry.instanceId === 'string')
 }

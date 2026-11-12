@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import type { Computer, ComputerLists } from '../../src/connection/types'
 import type { FakeMousseConnection } from '../../src/ui/dev/fakeConnection'
-import { defaultComputer, defaultProject } from '../../src/ui/lib/newThread'
+import { defaultComputer, defaultProject, offersModel } from '../../src/ui/lib/newThread'
+import { loadProjectChoice } from '../../src/ui/lib/composerPrefs'
 import { installMatchMedia, renderApp } from './helpers'
 
 /** A working localStorage: Node's own global hides jsdom's when it has no storage file. */
@@ -133,6 +134,38 @@ describe('new thread', () => {
     expect(session.created).toEqual([{ projectId: 'p-mousse', worktreeEnabled: true }])
     const threadId = session.sent[0].threadId
     expect((await session.getThread(threadId)).model).toEqual({ instanceId: 'pi:openai', llmProvider: 'openai', model: 'gpt-5.5:high' })
+  })
+
+  it('starts the next new thread in a project with the model and worktree last picked there', async () => {
+    localStorage.setItem('mousse.newThread.choice.node-studio.p-mousse', JSON.stringify({ model: { instanceId: 'pi:openai', llmProvider: 'openai', model: 'gpt-5.5:high' }, worktree: true }))
+    const { connection } = renderApp({ signedIn: true, routes: [{ name: 'home' }, { name: 'new', nodeId: 'node-studio', projectId: 'p-mousse' }] })
+    expect(await screen.findByRole('button', { name: 'Model: GPT 5.5 High' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Start in a worktree' })).toHaveAttribute('aria-pressed', 'true')
+
+    const field = screen.getByLabelText('Message')
+    await waitFor(() => expect(field).not.toBeDisabled())
+    fireEvent.change(field, { target: { value: 'Same again' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(await screen.findByText('Same again')).toBeInTheDocument()
+    const session = (connection as FakeMousseConnection).lastSession!
+    expect(session.created).toEqual([{ projectId: 'p-mousse', worktreeEnabled: true }])
+    expect((await session.getThread(session.sent[0].threadId)).model).toEqual({ instanceId: 'pi:openai', llmProvider: 'openai', model: 'gpt-5.5:high' })
+  })
+
+  it('remembers the model and worktree picked for a project, and drops a remembered model the computer no longer offers', async () => {
+    renderApp({ signedIn: true, routes: [{ name: 'home' }, { name: 'new', nodeId: 'node-studio', projectId: 'p-mousse' }] })
+    fireEvent.click(await screen.findByRole('button', { name: 'Model: Opus 4.8 High' }))
+    fireEvent.click(within(await screen.findByRole('menu', { name: 'Models' })).getByRole('menuitemradio', { name: 'GPT 5.5, OpenAI' }))
+    const field = screen.getByLabelText('Message')
+    await waitFor(() => expect(field).not.toBeDisabled())
+    fireEvent.change(field, { target: { value: 'Remember this' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(await screen.findByText('Remember this')).toBeInTheDocument()
+    expect(loadProjectChoice('node-studio', 'p-mousse')).toEqual({ worktree: false, model: { instanceId: 'pi:openai', llmProvider: 'openai', model: 'gpt-5.5:high' } })
+
+    expect(offersModel([{ id: 'openai', instanceId: 'pi:openai', label: 'OpenAI', models: [{ id: 'gpt-5.5', label: 'GPT 5.5' }] }], { instanceId: 'pi:openai', llmProvider: 'openai', model: 'gpt-5.5:high' })).toBe(true)
+    expect(offersModel([{ id: 'openai', instanceId: 'pi:openai', label: 'OpenAI', models: [{ id: 'gpt-5.4', label: 'GPT 5.4' }] }], { instanceId: 'pi:openai', llmProvider: 'openai', model: 'gpt-5.5:high' })).toBe(false)
+    expect(offersModel([{ id: 'openai', instanceId: 'pi:other', label: 'OpenAI', models: [{ id: 'gpt-5.5', label: 'GPT 5.5' }] }], { instanceId: 'pi:openai', llmProvider: 'openai', model: 'gpt-5.5' })).toBe(false)
   })
 
   it('offers the user’s computers in its computer menu', async () => {

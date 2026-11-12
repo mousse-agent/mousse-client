@@ -10,13 +10,14 @@ import { EmptyState } from '../components/EmptyState'
 import { Check, ChevronDown, ChevronLeft, Folder, GitBranch, Monitor } from '../components/icons'
 import { IconButton, ListRow, Notice, StatusDot, TopBar } from '../components/primitives'
 import { Sheet } from '../components/Sheet'
-import { loadFavorites, loadLastComputer, loadLastProject, saveFavorites, saveLastComputer, saveLastProject } from '../lib/composerPrefs'
-import { defaultComputer, defaultProject, sortedProjects, threadComputers } from '../lib/newThread'
+import { loadFavorites, loadLastComputer, loadLastProject, loadProjectChoice, rememberProjectChoice, saveFavorites, saveLastComputer, saveLastProject } from '../lib/composerPrefs'
+import { defaultComputer, defaultProject, offersModel, sortedProjects, threadComputers } from '../lib/newThread'
 
 /**
  * A new thread, like the desktop's start page: the outline logo and "What should we build?" over the
  * composer, which carries the workspace strip (project, computer, worktree) as a tab on its top edge.
- * The computer starts as the one last used; sending creates the thread on it and opens it.
+ * The computer starts as the one last used; sending creates the thread on it and opens it. Like the
+ * desktop, a project's new thread starts with the model and checkout last picked for one there.
  */
 export function NewThreadScreen({ nodeId: askedNode, projectId: askedProject }: { nodeId?: string; projectId?: string }) {
   const router = useRouter()
@@ -71,13 +72,24 @@ function NewThreadBody({ computer, askedProject, onPickComputer }: { computer: C
   const { lists, session, link, error: linkError } = useComputer(computer.nodeId)
   const projects = useMemo(() => sortedProjects(lists?.projects ?? []), [lists?.projects])
   const [projectId, setProjectId] = useState<string>()
-  const [worktree, setWorktree] = useState(false)
+  const [worktreePick, setWorktreePick] = useState<boolean>()
   const [picking, setPicking] = useState(false)
   const [error, setError] = useState<string>()
-  const composer = useNewThreadControls(session, computer.name)
 
   // Until the user picks one: the project asked for, the last used, or the computer's first.
   const chosen = projectId ?? (lists ? defaultProject(projects, askedProject, loadLastProject(computer.nodeId)) : askedProject ?? '')
+  // What this project's last new thread started with. Picking another project drops the picks made for this one.
+  const remembered = useMemo(() => loadProjectChoice(computer.nodeId, chosen), [computer.nodeId, chosen])
+  const composer = useNewThreadControls(session, computer.name, remembered.model)
+  const pickProject = (id: string) => {
+    if (id !== chosen) {
+      setWorktreePick(undefined)
+      composer.clearPick()
+    }
+    setProjectId(id)
+    setPicking(false)
+  }
+  const worktree = !!chosen && (worktreePick ?? remembered.worktree ?? false)
   const project = projects.find((entry) => entry.id === chosen)
   const projectLabel = project?.name ?? (chosen && !lists ? 'Project' : 'No project')
 
@@ -85,9 +97,10 @@ function NewThreadBody({ computer, askedProject, onPickComputer }: { computer: C
     if (!session) return false
     setError(undefined)
     try {
-      const created = await session.createThread({ projectId: chosen, ...(chosen && worktree ? { worktreeEnabled: true } : {}) })
+      const created = await session.createThread({ projectId: chosen, ...(worktree ? { worktreeEnabled: true } : {}) })
       saveLastComputer(computer.nodeId)
       saveLastProject(computer.nodeId, chosen)
+      rememberProjectChoice(computer.nodeId, chosen, { worktree, ...(composer.userPick ? { model: composer.userPick } : {}) })
       if (composer.picked) await session.setThreadModel(created.id, composer.picked)
       await session.send(created.id, text, extras)
       router.replace({ name: 'thread', nodeId: computer.nodeId, threadId: created.id })
@@ -133,10 +146,10 @@ function NewThreadBody({ computer, askedProject, onPickComputer }: { computer: C
                 type="button"
                 className="m-workspace__worktree"
                 aria-label="Start in a worktree"
-                aria-pressed={!!chosen && worktree}
+                aria-pressed={worktree}
                 title={chosen ? `Worktree: ${worktree ? 'On' : 'Off'}` : 'Select a project to start in a worktree'}
                 disabled={!chosen}
-                onClick={() => setWorktree((value) => !value)}
+                onClick={() => setWorktreePick(!worktree)}
               >
                 <GitBranch size={16} />
               </button>
@@ -159,7 +172,7 @@ function NewThreadBody({ computer, askedProject, onPickComputer }: { computer: C
             leading={<Folder />}
             title="No project"
             trailing={chosen === '' ? <Check size={18} /> : undefined}
-            onClick={() => { setProjectId(''); setWorktree(false); setPicking(false) }}
+            onClick={() => pickProject('')}
           />
           {projects.map((entry) => (
             <ListRow
@@ -168,7 +181,7 @@ function NewThreadBody({ computer, askedProject, onPickComputer }: { computer: C
               title={entry.name}
               detail={entry.path}
               trailing={entry.id === chosen ? <Check size={18} /> : undefined}
-              onClick={() => { setProjectId(entry.id); setPicking(false) }}
+              onClick={() => pickProject(entry.id)}
             />
           ))}
         </div>
@@ -178,12 +191,23 @@ function NewThreadBody({ computer, askedProject, onPickComputer }: { computer: C
 }
 
 /**
- * The new thread's model, before the thread exists: the computer's default until the user picks one,
- * then set on the thread when it is created (the desktop keeps a new chat's pick the same way).
+ * The new thread's model, before the thread exists: the user's pick, else the project's remembered model
+ * while the computer still offers it, else the computer's default. A pick or remembered model is set on
+ * the thread when it is created (the desktop keeps a new chat's pick the same way).
  */
-function useNewThreadControls(session: ComputerSession | undefined, computerName: string): { controls?: ComposerControls; picked?: ModelSelection } {
+function useNewThreadControls(session: ComputerSession | undefined, computerName: string, remembered: ModelSelection | undefined): {
+  controls?: ComposerControls
+  /** The model to set on the new thread; none means the computer's default. */
+  picked?: ModelSelection
+  /** The model the user picked on this page, to remember for the project. */
+  userPick?: ModelSelection
+  /** Drops the pick, for another project: a pick for one project does not carry over. */
+  clearPick(): void
+} {
   const [options, setOptions] = useState<ComposerOptions>()
-  const [picked, setPicked] = useState<ModelSelection>()
+  const [userPick, setPicked] = useState<ModelSelection>()
+  const rememberedOffered = remembered && options && offersModel(options.providers, remembered) ? remembered : undefined
+  const picked = userPick ?? rememberedOffered
   const [favorites, setFavorites] = useState(() => (session ? loadFavorites(session.nodeId) : new Set<string>()))
 
   useEffect(() => {
@@ -218,5 +242,5 @@ function useNewThreadControls(session: ComputerSession | undefined, computerName
       return next
     }),
   } : undefined
-  return { controls, ...(picked ? { picked } : {}) }
+  return { controls, ...(picked ? { picked } : {}), ...(userPick ? { userPick } : {}), clearPick: () => setPicked(undefined) }
 }
