@@ -298,7 +298,7 @@ export class FakeSession implements ComputerSession {
     onItems(list.map((item) => ({ ...item })), this.displayFor(threadId))
     // The demo thread is mid-turn when first opened.
     const last = list[list.length - 1]
-    if (last?.status === 'streaming' && !this.streams.has(threadId)) {
+    if (last?.status === 'streaming' && !this.streams.has(threadId) && threadId !== SHOWCASE_LIVE_THREAD_ID) {
       this.stream(threadId, last.id, `${last.text}. The thread list moves to the left at 768px and wider, and the open thread fills the rest.`)
     }
     return () => { set?.delete(onItems) }

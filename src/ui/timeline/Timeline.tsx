@@ -20,7 +20,6 @@ import {
   isActivity,
   isLiveThought,
   isRunningCall,
-  isSubagentItem,
   recoveredFailures,
   segmentReplies,
   settleFinishedTurn,
@@ -39,7 +38,7 @@ import { ImageLightbox } from './ImageLightbox'
 import { AppletCard, AppletPending } from './AppletCard'
 import { ReadAloudButton as ComputerReadAloudButton, useComputerSpeech } from '../speech/readAloud'
 import { QuestionPrompt } from './QuestionPrompt'
-import { DiffStat, PlanCard, Shimmer, Spinner, ToolGroup, ToolIcon, ToolItem } from './ToolCards'
+import { DiffStat, PlanCard, Shimmer, Spinner, SubagentGroup, ToolGroup, ToolIcon, ToolItem } from './ToolCards'
 
 // ---- Message actions ----
 
@@ -434,8 +433,9 @@ function nestUnderTasks(replies: ChatItem[]): { flow: ChatItem[]; nested: Map<st
 function foldRowOf(segment: Segment, recovered: ReadonlySet<string>): FoldRow {
   const unrecovered = (item: ChatItem) => toolFailed(item) && !recovered.has(item.id)
   if (segment.kind === 'group') return { kind: 'tools', keep: segment.items.some(unrecovered) }
+  // Subagents still working stay in view.
+  if (segment.kind === 'cards') return { kind: 'cards', running: segment.items.some((item) => item.status === 'streaming') }
   const item = segment.item
-  if (isSubagentItem(item)) return { kind: 'cards', running: item.status === 'streaming' }
   if (isActivity(item)) return { kind: 'message', toolsOnly: true, keep: unrecovered(item) }
   // Errors, questions, plans, quick actions, notices, Mousse's own markers and applets stay in view.
   if (item.role !== 'assistant' || item.kind !== 'message' || item.error || item.parts) return { kind: 'message', keep: true }
@@ -513,6 +513,12 @@ const TurnView = memo(function TurnView({
         <div className="m-tl-answer">
           {segments.map((segment, index) => {
             if (folded[index] && !workOpen) return null
+            if (segment.kind === 'cards')
+              return (
+                <div key={`${segment.items[0].id}-subagents`} data-testid="chat-item" data-role="tool">
+                  <SubagentGroup items={segment.items} live={live} nested={nested} />
+                </div>
+              )
             return segment.kind === 'item' ? (
               <ReplyItem key={segment.item.id} item={segment.item} live={live} nested={nested.get(segment.item.id)} />
             ) : (

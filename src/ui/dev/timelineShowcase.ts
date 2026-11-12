@@ -127,7 +127,17 @@ export function showcaseItems(base: number): ChatItem[] {
       createdAt: t(29.5),
       status: 'done',
       toolName: 'Task',
-      tool: { name: 'Task', title: 'Task', summary: '', details: [], input: { description: 'Survey reconnect UX in other apps', subagent_type: 'researcher', prompt: 'Look at how chat apps show reconnecting.' }, output: 'Most apps show a small **Reconnecting…** pill and retry silently.' },
+      tool: { name: 'Task', title: 'Task', summary: '', details: [], input: { description: 'Survey reconnect UX in other apps', subagent_type: 'researcher', prompt: 'Look at how chat apps show reconnecting.' }, output: [{ type: 'text', text: '## Findings\n\nMost apps show a small **Reconnecting…** pill and retry silently.\n\n- Slack: a banner after 10 s\n- Discord: a pill at the top' }, { type: 'text', text: 'agentId: a1b2 (for resuming)' }] },
+    },
+    {
+      id: 's-tk2',
+      role: 'tool',
+      kind: 'tool',
+      text: '',
+      createdAt: t(29.45),
+      status: 'error',
+      toolName: 'Task',
+      tool: { name: 'Task', title: 'Task', summary: '', details: [], input: { description: 'Measure reconnect time on Android', subagent_type: 'general-purpose' }, output: 'No Android device is attached to this computer.' },
     },
     { id: 's-tk:1', role: 'tool', kind: 'tool', text: '', createdAt: t(29.4), status: 'done', toolName: 'WebSearch', tool: { name: 'WebSearch', title: '', summary: '', details: [], input: { query: 'reconnecting indicator chat app' }, output: { results: [{ title: 'Slack connection status' }, { title: 'Discord reconnect banner' }] } } },
     { id: 's-tk:2', role: 'tool', kind: 'tool', text: '', createdAt: t(29.3), status: 'done', toolName: 'Read', tool: { name: 'Read', title: '', summary: '', details: [], input: { file_path: 'notes/ux.md' } } },
@@ -232,6 +242,8 @@ export function showcaseLiveItems(base: number): ChatItem[] {
     call('l-gl', 36, 'Glob', { pattern: 'tests/net/*.test.ts' }, { tool: { name: 'Glob', title: 'Glob', summary: '', details: [], input: { pattern: 'tests/net/*.test.ts' }, output: 'tests/net/link.test.ts\ntests/net/resume.test.ts' } }),
     call('l-rd', 34, 'Read', { file_path: 'tests/net/link.test.ts' }),
     { id: 'l-n1', role: 'assistant', kind: 'message', text: 'Both test files are small. Running them now.', createdAt: t(30), status: 'done' },
+    call('l-tk', 25, 'Task', { description: 'Check the relay logs for 1006 closes', subagent_type: 'Explore' }, { status: 'streaming' }),
+    call('l-tk2', 24, 'Task', {}, { status: 'streaming' }),
     call('l-bs', 20, 'Bash', { command: 'npm test -- tests/net' }, { status: 'streaming', tool: { name: 'Bash', title: 'Bash', summary: '', details: [], input: { command: 'npm test -- tests/net' }, output: { stdout: ' ✓ link (12 tests)\n ✓ resume (3 tests)\n' } } }),
   ]
 }

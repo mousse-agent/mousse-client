@@ -244,4 +244,26 @@ describe('timeline', () => {
     expect(texts[texts.length - 1]).toContain('All fixed.')
     expect(screen.getByRole('button', { name: /Read 2 files/ })).toBeInTheDocument()
   })
+
+  it('shows a subagent as one compact row that opens on its whole report', () => {
+    const task: ChatItem = {
+      id: 'k1',
+      role: 'tool',
+      kind: 'tool',
+      text: '',
+      createdAt: at + 1000,
+      status: 'done',
+      tool: { name: 'Task', title: 'Task', summary: '', details: [], input: { description: 'Survey reconnect UX', subagent_type: 'researcher' }, output: '**Most** apps show a pill.\n\nSlack waits 10 s.' },
+    }
+    const failed: ChatItem = { ...task, id: 'k2', status: 'error', tool: { ...task.tool!, input: { description: 'Measure on Android' }, output: 'No device.' } }
+    render(<Timeline items={[items[0], task, failed]} display={{ questions: [], phase: 'streaming' }} active />)
+    const group = screen.getByRole('group', { name: '2 subagents · 1 failed · 1 done' })
+    // Finished, the group is folded until opened.
+    fireEvent.click(within(group).getByRole('button', { expanded: false }))
+    const row = screen.getByRole('button', { name: 'Survey reconnect UX, Done' })
+    expect(row).toHaveTextContent('Most apps show a pill. Slack waits 10 s.')
+    fireEvent.click(row)
+    expect(screen.getAllByTestId('tool-task')[0].querySelectorAll('.m-tl-sub__full p')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: 'Measure on Android, Failed' })).toHaveTextContent(/Failed\s·\sNo device\./)
+  })
 })

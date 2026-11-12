@@ -556,7 +556,7 @@ export const isRunningCall = (item: ChatItem): boolean => item.kind === 'tool' &
 /** A thought still being written. */
 export const isLiveThought = (item: ChatItem | undefined): boolean => item?.kind === 'thinking' && item.status === 'streaming'
 
-export type Segment = { kind: 'item'; item: ChatItem } | { kind: 'group'; items: ChatItem[] }
+export type Segment = { kind: 'item'; item: ChatItem } | { kind: 'group'; items: ChatItem[] } | { kind: 'cards'; items: ChatItem[] }
 
 /**
  * Runs of activity rows with two or more calls fold into one group; narration between them splits them. While the
@@ -566,14 +566,23 @@ export type Segment = { kind: 'item'; item: ChatItem } | { kind: 'group'; items:
 export function segmentReplies(replies: ChatItem[], live = false): Segment[] {
   const segments: Segment[] = []
   let run: ChatItem[] = []
+  let cards: ChatItem[] = []
   const flush = () => {
     if (run.length >= 2 || (live && run.some(isRunningCall))) segments.push({ kind: 'group', items: run })
     else for (const item of run) segments.push({ kind: 'item', item })
     run = []
+    // Consecutive subagents form one list, outside any group.
+    if (cards.length) segments.push({ kind: 'cards', items: cards })
+    cards = []
   }
   for (const item of replies) {
-    if (isActivity(item)) run.push(item)
-    else {
+    if (isSubagentItem(item)) {
+      if (run.length) flush()
+      cards.push(item)
+    } else if (isActivity(item)) {
+      if (cards.length) flush()
+      run.push(item)
+    } else {
       flush()
       segments.push({ kind: 'item', item })
     }
@@ -812,9 +821,7 @@ const PLACEHOLDER_INPUT_KEYS = new Set(['label', 'cwd'])
 function toolProgress(item: ChatItem): TurnProgress {
   const tool = item.tool!
   const detail = inputDetail(tool.input)
-  if (isSubagentItem(item)) {
-    return detail ? { kind: 'running-tool', label: 'Running subagent…', detail } : { kind: 'preparing-tool', label: 'Starting subagent…' }
-  }
+  if (isSubagentItem(item)) return { kind: 'running-tool', label: 'Running subagent…', detail }
   const name = tool.name === 'Mcp' ? mcpDisplayName(tool) : tool.name === 'Generic' ? tool.rawName || 'tool' : tool.name
   const noInput = !tool.input || Object.entries(tool.input).every(([key, value]) => PLACEHOLDER_INPUT_KEYS.has(key) || value === undefined || value === null || value === '')
   if (noInput) return { kind: 'preparing-tool', label: `Preparing ${name}…`, tool: tool.name }
@@ -829,6 +836,10 @@ export function describeTurnProgress(replies: ChatItem[], phase: string | undefi
   if (waiting || phase === 'awaiting_input') return null
   const last = replies[replies.length - 1]
   if (last?.kind === 'compaction' && last.status === 'streaming') return null
+  // Subagents still starting have no row yet: the line stands for them until each has a name.
+  const spawning = replies.filter((item) => isSubagentItem(item) && !subagentStarted(item)).length
+  if (spawning) return { kind: 'preparing-tool', label: spawning === 1 ? 'Starting subagent…' : `Starting ${spawning} subagents…` }
+  if (last && isRunningCall(last)) return toolProgress(last)
   if (isLiveThought(last)) return null
   for (let index = replies.length - 1; index >= 0; index--) if (isRunningCall(replies[index])) return toolProgress(replies[index])
   switch (phase) {
@@ -901,6 +912,76 @@ export function formatElapsed(ms: number): string {
   const { hours, minutes, seconds } = durationParts(ms)
   if (hours) return `${hours}h ${minutes}m`
   return minutes ? `${minutes}m ${seconds}s` : `${seconds}s`
+}
+
+export type SubagentState = 'starting' | 'working' | 'done' | 'failed' | 'interrupted'
+
+/**
+ * A runtime's own subagent call (Claude Code's Task / Agent) in its state. A call still open after its turn ended was
+ * cut off, unless it runs in the background: then it still works, and never flashes done.
+ */
+export function subagentState(item: ChatItem, turnLive: boolean): SubagentState {
+  const state = toolState(item, turnLive)
+  if (state === 'error') return 'failed'
+  if (state === 'done') return 'done'
+  const input = item.tool?.input ?? {}
+  if (state === 'interrupted') return input.run_in_background === true ? 'working' : 'interrupted'
+  return str(input.description).trim() ? 'working' : 'starting'
+}
+
+/** Whether a subagent call has a name to show: until then the turn's live line says "Starting subagent…". */
+export const subagentStarted = (item: ChatItem): boolean => !!str(item.tool?.input?.description).trim() || item.status !== 'streaming'
+
+/** How long a finished subagent ran, when its result says. */
+export function subagentDuration(tool: ChatToolCall): number | undefined {
+  const output = isObject(tool.output) ? tool.output : undefined
+  const ms = output?.totalDurationMs ?? output?.durationMs ?? output?.duration_ms
+  return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? ms : undefined
+}
+
+/** A subagent's report as Markdown with its line breaks: text blocks join by lines, not run together. */
+export function subagentReport(tool: ChatToolCall): string {
+  // Claude Code ends a report with the id to resume the agent by; it is not part of what the agent said.
+  return rawSubagentReport(tool).replace(/\n*^agentId: \S+ \(for resuming[^)]*\)\s*$/m, '').trim()
+}
+
+function rawSubagentReport(tool: ChatToolCall): string {
+  const output = tool.output
+  if (typeof output === 'string') return output.trim()
+  const blocks = Array.isArray(output) ? output : isObject(output) && Array.isArray(output.content) ? output.content : undefined
+  if (blocks) {
+    const text = blocks
+      .filter((block) => isObject(block) && block.type === 'text' && typeof block.text === 'string')
+      .map((block) => (block as { text: string }).text.trim())
+      .filter(Boolean)
+      .join('\n\n')
+    if (text) return text
+  }
+  if (isObject(output)) return (str(output.summary) || str(output.result) || str(output.text)).trim()
+  return ''
+}
+
+/** A report as one line of plain text: no fences, rules, table dividers, list marks, headings or inline marks. */
+export function plainResultText(markdown: string): string {
+  const words: string[] = []
+  for (const raw of markdown.replace(/\r\n?/g, '\n').split('\n')) {
+    let line = raw.trim()
+    if (/^(`{3,}|~{3,})/.test(line) || /^([-*_]\s*){3,}$/.test(line) || /^\|?(\s*:?-+:?\s*\|)+\s*(:?-+:?\s*)?$/.test(line)) continue
+    line = line
+      .replace(/^(>\s?)+/, '')
+      .replace(/^#{1,6}\s+/, '')
+      .replace(/^([-*+]|\d+[.)])\s+(\[[ xX]\]\s+)?/, '')
+    if (line.startsWith('|'))
+      line = line
+        .replace(/^\||\|$/g, '')
+        .split('|')
+        .map((cell) => cell.trim())
+        .filter(Boolean)
+        .join(' · ')
+    line = stripInlineMarkdown(line).replace(/(\*\*|__)/g, '').trim()
+    if (line) words.push(line)
+  }
+  return words.join(' ').replace(/\s+/g, ' ').trim()
 }
 
 /** "3:04 PM" today, otherwise "Oct 3". */

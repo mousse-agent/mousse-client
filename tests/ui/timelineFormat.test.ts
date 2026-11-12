@@ -14,10 +14,14 @@ import {
   liveThoughtLine,
   mcpArgs,
   mcpTitle,
+  plainResultText,
   searchLabels,
   searchResults,
   segmentReplies,
   settleFinishedTurn,
+  subagentReport,
+  subagentStarted,
+  subagentState,
   thoughtHeading,
   toolState,
   turnEdits,
@@ -75,7 +79,7 @@ describe('timeline format', () => {
       item('q1', { kind: 'tool', role: 'tool', tool: tool('Question') }),
     ]
     const segments = segmentReplies(replies)
-    expect(segments.map((segment) => (segment.kind === 'group' ? segment.items.map((entry) => entry.id) : segment.item.id))).toEqual([['t1', 'r1'], 'm1', 'e1', 'q1'])
+    expect(segments.map((segment) => (segment.kind === 'item' ? segment.item.id : segment.items.map((entry) => entry.id)))).toEqual([['t1', 'r1'], 'm1', 'e1', 'q1'])
     expect(groupLabel(replies.slice(0, 2))).toBe('Looking around')
     // While the turn runs, a running call folds into a group even alone.
     const running = item('e2', { kind: 'tool', role: 'tool', status: 'streaming', tool: tool('Bash', { input: { command: 'make' } }) })
@@ -126,9 +130,21 @@ describe('timeline format', () => {
     expect(describeTurnProgress([empty], 'tool_running', false)?.label).toBe('Preparing Read…')
     const spawning = item('s', { kind: 'tool', role: 'tool', status: 'streaming', tool: tool('Task', { input: {} }) })
     expect(describeTurnProgress([spawning], 'tool_running', false)?.label).toBe('Starting subagent…')
+    expect(describeTurnProgress([spawning, { ...spawning, id: 's2' }, bash], 'tool_running', false)?.label).toBe('Starting 2 subagents…')
     expect(describeTurnProgress([item('t', { kind: 'thinking', status: 'streaming', text: 'x' })], 'thinking', false)).toBeNull()
     expect(describeTurnProgress([], 'queued', false)?.label).toBe('Thinking…')
     expect(describeTurnProgress([bash], 'tool_running', true)).toBeNull()
     expect(liveThoughtLine('First.\n\n**Now** checking the `relay`')).toBe('Now checking the relay')
+  })
+
+  it('reads a subagent report with its line breaks and as one plain line', () => {
+    const task = tool('Task', { input: { description: 'Survey' }, output: [{ type: 'text', text: '## Found\n\n- one\n- two' }, { type: 'text', text: 'agentId: ab12 (for resuming to continue)' }] })
+    expect(subagentReport(task)).toBe('## Found\n\n- one\n- two')
+    expect(plainResultText(subagentReport(task))).toBe('Found one two')
+    const running = item('t', { kind: 'tool', role: 'tool', status: 'streaming', tool: task })
+    expect(subagentState(running, true)).toBe('working')
+    expect(subagentState(running, false)).toBe('interrupted')
+    expect(subagentState({ ...running, tool: tool('Task', { input: { description: 'x', run_in_background: true } }) }, false)).toBe('working')
+    expect(subagentStarted({ ...running, tool: tool('Task') })).toBe(false)
   })
 })

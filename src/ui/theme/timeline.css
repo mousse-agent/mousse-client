@@ -309,12 +309,38 @@ button.m-tl-card__header:active { background: var(--ui-pressed); }
 .m-tl-todo--completed .m-tl-todo__mark { border-color: transparent; background: var(--success); }
 .m-tl-todo--completed .m-tl-todo__text { text-decoration: line-through; color: var(--an-tool-color-muted); }
 
-.m-tl-task { padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
-.m-tl-task__kind { color: var(--an-tool-color-muted); font-size: 12px; }
-.m-tl-task__prompt summary { color: var(--an-tool-color-muted); font-size: 13px; cursor: pointer; }
-.m-tl-task__prompt .m-md { margin-top: 6px; font-size: 14px; color: var(--text-secondary); }
-.m-tl-task__nested { display: flex; flex-direction: column; gap: 2px; }
-.m-tl-task__nested--fade { -webkit-mask-image: linear-gradient(transparent, #000 24px); mask-image: linear-gradient(transparent, #000 24px); }
+/* subagent-card.css: one compact row per subagent; no surface at rest, a tint while pressed. */
+.m-tl-subs { display: flex; flex-direction: column; width: 100%; }
+.m-tl-sub { min-width: 0; }
+.m-tl-sub__row { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; min-height: 44px; padding: 4px 6px; border: 0; border-radius: 8px; background: transparent; color: var(--text-secondary); font: inherit; text-align: left; -webkit-tap-highlight-color: transparent; }
+.m-tl-sub__row:not(:disabled):active { background: var(--ui-pressed); }
+.m-tl-sub__avatar { position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: color-mix(in srgb, var(--text-primary) 8%, var(--surface-strong, var(--surface-soft))); color: var(--text-primary); }
+.m-tl-sub__dot { position: absolute; right: -1px; bottom: -1px; width: 8px; height: 8px; border-radius: 50%; background: var(--ui-faint); box-shadow: 0 0 0 2px var(--surface-base); }
+.m-tl-sub__dot[data-tone='running'] { background: var(--accent); }
+.m-tl-sub__dot[data-tone='done'] { background: var(--success); }
+.m-tl-sub__dot[data-tone='failed'] { background: var(--danger); }
+.m-tl-sub__body { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; }
+.m-tl-sub__head, .m-tl-sub__line { display: flex; align-items: baseline; gap: 6px; min-width: 0; white-space: nowrap; }
+.m-tl-sub__title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary); font-size: 14.5px; font-weight: 500; line-height: 19px; }
+.m-tl-sub__kind { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ui-faint); font-size: 12.5px; line-height: 19px; }
+/* The second line: plain text, one line, cut with an ellipsis; the opened report holds the rest. */
+.m-tl-sub__line { gap: 0; color: var(--ui-faint); font-size: 13px; line-height: 17px; }
+.m-tl-sub__result { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.m-tl-sub__note { flex: none; }
+.m-tl-sub__note[data-tone='failed'] { color: color-mix(in srgb, var(--danger) 75%, var(--ui-faint)); }
+.m-tl-sub__note[data-tone='running'] { color: color-mix(in srgb, var(--accent) 80%, var(--ui-faint)); }
+.m-tl-sub__elapsed { flex: none; margin-left: auto; color: var(--ui-faint); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.m-tl-sub__chevron { flex: none; color: var(--ui-faint); transition: transform 150ms ease-out; }
+.m-tl-sub__chevron--open { transform: rotate(180deg); }
+.m-tl-sub__calls { display: flex; flex-direction: column; gap: 2px; padding: 4px 0 6px 44px; min-width: 0; }
+/* The whole report, as Markdown, in the chat's own text sizes; a failed one keeps the failed tint. */
+.m-tl-sub__full { margin-bottom: 6px; color: var(--text-secondary); font-size: 15px; line-height: 1.55; }
+.m-tl-sub__full[data-tone='failed'], .m-tl-sub__full[data-tone='failed'] .m-md :is(p, li, h1, h2, h3, h4) { color: color-mix(in srgb, var(--danger) 80%, var(--text-secondary)); }
+.m-tl-subs__stack { flex: none; display: flex; align-items: center; }
+.m-tl-subs__stack > * + * { margin-left: -8px; }
+.m-tl-subs__stack > .m-tl-sub__avatar, .m-tl-subs__more { box-shadow: 0 0 0 2px var(--surface-base); }
+.m-tl-subs__more { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: color-mix(in srgb, var(--text-primary) 8%, var(--surface-base)); color: var(--text-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
+.m-tl-subs__rows { display: flex; flex-direction: column; padding-left: 12px; }
 
 .m-tl-qa { padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
 .m-tl-qa__field span { color: var(--an-tool-color-muted); margin-right: 6px; }

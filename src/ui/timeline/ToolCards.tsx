@@ -17,6 +17,12 @@ import {
   formatBytes,
   formatCommandDuration,
   formatElapsed,
+  plainResultText,
+  subagentDuration,
+  subagentReport,
+  subagentStarted,
+  subagentState,
+  type SubagentState,
   genericTitle,
   hunks,
   liveThoughtLine,
@@ -37,6 +43,7 @@ import { languageForPath, useHighlight } from './useHighlight'
 import {
   ThinkingIcon,
   Check,
+  ChevronDown,
   ChevronRight,
   ClipboardList,
   Copy,
@@ -59,6 +66,7 @@ import {
 import { CodeBlock, Markdown } from './Markdown'
 import { RecoveredFailuresContext, useTimelineActions } from './context'
 import { copyText } from './actions'
+import { ProviderIcon } from '../components/providerIcons'
 
 export function Shimmer({ active, children, className = '' }: { active: boolean; children: ReactNode; className?: string }) {
   return <span className={`m-tl-shimmer${active ? ' m-tl-shimmer--active' : ''} ${className}`.trim()}>{children}</span>
@@ -556,96 +564,138 @@ function StatusMark({ state }: { state: ToolState }) {
   return <Check size={14} className="m-tl-mark m-tl-mark--ok" />
 }
 
-// ---- Subagents (Task / Agent) ----
+// ---- Subagents (SubagentCard.tsx) ----
 
 function useNow(active: boolean): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (!active) return
+    setNow(Date.now())
     const timer = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(timer)
   }, [active])
   return now
 }
 
-function nestedSummary(nested: ChatItem[]): string {
-  let files = 0
-  let searches = 0
-  let commands = 0
-  let other = 0
-  for (const child of nested) {
-    const name = child.tool?.name
-    if (name === 'Read' || name === 'Edit' || name === 'Write') files++
-    else if (name === 'Grep' || name === 'Glob' || name === 'WebSearch') searches++
-    else if (name === 'Bash') commands++
-    else other++
-  }
-  const parts: string[] = []
-  if (files) parts.push(`${files} ${files === 1 ? 'file' : 'files'}`)
-  if (searches) parts.push(`${searches} ${searches === 1 ? 'search' : 'searches'}`)
-  if (commands) parts.push(`${commands} ${commands === 1 ? 'command' : 'commands'}`)
-  if (other) parts.push(`${other} ${other === 1 ? 'tool' : 'tools'}`)
-  return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0] ?? ''
+const SUBAGENT_TONES: Record<SubagentState, string> = { starting: 'running', working: 'running', done: 'done', failed: 'failed', interrupted: 'failed' }
+const SUBAGENT_LABELS: Record<SubagentState, string> = { starting: 'Starting', working: 'Working', done: 'Done', failed: 'Failed', interrupted: 'Interrupted' }
+
+/** The provider's icon in a round chip, with a status dot on its corner. */
+function SubagentAvatar({ state }: { state?: SubagentState }) {
+  return (
+    <span className="m-tl-sub__avatar" aria-hidden>
+      <ProviderIcon providerId="claude" size={14} />
+      {state && <span className="m-tl-sub__dot" data-tone={SUBAGENT_TONES[state]} />}
+    </span>
+  )
 }
 
-function TaskCard({ item, tool, state, nested, live }: { item: ChatItem; tool: ChatToolCall; state: ToolState; nested: ChatItem[]; live: boolean }) {
-  const base = tool.name === 'Agent' ? 'Agent' : 'Task'
-  const running = state === 'running'
-  const now = useNow(running)
+/**
+ * A runtime's own subagent (Claude Code's Task / Agent) as one compact row: the provider's icon with a status dot,
+ * its name and type, one line of plain text (its state worth reading, then its result) and how long it ran. It has
+ * no thread of its own, so a tap opens in place the whole report, as Markdown, and the calls it made.
+ */
+function SubagentRow({ item, tool, live, nested }: { item: ChatItem; tool: ChatToolCall; live: boolean; nested: ChatItem[] }) {
+  const [open, setOpen] = useState(false)
+  const state = subagentState(item, live)
+  const running = state === 'working' || state === 'starting'
+  const now = useNow(running && item.createdAt > 0)
   const input = tool.input ?? {}
-  const description = typeof input.description === 'string' ? input.description : ''
+  const title = (typeof input.description === 'string' && input.description.trim()) || 'Subagent'
   const kind = typeof input.subagent_type === 'string' ? input.subagent_type : ''
-  const prompt = typeof input.prompt === 'string' ? input.prompt : ''
-  const label = running ? `Running ${base.toLowerCase()}` : state === 'interrupted' ? `${base} interrupted` : state === 'error' ? `${base} failed` : `${base} completed`
-  const detail = nested.length ? nestedSummary(nested) : truncate(description || kind, 60)
-  const result = outputText(tool.output, 6000)
-  const [visible, setVisible] = useState(nested.length)
-  // While it runs, nested rows appear one by one, like the desktop's 450ms reveal.
-  useEffect(() => {
-    if (!running) {
-      setVisible(nested.length)
-      return
-    }
-    if (visible >= nested.length) return
-    const timer = setTimeout(() => setVisible((value) => Math.min(value + 1, nested.length)), 450)
-    return () => clearTimeout(timer)
-  }, [running, nested.length, visible])
-  const body =
-    nested.length || prompt || result.text ? (
-      <div className="m-tl-task">
-        {kind && <div className="m-tl-task__kind">{kind}</div>}
-        {prompt && (
-          <details className="m-tl-task__prompt">
-            <summary>Instructions</summary>
-            <Markdown text={prompt} />
-          </details>
-        )}
-        {nested.length > 0 && (
-          <div className={`m-tl-task__nested${nested.length > 4 ? ' m-tl-task__nested--fade' : ''}`}>
-            {nested.slice(0, visible).map((child) => (
-              <ToolItem key={child.id} item={child} live={live} />
-            ))}
-          </div>
-        )}
-        {result.text && (result.json ? <CodeBlock code={result.text} language="json" /> : <Markdown text={result.text} />)}
-      </div>
-    ) : undefined
+  const report = subagentReport(tool)
+  const plain = plainResultText(report)
+  const note = state === 'failed' || state === 'interrupted' ? SUBAGENT_LABELS[state] : ''
+  const text = plain || (note ? '' : running ? `${SUBAGENT_LABELS[state]}…` : SUBAGENT_LABELS[state])
+  const duration = running ? (item.createdAt > 0 ? now - item.createdAt : undefined) : subagentDuration(tool)
+  const expandable = nested.length > 0 || !!report
   return (
-    <ToolCard
-      testId="tool-task"
-      error={state === 'error'}
-      animating={running}
-      header={
-        <>
-          <Sparkles size={16} className="m-tl-card__icon" />
-          <Shimmer active={running} className="m-tl-card__label">{label}</Shimmer>
-          {detail && <span className="m-tl-card__detail">{detail}</span>}
-          {running && item.createdAt > 0 && <span className="m-tl-card__time">{formatElapsed(now - item.createdAt)}</span>}
-        </>
-      }
-    >
-      {body}
-    </ToolCard>
+    <div className="m-tl-sub" data-testid="tool-task" data-state={state}>
+      <button
+        type="button"
+        className="m-tl-sub__row"
+        aria-expanded={expandable ? open : undefined}
+        aria-label={`${title}, ${SUBAGENT_LABELS[state]}`}
+        disabled={!expandable}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <SubagentAvatar state={state} />
+        <span className="m-tl-sub__body">
+          <span className="m-tl-sub__head">
+            <span className="m-tl-sub__title">{title}</span>
+            {kind && <span className="m-tl-sub__kind">{kind}</span>}
+          </span>
+          <span className="m-tl-sub__line">
+            {note && <span className="m-tl-sub__note" data-tone="failed">{note}</span>}
+            {note && text && <span aria-hidden>{'\u00a0·\u00a0'}</span>}
+            {text && <span className="m-tl-sub__result">{text}</span>}
+          </span>
+        </span>
+        {duration !== undefined && <span className="m-tl-sub__elapsed">{formatElapsed(duration)}</span>}
+        {expandable && <ChevronDown size={14} className={`m-tl-sub__chevron${open ? ' m-tl-sub__chevron--open' : ''}`} />}
+      </button>
+      {expandable && open && (
+        <div className="m-tl-sub__calls">
+          {report && (
+            <div className="m-tl-sub__full" data-tone={state === 'failed' ? 'failed' : undefined}>
+              <Markdown text={report} />
+            </div>
+          )}
+          {nested.map((child) => (
+            <ToolItem key={child.id} item={child} live={live} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Consecutive subagents. Two or more fold into one group headed by their icons, how many there are, a coloured count
+ * of what they are doing and how long they have run, open while any still works. A single one stands alone.
+ */
+export function SubagentGroup({ items, live, nested }: { items: ChatItem[]; live: boolean; nested: Map<string, ChatItem[]> }) {
+  const shown = items.filter(subagentStarted)
+  const states = shown.map((item) => subagentState(item, live))
+  const running = states.some((state) => state === 'working' || state === 'starting')
+  const now = useNow(running)
+  const [chosen, setChosen] = useState<boolean | null>(null)
+  const rows = shown.map((item) => <ToolItem key={item.id} item={item} live={live} nested={nested.get(item.id)} />)
+  if (shown.length < 2) return <div className="m-tl-subs">{rows}</div>
+  const open = chosen ?? running
+  const parts = (['running', 'failed', 'done'] as const)
+    .map((tone) => {
+      const count = states.filter((state) => SUBAGENT_TONES[state] === tone).length
+      return count ? { tone, text: `${count} ${tone === 'running' ? 'working' : tone}` } : undefined
+    })
+    .filter((part): part is { tone: 'running' | 'failed' | 'done'; text: string } => !!part)
+  const starts = shown.map((item) => item.createdAt).filter((at) => at > 0)
+  const elapsed = running && starts.length ? formatElapsed(now - Math.min(...starts)) : undefined
+  return (
+    <div className="m-tl-subs m-tl-subs--group" role="group" aria-label={[`${shown.length} subagents`, ...parts.map((part) => part.text)].join(' · ')}>
+      <button type="button" className="m-tl-sub__row" aria-expanded={open} onClick={() => setChosen(!open)}>
+        <span className="m-tl-subs__stack" aria-hidden>
+          {shown.slice(0, 3).map((item) => (
+            <SubagentAvatar key={item.id} />
+          ))}
+          {shown.length > 3 && <span className="m-tl-subs__more">+{shown.length - 3}</span>}
+        </span>
+        <span className="m-tl-sub__body">
+          <span className="m-tl-sub__title">{shown.length} subagents</span>
+          <span className="m-tl-sub__line">
+            {parts.map((part, index) => (
+              <span key={part.tone}>
+                {index > 0 && '\u00a0·\u00a0'}
+                <span className="m-tl-sub__note" data-tone={part.tone}>{part.text}</span>
+              </span>
+            ))}
+          </span>
+        </span>
+        {elapsed && <span className="m-tl-sub__elapsed">{elapsed}</span>}
+        <ChevronDown size={14} className={`m-tl-sub__chevron${open ? ' m-tl-sub__chevron--open' : ''}`} />
+      </button>
+      {open && <div className="m-tl-subs__rows">{rows}</div>}
+    </div>
   )
 }
 
@@ -759,7 +809,8 @@ export const ToolItem = memo(function ToolItem({ item, live, nested = [] }: Tool
       return <TodoRow tool={tool} state={state} recovered={recovered} />
     case 'Task':
     case 'Agent':
-      return <TaskCard item={item} tool={tool} state={state} nested={nested} live={live} />
+      // Still starting: the turn's live line says so until it has a name.
+      return subagentStarted(item) ? <SubagentRow item={item} tool={tool} live={live} nested={nested} /> : null
     case 'Mcp':
       return <McpRow tool={tool} state={state} recovered={recovered} />
     case 'QuickAction':
