@@ -183,6 +183,32 @@ describe('composer controls', () => {
     await waitFor(() => expect(session().sent.map((entry) => [entry.kind, entry.text])).toContainEqual(['steer', 'Later']))
   })
 
+  it('folds the empty composer to one line when the reader scrolls up, and unfolds it at the end', async () => {
+    await open()
+    const scroller = document.querySelector<HTMLElement>('.m-thread__scroll')!
+    const form = screen.getByLabelText('Message').closest('form')!
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 2000 })
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 500 })
+    const scrollTo = (top: number) => { scroller.scrollTop = top; fireEvent.scroll(scroller) }
+
+    // Within the fold distance of the end it stays open.
+    scrollTo(1400)
+    expect(form).not.toHaveAttribute('data-folded')
+    scrollTo(600)
+    expect(form).toHaveAttribute('data-folded')
+    // Folded, it keeps its input line and the send button; the footer is out of reach.
+    expect(screen.getByRole('button', { name: 'Voice input' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Model: / })).not.toBeInTheDocument()
+
+    // Focus (or text) opens it at once.
+    fireEvent.focus(screen.getByLabelText('Message'))
+    expect(form).not.toHaveAttribute('data-folded')
+    fireEvent.blur(screen.getByLabelText('Message'))
+    expect(form).toHaveAttribute('data-folded')
+    scrollTo(1480)
+    expect(form).not.toHaveAttribute('data-folded')
+  })
+
   it('stops a turn with /stop', async () => {
     await open('t-voices', { tickMs: 200 })
     type('Long job')

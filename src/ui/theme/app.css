@@ -689,6 +689,23 @@ html[data-keyboard='open'] .m-thread__composer { padding-bottom: 8px; }
 .m-composer__mode { padding: 2px 3px; background-clip: content-box; }
 .m-composer__mode[data-steer] { color: var(--text-primary); background-color: color-mix(in srgb, var(--text-primary) 9%, transparent); }
 
+/* Folded (compact-composer.css): scrolled up, the empty, unfocused composer keeps its one input line and the
+   send button; the footer folds away. Only a scroll-driven change eases (data-fold-motion), over 200ms. */
+.m-composer__fold { display: grid; grid-template-rows: 1fr; }
+.m-composer__fold > .m-composer__footer { min-height: 0; overflow: hidden; }
+.m-composer[data-folded] .m-composer__fold { grid-template-rows: 0fr; opacity: 0; }
+.m-composer[data-folded] { gap: 0; padding-bottom: 6px; padding-top: 6px; }
+.m-composer[data-fold-motion] .m-composer__fold { transition: grid-template-rows 200ms ease-out, opacity 200ms ease-out; }
+.m-composer[data-fold-motion] { transition: border-color 160ms ease, padding 200ms ease-out, gap 200ms ease-out; }
+.m-composer__folded-action { display: inline-flex; flex: none; }
+.m-composer[data-fold-motion] .m-composer__folded-action { animation: m-fade-in 200ms ease-out; }
+@keyframes m-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .m-composer[data-fold-motion] .m-composer__fold,
+  .m-composer[data-fold-motion] { transition: none; }
+  .m-composer[data-fold-motion] .m-composer__folded-action { animation: none; }
+}
+
 /* Footer: the model button on the left, context, attach and send on the right (ComposerFooter). */
 .m-composer__footer { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-width: 0; container-type: inline-size; }
 .m-composer__pills { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 1; overflow: hidden; }

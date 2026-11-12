@@ -30,7 +30,7 @@ function composerOptions(session: ComputerSession, threadId: string): Promise<Co
  * A computer without these controls (an older Mousse) still gets a working text composer. The queued
  * messages themselves show at the end of the conversation (QueuedMessages).
  */
-export function ThreadComposer({ session, threadId, thread, queue, addition, computerName }: { session: ComputerSession; threadId: string; thread: ThreadState; queue: ThreadQueue; addition?: { text: string; key: number }; computerName?: string }) {
+export function ThreadComposer({ session, threadId, thread, queue, addition, computerName, folded }: { session: ComputerSession; threadId: string; thread: ThreadState; queue: ThreadQueue; addition?: { text: string; key: number }; computerName?: string; folded?: boolean }) {
   const router = useRouter()
   const [options, setOptions] = useState<ComposerOptions>()
   const [model, setModel] = useState<ModelSelection>()
@@ -161,6 +161,7 @@ export function ThreadComposer({ session, threadId, thread, queue, addition, com
         onStop={() => void thread.stop()}
         onSteer={(text) => attempt(() => session.steer(threadId, text))}
         sendMode={options ? { mode: sendMode, onSwitch: () => { const next = sendMode === 'steer' ? 'queue' : 'steer'; setSendMode(next); saveSendMode(sendModeKey, next) } } : undefined}
+        folded={folded}
         onNewThread={newThread}
       />
     </>

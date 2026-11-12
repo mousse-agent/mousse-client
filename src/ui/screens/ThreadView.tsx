@@ -19,6 +19,13 @@ export interface ThreadViewProps {
   computerName?: string
 }
 
+/**
+ * How far from the end (px) the reader must be before the composer folds (the desktop's 120px plus the
+ * phone's taller fold). Folding gives the view about 48px more height, which brings the end that much
+ * closer; this keeps it clear of the 80px follow threshold, so the composer never unfolds again there.
+ */
+const COMPOSER_FOLD_DISTANCE = 160
+
 export function ThreadView({ session, threadId, onActivityChange, computerName }: ThreadViewProps) {
   const thread = useThread(session, threadId)
   // While a compaction runs it holds the queue; Send now on the first message skips it.
@@ -28,6 +35,7 @@ export function ThreadView({ session, threadId, onActivityChange, computerName }
   const scroller = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
   const [away, setAway] = useState(false)
+  const [folded, setFolded] = useState(false)
   const [addition, setAddition] = useState<{ text: string; key: number }>()
   const addToDraft = useCallback((text: string) => setAddition({ text, key: Date.now() }), [])
   const send = thread.send
@@ -51,7 +59,16 @@ export function ThreadView({ session, threadId, onActivityChange, computerName }
     if (element && stick.current) element.scrollTop = element.scrollHeight
   }, [thread.items, thread.display, queue.items])
 
-  useEffect(() => { stick.current = true }, [threadId])
+  useEffect(() => { stick.current = true; setFolded(false) }, [threadId])
+
+  // The view shrinks when the composer unfolds or grows (or the keyboard opens): a reader at the end stays there.
+  useEffect(() => {
+    const element = scroller.current
+    if (!element || typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(() => { if (stick.current) element.scrollTop = element.scrollHeight })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
 
   return (
     <SpeechProvider speech={session.speech}>
@@ -62,8 +79,12 @@ export function ThreadView({ session, threadId, onActivityChange, computerName }
         onScroll={(event) => {
           const element = event.currentTarget
           // Stay pinned within 80px of the bottom, like the desktop.
-          stick.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80
+          const distance = element.scrollHeight - element.scrollTop - element.clientHeight
+          stick.current = distance < 80
           setAway(!stick.current)
+          // The composer folds once the reader is well up, and unfolds back at the end; between the two it stays as it is.
+          if (stick.current) setFolded(false)
+          else if (distance > COMPOSER_FOLD_DISTANCE) setFolded(true)
         }}
       >
         <div className="m-transcript" role="log" aria-live="polite" aria-busy={thread.active || undefined}>
@@ -93,7 +114,7 @@ export function ThreadView({ session, threadId, onActivityChange, computerName }
         {thread.items.length > 0 && <JumpToLatest live={thread.active} shown={away} onClick={jump} />}
         {thread.error && <Notice>{thread.error}</Notice>}
         {queue.error && <Notice>{queue.error}</Notice>}
-        <ThreadComposer session={session} threadId={threadId} thread={thread} queue={queue} addition={addition} computerName={computerName} />
+        <ThreadComposer session={session} threadId={threadId} thread={thread} queue={queue} addition={addition} computerName={computerName} folded={folded} />
       </div>
     </div>
     </SpeechProvider>

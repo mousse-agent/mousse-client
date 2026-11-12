@@ -57,7 +57,12 @@ export interface ComposerProps {
    * it switches and never sends. Without it a message written during a run is queued.
    */
   sendMode?: { mode: SendMode; onSwitch(): void }
+  /** The reader scrolled up: an empty, unfocused composer folds to its one input line. */
+  folded?: boolean
 }
+
+/** How long a scroll-driven fold animates; the CSS transition takes 200ms. */
+const FOLD_MOTION_MS = 260
 
 const MAX_HEIGHT = 168
 /** Commands the phone runs itself, or that only make sense on the desktop. */
@@ -91,7 +96,7 @@ function modelLabel(controls: ComposerControls): { title: string; context?: stri
  * the desktop's model picker. Menus open as bottom sheets. On touch screens Return inserts a new line and the button sends; with a hardware
  * keyboard and fine pointer, Enter sends and Shift+Enter breaks.
  */
-export function Composer({ active, disabled = false, placeholder, draftKey, prefill, controls, speech, onSend, onStop, onSteer, onNewThread, sendMode }: ComposerProps) {
+export function Composer({ active, disabled = false, placeholder, draftKey, prefill, controls, speech, onSend, onStop, onSteer, onNewThread, sendMode, folded = false }: ComposerProps) {
   const [text, setText] = useState(() => (draftKey ? loadDraft(draftKey) : ''))
   const [images, setImages] = useState<PendingImage[]>([])
   const [skill, setSkill] = useState<ComposerSkill>()
@@ -104,6 +109,10 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
   const field = useRef<HTMLTextAreaElement>(null)
   const picker = useRef<HTMLInputElement>(null)
   const finePointer = useFinePointer()
+  const [focused, setFocused] = useState(false)
+  const [foldMotion, setFoldMotion] = useState(false)
+  const foldTimer = useRef<ReturnType<typeof setTimeout>>()
+  const firstFold = useRef(true)
 
   // Dictated text goes where the caret is, or at the end when the box is not focused.
   const insertDictation = (transcript: string) => {
@@ -127,6 +136,17 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
         onStop: dictation.stop,
       }
     : undefined
+
+  // Only a scroll-driven fold animates; focus and typing switch at once, and reduced motion always does.
+  useEffect(() => {
+    if (firstFold.current) { firstFold.current = false; return undefined }
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return undefined
+    setFoldMotion(true)
+    clearTimeout(foldTimer.current)
+    foldTimer.current = setTimeout(() => setFoldMotion(false), FOLD_MOTION_MS)
+    return undefined
+  }, [folded])
+  useEffect(() => () => clearTimeout(foldTimer.current), [])
 
   useEffect(() => {
     const element = field.current
@@ -295,6 +315,9 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
   const actionLabel = hasContent ? (active ? (steersText ? 'Steer message' : 'Queue message') : 'Send') : active ? 'Stop' : 'Send'
   const shownPlaceholder = placeholder ?? (active ? (steers ? 'Running… send steers the reply' : 'Running… send queues next') : 'Message')
   const modeShown = !!sendMode && !!onSteer && active && !dictation.isRecording
+  // Folded: the reader scrolled up and nothing here needs the footer (no text, focus, attachment or notice).
+  const isFolded = folded && !!controls && !hasContent && !skill && !focused && !suggestions.length && !error && !dictation.error &&
+    !dictation.isRecording && !dictation.transcribing && !dictation.notice
 
   return (
     <div className="m-composer-wrap">
@@ -316,7 +339,16 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
           ))}
         </div>
       )}
-      <form className="m-composer" onSubmit={submit} data-active={active || undefined} data-controls={controls ? '' : undefined}>
+      <form
+        className="m-composer"
+        onSubmit={submit}
+        data-active={active || undefined}
+        data-controls={controls ? '' : undefined}
+        data-folded={isFolded || undefined}
+        data-fold-motion={foldMotion || undefined}
+        onFocus={() => setFocused(true)}
+        onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false) }}
+      >
         {error && <p className="m-composer__error" role="alert">{error}</p>}
         {dictation.error && (
           <div className="m-composer__voice-error" role="alert">
@@ -374,8 +406,14 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
             onPaste={onPaste}
           />
           {!controls && <ActionButton label={actionLabel} hasContent={hasContent} active={active} canSend={canSend} onStop={onStop} voice={voice} />}
+          {controls && isFolded && (
+            <span className="m-composer__folded-action">
+              <ActionButton label={actionLabel} hasContent={hasContent} active={active} canSend={canSend} onStop={onStop} voice={voice} />
+            </span>
+          )}
         </div>
         {controls && (
+          <div className="m-composer__fold" aria-hidden={isFolded || undefined} {...(isFolded ? { inert: '' } as Record<string, string> : {})}>
           <div className="m-composer__footer">
             <div className="m-composer__pills">
               <button type="button" className="m-pill m-pill--model" aria-label={`Model: ${modelText}`} aria-haspopup="dialog" onClick={() => setSheet('model')}>
@@ -408,6 +446,7 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
               )}
               <ActionButton label={actionLabel} hasContent={hasContent} active={active} canSend={canSend} onStop={onStop} voice={voice} />
             </div>
+          </div>
           </div>
         )}
         <input
