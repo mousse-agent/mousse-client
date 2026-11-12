@@ -70,7 +70,9 @@ html[data-theme='light'] {
 
 /* ---------- Layout ---------- */
 .m-thread--timeline { position: relative; }
-.m-tl { display: flex; flex-direction: column; gap: 22px; }
+/* f280f0be1: a little more space (16px) between the end of the chat and the composer, live or finished, so the end
+   of a reply moves nothing. */
+.m-tl { display: flex; flex-direction: column; gap: 22px; padding-bottom: 16px; }
 .m-tl-turn { display: flex; flex-direction: column; gap: 10px; }
 .m-tl-answer { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 /* message-list.tsx REPLY_GAP: a small, fixed gap under the reply in progress, so the newest text sits
