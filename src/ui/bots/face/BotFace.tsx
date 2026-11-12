@@ -4,6 +4,7 @@ import { BOT_ACCESSORY_HEX, BOT_ACCESSORY_LABELS, BOT_COLOUR_HEX, botEyesOf, bot
 import { useMotionScale } from '../motion'
 import { hexToRgb, mousseEyesWhite } from './facePoses'
 import { sharedFaceRenderer, sharedFaceRendererStatus, subscribeSharedFaceRenderer, type FaceHandle, type FaceSpec } from './faceRenderer'
+import { BotBoundary } from '../BotBoundary'
 import './face.css'
 
 /**
@@ -62,7 +63,12 @@ export function BotFace(props: BotFaceProps) {
   const status = useSyncExternalStore(subscribeSharedFaceRenderer, sharedFaceRendererStatus, () => 'unavailable' as const)
   const [broken, setBroken] = useState(false)
   if (broken || status === 'unavailable' || status === 'failed') return <BotFaceStill {...props} />
-  return <BotFaceLive {...props} onBroken={() => setBroken(true)} />
+  // A live face that throws (a lost context, a driver quirk) draws the still face instead, never a blank app.
+  return (
+    <BotBoundary fallback={<BotFaceStill {...props} />}>
+      <BotFaceLive {...props} onBroken={() => setBroken(true)} />
+    </BotBoundary>
+  )
 }
 
 function BotFaceLive({ onBroken, ...props }: BotFaceProps & { onBroken(): void }) {

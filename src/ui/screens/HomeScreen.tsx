@@ -16,6 +16,7 @@ import { threadComputers } from '../lib/newThread'
 import { ThreadView } from './ThreadView'
 import { BotAboutSheet, BotChat } from '../bots/BotChat'
 import { NewBotSheet } from '../bots/NewBotSheet'
+import { BotBoundary } from '../bots/BotBoundary'
 
 /** How often the home screen reads the account's computers again, to notice one coming online. */
 export const COMPUTERS_REFRESH_MS = 30_000
@@ -341,7 +342,7 @@ function ThreadPane({ nodeId, threadId, name, wide }: { nodeId: string; threadId
 
 function NewBotHost({ open, nodeId, computerName, onClose, onCreated }: { open: boolean; nodeId: string; computerName?: string; onClose(): void; onCreated(bot: ListBot): void }) {
   const { session, lists } = useComputer(nodeId)
-  return <NewBotSheet open={open} computerName={computerName} bots={session?.bots} existing={lists?.bots ?? []} onClose={onClose} onCreated={onCreated} />
+  return <BotBoundary resetKey={open}><NewBotSheet open={open} computerName={computerName} bots={session?.bots} existing={lists?.bots ?? []} onClose={onClose} onCreated={onCreated} /></BotBoundary>
 }
 
 /** One bot's chat on its computer, or why it cannot open. */
@@ -365,8 +366,14 @@ function BotPane({ nodeId, botId, name, wide }: { nodeId: string; botId: string;
   } else if (session && bot && session.bots) {
     body = <>
       {error && <div className="m-content"><Notice>{error}</Notice></div>}
-      <BotChat bot={bot} bots={session.bots} />
-      <BotAboutSheet open={about} bot={bot} bots={session.bots} onClose={() => setAbout(false)} onError={setError} />
+      <BotBoundary resetKey={botId} fallback={(retry) => (
+        <div className="m-scroll"><div className="m-content"><Notice>{`Couldn't show ${bot.name}'s chat.`}</Notice><Button onClick={retry}>Try again</Button></div></div>
+      )}>
+        <BotChat bot={bot} bots={session.bots} />
+      </BotBoundary>
+      <BotBoundary resetKey={about}>
+        <BotAboutSheet open={about} bot={bot} bots={session.bots} onClose={() => setAbout(false)} onError={setError} />
+      </BotBoundary>
     </>
   } else {
     const failed = link === 'error' || link === 'closed'

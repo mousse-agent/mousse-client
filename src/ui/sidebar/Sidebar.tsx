@@ -6,6 +6,7 @@ import '../bots/bots.css'
 import type { ListBot } from '../../connection/bots'
 import type { ComputerLists, ListChat, ListProject, ListThread, ThreadStatus } from '../../connection/types'
 import { BotFace } from '../bots/face/BotFace'
+import { BotBoundary } from '../bots/BotBoundary'
 import {
   ChevronDown,
   CircleAlert,
@@ -342,7 +343,7 @@ export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenCha
   // Recent: bot chats and direct chats together, the latest first (like the desktop).
   const recent = [
     ...model.direct.map((chat) => ({ at: chat.updatedAt, key: chat.id, row: () => <ChatRow key={chat.id} chat={chat} active={!!chat.threadId && chat.threadId === selectedId} computer={computerOf?.(chat.id)} onOpen={() => onOpenChat(chat)} /> })),
-    ...bots.map((bot) => ({ at: Date.parse(bot.last?.at ?? bot.createdAt) || 0, key: bot.id, row: () => <BotRow key={`bot:${bot.id}`} bot={bot} active={bot.id === selectedBotId} computer={computerOf?.(bot.id)} onOpen={() => onOpenBot!(bot)} /> })),
+    ...bots.map((bot) => ({ at: Date.parse(bot.last?.at ?? bot.createdAt) || 0, key: bot.id, row: () => <BotBoundary key={`bot:${bot.id}`}><BotRow bot={bot} active={bot.id === selectedBotId} computer={computerOf?.(bot.id)} onOpen={() => onOpenBot!(bot)} /></BotBoundary> })),
   ].sort((a, b) => b.at - a.at)
   const projects = [...lists.projects].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
   const card = (thread: ListThread) => (
@@ -414,6 +415,7 @@ export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenCha
         {tab === 'chats' && (
           <>
             {onOpenBot && (
+              <BotBoundary fallback={<p className="m-sb-empty">Bots can't be shown right now.</p>}>
               <section aria-label="Bots">
                 <SectionHeading action={onNewBot && <IconButton label="New bot" onClick={onNewBot}><Plus size={18} /></IconButton>}>Bots</SectionHeading>
                 {bots.length > 0 ? (
@@ -429,6 +431,7 @@ export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenCha
                   <p className="m-sb-empty">{searching ? `No bots match “${query.trim()}”.` : onNewBot ? 'No bots yet. Press + to make one.' : 'No bots yet.'}</p>
                 )}
               </section>
+              </BotBoundary>
             )}
             {model.groups.length + recent.length === 0 && (
               <p className="m-sb-empty">{searching ? `No chats match “${query.trim()}”.` : 'No chats yet. Start one with an agent on the computer.'}</p>

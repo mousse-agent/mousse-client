@@ -4,6 +4,7 @@
 import type { ComputerLists, ComputerSession, ListsState, SessionEndReason } from './types'
 import { isUnreachable } from './types'
 import type { NetworkSignals } from './networkSignals'
+import { parseBots } from './bots'
 
 export type LinkState = 'idle' | 'connecting' | 'open' | 'closed' | 'removed' | 'error'
 
@@ -51,8 +52,9 @@ export function storageListsCache(storage: Storage | undefined = safeLocalStorag
         const text = storage?.getItem(keyOf(accountId, nodeId))
         if (!text) return undefined
         const value: unknown = JSON.parse(text)
-        // Lists saved before bots were listed have none.
-        return validLists(value) ? { ...value, bots: Array.isArray(value.bots) ? value.bots : [] } : undefined
+        // Lists saved before bots were listed have none; saved bots are read again like fresh ones, so a
+        // bot saved by an older build in another shape can't reach the UI.
+        return validLists(value) ? { ...value, bots: parseBots(value.bots) } : undefined
       } catch {
         return undefined
       }
