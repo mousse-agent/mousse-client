@@ -114,25 +114,36 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
   const foldTimer = useRef<ReturnType<typeof setTimeout>>()
   const firstFold = useRef(true)
 
-  // Dictated text goes where the caret is, or at the end when the box is not focused.
+  // The selection (or caret) when dictation started, with the text it was taken from.
+  const dictationRange = useRef<{ start: number; end: number; value: string } | null>(null)
+  // Dictated text replaces the selection made before dictation started, even if the caret moved since; if the
+  // text changed meanwhile it goes where the caret is, or at the end when the box is not focused.
   const insertDictation = (transcript: string) => {
     const element = field.current
     const focused = !!element && document.activeElement === element
+    const range = dictationRange.current
+    dictationRange.current = null
     let caret = 0
     setText((current) => {
-      const next = insertTranscript(current, focused ? element.selectionStart : current.length, focused ? element.selectionEnd : current.length, transcript)
+      const kept = range && range.value === current ? range : undefined
+      const next = insertTranscript(current, kept ? kept.start : focused ? element.selectionStart : current.length, kept ? kept.end : focused ? element.selectionEnd : current.length, transcript)
       caret = next.caret
       return next.value
     })
     if (focused) requestAnimationFrame(() => element.setSelectionRange(caret, caret))
   }
   const dictation = useDictation({ speech, disabled, onTranscript: insertDictation })
+  const startDictation = () => {
+    const element = field.current
+    dictationRange.current = element && document.activeElement === element ? { start: element.selectionStart, end: element.selectionEnd, value: element.value } : null
+    dictation.start()
+  }
   const voice = dictation.available
     ? {
         recording: dictation.isRecording,
         busy: dictation.recordingPending || dictation.transcribing,
         disabled: disabled || dictation.recordingPending || dictation.transcribing,
-        onStart: dictation.start,
+        onStart: startDictation,
         onStop: dictation.stop,
       }
     : undefined
