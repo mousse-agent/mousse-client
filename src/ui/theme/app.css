@@ -32,7 +32,13 @@ button { cursor: pointer; }
 button:disabled { cursor: default; }
 h1, h2, h3, p { margin: 0; }
 
-:focus-visible { outline: none; box-shadow: var(--ui-focus-ring); }
+/* Keyboard focus is a fill, never an outline, ring or border (desktop polish.css "Keyboard focus").
+   Text fields show focus with their own fill. */
+:focus-visible { outline: none; }
+:is(button, a[href], summary, [role='button'], [role='link'], [role='menuitem'], [role='menuitemradio'],
+  [role='menuitemcheckbox'], [role='option'], [role='tab'], [role='switch'], [role='checkbox'], [role='radio']):focus-visible {
+  background-image: var(--ui-focus-layer);
+}
 
 .m-app {
   position: fixed;
@@ -332,7 +338,7 @@ h1, h2, h3, p { margin: 0; }
   outline: none;
 }
 .m-input::placeholder { color: var(--an-input-placeholder-color, var(--ui-faint)); }
-.m-input:focus { border-color: rgba(var(--accent-rgb), 0.55); box-shadow: var(--ui-specular), var(--ui-focus-ring); }
+.m-input:focus { background-image: var(--ui-focus-layer); }
 
 .m-search {
   position: relative;
@@ -353,7 +359,7 @@ h1, h2, h3, p { margin: 0; }
   appearance: none;
 }
 .m-search input::-webkit-search-cancel-button { display: none; }
-.m-search input:focus { border-color: rgba(var(--accent-rgb), 0.5); box-shadow: var(--ui-focus-ring); }
+.m-search input:focus { background-image: var(--ui-focus-layer); }
 .m-search__clear {
   position: absolute;
   right: 0;
@@ -392,6 +398,7 @@ h1, h2, h3, p { margin: 0; }
   box-shadow: var(--ui-specular), 0 1px 4px rgba(0, 0, 0, 0.25);
   color: var(--text-primary);
 }
+.m-segmented__option[aria-selected='true']:focus-visible { background-image: var(--ui-focus-layer), var(--ui-sheen); }
 
 /* ---------- Chips ---------- */
 .m-chips {

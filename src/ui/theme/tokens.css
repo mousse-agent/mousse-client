@@ -83,6 +83,10 @@
   --ui-sheen-accent: linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0.08) 24%, transparent 52%);
   --ui-raised-shadow: var(--ui-specular), 0 10px 32px rgba(0, 0, 0, 0.32);
   --ui-focus-ring: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+  /* Keyboard focus is a fill, never a ring or border: a step firmer than hover, laid over whatever
+     background the control already has (polish.css --ui-focus-fill / --ui-focus-layer). */
+  --ui-focus-fill: var(--ui-pressed);
+  --ui-focus-layer: linear-gradient(var(--ui-focus-fill), var(--ui-focus-fill));
   --ui-aura-strength: 0.12;
   --ui-on-accent: #15121b;
 

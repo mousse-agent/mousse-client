@@ -44,7 +44,6 @@
 }
 .m-sidebar-tab:active:not(.is-active) { color: var(--text-primary); background: var(--ui-hover); }
 .m-sidebar-tab svg { flex-shrink: 0; }
-.m-sidebar-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .m-sidebar-tab.is-active {
   display: flex;
   align-items: center;
@@ -57,7 +56,7 @@
   font-size: 14px;
   font-weight: 600;
   background: var(--ui-raised);
-  box-shadow: var(--ui-specular), inset 0 0 0 1px var(--ui-line-strong), 0 1px 3px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--ui-specular), 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 .m-sidebar-tab.is-active svg { color: var(--accent); }
 
