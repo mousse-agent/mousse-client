@@ -424,6 +424,7 @@ export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenCha
                       <button key={bot.id} type="button" className={bot.id === selectedBotId ? 'is-active' : ''} aria-label={`Message ${bot.name}`} onClick={() => onOpenBot(bot)}>
                         {/* On a phone only a face with something to show moves (working, needs you, stuck); the rest are still, so a long row costs no GPU. */}
                         <BotFace look={bot.look} state={bot.state} size={48} view="head" still={bot.state === 'idle' || bot.state === 'paused'} />
+                        {bot.unread > 0 && bot.id !== selectedBotId && <span className="bot-roster-unread" role="img" aria-label={`${bot.unread} unread`} />}
                         <span>{bot.name}</span>
                       </button>
                     ))}
