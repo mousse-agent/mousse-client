@@ -7,6 +7,7 @@ import { useAutoJoin, useComputer, useComputers, useComputerViews } from '../hoo
 import { useIsWide } from '../hooks/useMediaQuery'
 import { useRouter } from '../state/router'
 import { EmptyState } from '../components/EmptyState'
+import { ErrorBoundary } from '../components/ErrorBoundary'
 import { ChevronLeft, Info, MessageSquarePlus, Settings } from '../components/icons'
 import { Button, IconButton, MousseLogo, Notice, Spinner, TopBar } from '../components/primitives'
 import { Sidebar, type RowComputer } from '../sidebar/Sidebar'
@@ -188,6 +189,7 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
   let list: ReactNode
   if (lists) {
     list = (
+      <ErrorBoundary what={tab === 'chats' ? 'the Chats tab' : tab === 'projects' ? 'the Projects tab' : 'the thread list'} resetKey={tab}>
       <Sidebar
         lists={lists}
         tab={tab}
@@ -203,6 +205,7 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
         order="recent"
         {...(labelled ? { computerOf } : {})}
       />
+      </ErrorBoundary>
     )
   } else if (!computers.data) {
     list = computers.error
@@ -248,7 +251,7 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
   const botComputerName = selectedBot ? byNode.get(selectedBot.nodeId)?.name : undefined
   const pane = selected
     ? <ThreadPane nodeId={selected.nodeId} threadId={selected.threadId} name={selectedComputer?.name ?? 'Computer'} wide={wide} />
-    : selectedBot ? <BotPane nodeId={selectedBot.nodeId} botId={selectedBot.botId} name={botComputerName ?? 'Computer'} wide={wide} /> : null
+    : selectedBot ? <ErrorBoundary what="this bot's chat" resetKey={selectedBot.botId}><BotPane nodeId={selectedBot.nodeId} botId={selectedBot.botId} name={botComputerName ?? 'Computer'} wide={wide} /></ErrorBoundary> : null
   const newBot = botComputer && (
     <NewBotHost
       key={botComputer.nodeId}
