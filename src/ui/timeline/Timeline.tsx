@@ -5,7 +5,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { ChatItem, QuestionAnswers, ThreadDisplayState, TurnEnd } from '../../connection/types'
 import { normalizeToolName } from '../../connection/timelineItems'
-import { copyText } from './actions'
+import { copyText, safeHref } from './actions'
 import { PLAN_APPROVAL_PREFIX, RecoveredFailuresContext, TimelineActionsContext, type TimelineActions } from './context'
 import {
   describeTurnProgress,
@@ -24,6 +24,7 @@ import {
   segmentReplies,
   settleFinishedTurn,
   shortPath,
+  threadImages,
   toolFailed,
   turnEdits,
   workGroupIcon,
@@ -34,7 +35,7 @@ import {
 } from './format'
 import { Bot, Check, ChevronRight, CircleX, ThinkingIcon, Copy, FileText, Folder, Globe, Image as ImageIcon, Info, Link, Monitor, MessageSquare, Paperclip, VolumeHigh, X } from './icons'
 import { Markdown } from './Markdown'
-import { ImageLightbox } from './ImageLightbox'
+import { ImageGalleryContext, ImageLightbox } from './ImageLightbox'
 import { AppletCard, AppletPending } from './AppletCard'
 import { ReadAloudButton as ComputerReadAloudButton, useComputerSpeech } from '../speech/readAloud'
 import { QuestionPrompt } from './QuestionPrompt'
@@ -660,6 +661,7 @@ export function Timeline({ items, display, active, onApprovePlan, onAddToDraft, 
     () => ({ approvePlan: onApprovePlan, busy: active, approvedPlans, addToDraft: onAddToDraft }),
     [onApprovePlan, active, approvedPlans, onAddToDraft],
   )
+  const images = useMemo(() => threadImages(items, safeHref), [items])
   const lastTurn = turns[turns.length - 1]
   const lastHasError = !!lastTurn?.replies.some((item) => item.error || item.status === 'error')
   const stoppedAfterLast = display.phase === 'stopped' && !active
@@ -668,6 +670,7 @@ export function Timeline({ items, display, active, onApprovePlan, onAddToDraft, 
 
   return (
     <TimelineActionsContext.Provider value={actions}>
+      <ImageGalleryContext.Provider value={images}>
       <div className="m-tl" data-testid="timeline">
         {turns.map((turn, index) => {
           const last = index === turns.length - 1
@@ -705,6 +708,7 @@ export function Timeline({ items, display, active, onApprovePlan, onAddToDraft, 
           <QuestionPrompt key={pending.requestId} pending={pending} onAnswer={onAnswer} onDismiss={onDismiss} />
         ))}
       </div>
+      </ImageGalleryContext.Provider>
     </TimelineActionsContext.Provider>
   )
 }

@@ -352,4 +352,22 @@ describe('timeline', () => {
     render(<Timeline items={[search]} display={idle} active={false} />)
     expect(screen.getByTestId('tool-generic')).toHaveTextContent('Loaded toolsthread_list, Read')
   })
+
+  it('steps through every image the thread shows in the preview', () => {
+    const thread: ChatItem[] = [
+      { ...items[0], images: [{ name: 'trace.png', mimeType: 'image/png', data: 'AAAA' }] },
+      { id: 'r', role: 'assistant', kind: 'message', text: '![One](https://example.com/1.png) and ![Two](https://example.com/2.png)', createdAt: at + 1000, status: 'done' },
+    ]
+    render(<Timeline items={thread} display={idle} active={false} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open image: One' }))
+    const viewer = screen.getByRole('dialog', { name: 'One' })
+    expect(viewer).toHaveTextContent('2 / 3')
+    fireEvent.click(screen.getByRole('button', { name: 'Next image' }))
+    expect(screen.getByRole('dialog', { name: 'Two' })).toHaveTextContent('3 / 3')
+    expect(screen.queryByRole('button', { name: 'Next image' })).not.toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'ArrowLeft' })
+    fireEvent.keyDown(window, { key: 'ArrowLeft' })
+    expect(screen.getByRole('dialog', { name: 'trace.png' }).querySelector('img')).toHaveAttribute('src', 'data:image/png;base64,AAAA')
+    expect(screen.queryByRole('button', { name: 'Previous image' })).not.toBeInTheDocument()
+  })
 })

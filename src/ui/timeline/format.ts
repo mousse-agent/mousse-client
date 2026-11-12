@@ -1029,3 +1029,25 @@ export function formatTokensPerSecond(rate?: number): string {
   if (typeof rate !== 'number' || !Number.isFinite(rate) || rate < 0) return 'Unavailable'
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(rate)
 }
+
+/** Every image the thread shows, in order: prompt attachments, then images in replies (image-sources.ts). */
+export function threadImages(items: ChatItem[], safe: (href: string) => string | undefined): Array<{ src: string; name: string }> {
+  const out: Array<{ src: string; name: string }> = []
+  const seen = new Set<string>()
+  const add = (src: string | undefined, name: string) => {
+    if (!src || seen.has(src)) return
+    seen.add(src)
+    out.push({ src, name })
+  }
+  for (const item of items) {
+    for (const image of item.images ?? []) if (image.data) add(`data:${image.mimeType};base64,${image.data}`, image.name)
+    if (item.role !== 'assistant' || item.kind !== 'message') continue
+    const texts = item.parts ? item.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])) : [item.text]
+    for (const text of texts)
+      for (const match of text.matchAll(/!\[([^\]]*)\]\(\s*<?([^\s)>]+)>?(?:\s+"[^"]*")?\s*\)/g)) {
+        const src = safe(match[2])
+        if (src && !src.startsWith('mailto:')) add(src, match[1].trim() || 'Image')
+      }
+  }
+  return out
+}

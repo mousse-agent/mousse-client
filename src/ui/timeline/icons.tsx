@@ -33,6 +33,7 @@ import ViewIcon from '@hugeicons/core-free-icons/ViewIcon'
 import VolumeHighIcon from '@hugeicons/core-free-icons/VolumeHighIcon'
 import Wrench01Icon from '@hugeicons/core-free-icons/Wrench01Icon'
 import ArrowRight01Icon from '@hugeicons/core-free-icons/ArrowRight01Icon'
+import ArrowLeft01Icon from '@hugeicons/core-free-icons/ArrowLeft01Icon'
 import Link01Icon from '@hugeicons/core-free-icons/Link01Icon'
 import ComputerIcon from '@hugeicons/core-free-icons/ComputerIcon'
 import Robot01Icon from '@hugeicons/core-free-icons/Robot01Icon'
@@ -57,6 +58,7 @@ export const ArrowDown = /* @__PURE__ */ icon('ArrowDown', ArrowDown02Icon)
 export const Brain = /* @__PURE__ */ icon('Brain', Brain01Icon)
 export const Check = /* @__PURE__ */ icon('Check', Tick02Icon)
 export const ChevronDown = /* @__PURE__ */ icon('ChevronDown', ArrowDown01Icon)
+export const ChevronLeft = /* @__PURE__ */ icon('ChevronLeft', ArrowLeft01Icon)
 export const ChevronRight = /* @__PURE__ */ icon('ChevronRight', ArrowRight01Icon)
 export const CircleX = /* @__PURE__ */ icon('CircleX', CancelCircleIcon)
 export const ClipboardList = /* @__PURE__ */ icon('ClipboardList', Task01Icon)
