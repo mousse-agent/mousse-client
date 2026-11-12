@@ -2,7 +2,7 @@
 // of a user message and its replies, consecutive tool activity collapsed into groups, a
 // "Working for…" line, per-message actions, the turn's file changes, and the end-of-thread
 // states (interrupted, failed, provider unreachable, questions waiting).
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { ChatItem, QuestionAnswers, ThreadDisplayState } from '../../connection/types'
 import { normalizeToolName } from '../../connection/timelineItems'
 import { copyText } from './actions'
@@ -155,8 +155,31 @@ function MetadataButton({ item }: { item: ChatItem }) {
 
 const REFERENCE_ICONS = { file: FileText, project: Folder, thread: MessageSquare, terminal: Monitor, browser: Globe, agent: Bot } as const
 
+/** A long prompt shows this much (px) until "Show full message" is tapped (user-message.tsx). */
+export const PROMPT_FOLD_HEIGHT = 176
+
+/** True when the text is at least twice the fold height, so folding it hides enough to matter. */
+function useTallEnoughToFold(ref: RefObject<HTMLElement | null>, text: string): boolean {
+  const [tall, setTall] = useState(false)
+  useLayoutEffect(() => {
+    const element = ref.current
+    if (!element) return
+    const measure = () => setTall(element.scrollHeight >= PROMPT_FOLD_HEIGHT * 2)
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [ref, text])
+  return tall
+}
+
 const UserMessage = memo(function UserMessage({ item }: { item: ChatItem }) {
   const [viewing, setViewing] = useState<{ src: string; name: string }>()
+  const [expanded, setExpanded] = useState(false)
+  const textRef = useRef<HTMLDivElement>(null)
+  const foldable = useTallEnoughToFold(textRef, item.text)
+  const folded = foldable && !expanded
   const images = item.images ?? []
   return (
     <div className="m-tl-user" data-testid="chat-item" data-role="user">
@@ -192,7 +215,18 @@ const UserMessage = memo(function UserMessage({ item }: { item: ChatItem }) {
           ))}
         </div>
       )}
-      {item.text.trim() && <div className="m-tl-user__bubble">{item.text}</div>}
+      {item.text.trim() && (
+        <div className="m-tl-user__bubble">
+          <div ref={textRef} className={`m-tl-user__text${folded ? ' m-tl-user__text--folded' : ''}`}>
+            {item.text}
+          </div>
+          {foldable && (
+            <button type="button" className="m-tl-user__fold" aria-expanded={expanded} onClick={() => setExpanded((open) => !open)}>
+              {expanded ? 'Show less' : 'Show full message'}
+            </button>
+          )}
+        </div>
+      )}
       <div className="m-tl-toolbar m-tl-toolbar--user">
         {item.createdAt > 0 && <time className="m-tl-toolbar__time" dateTime={new Date(item.createdAt).toISOString()}>{formatTimestamp(item.createdAt)}</time>}
         {item.text.trim() && <CopyButton text={item.text} />}

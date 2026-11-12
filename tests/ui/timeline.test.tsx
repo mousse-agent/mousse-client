@@ -278,4 +278,20 @@ describe('timeline', () => {
     expect(block).toHaveAttribute('data-wrap', 'off')
     expect(screen.getByRole('button', { name: 'Wrap lines' })).toHaveAttribute('aria-pressed', 'false')
   })
+
+  it('folds a long prompt until Show full message is tapped', () => {
+    const height = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('m-tl-user__text') ? 600 : 0
+    })
+    try {
+      const { container } = render(<Timeline items={[{ ...items[0], text: 'long\n'.repeat(40) }]} display={idle} active={false} />)
+      const text = container.querySelector('.m-tl-user__text')!
+      expect(text).toHaveClass('m-tl-user__text--folded')
+      fireEvent.click(screen.getByRole('button', { name: 'Show full message' }))
+      expect(text).not.toHaveClass('m-tl-user__text--folded')
+      expect(screen.getByRole('button', { name: 'Show less' })).toHaveAttribute('aria-expanded', 'true')
+    } finally {
+      height.mockRestore()
+    }
+  })
 })

@@ -98,7 +98,7 @@ export function showcaseItems(base: number): ChatItem[] {
       status: 'done',
       meta: { modelName: 'claude-opus', totalResponseTimeMs: 238_000, tokensUsed: 18_420, tokensPerSecond: 61.3 },
     },
-    { id: 's-u2', role: 'user', kind: 'message', text: 'Plan the follow-up: backoff jitter and a status pill.', createdAt: t(30), status: 'done' },
+    { id: 's-u2', role: 'user', kind: 'message', text: 'Plan the follow-up: backoff jitter and a status pill.\n\nSome context from the last incident:\n- the relay saw 4,000 reconnects in the first second after the office Wi-Fi came back\n- every client retried at exactly 500 ms, then 1 s, then 2 s\n- the status bar said Connected the whole time\n\nWhat I want:\n1. Jitter of about 20% on every step of the backoff, with the clock injectable so tests stay stable.\n2. A small Reconnecting… pill in the top bar that appears after one second and never blocks typing.\n3. A note in the docs about which close codes mean what.\n\nKeep the plan short; I will review it on my phone.', createdAt: t(30), status: 'done' },
     { id: 's-ho', role: 'system', kind: 'handoff', text: '', createdAt: t(29.9), status: 'done', handoff: { from: 'openai / gpt-5', to: 'anthropic / claude-opus' } },
     {
       id: 's-td',

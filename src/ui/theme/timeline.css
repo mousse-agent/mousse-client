@@ -507,6 +507,10 @@ button.m-applet__name:focus-visible { outline: 2px solid var(--accent); outline-
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* A long prompt shows its first 176px, fading out, until "Show full message" is tapped. */
+.m-tl-user__text--folded { max-height: 176px; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.75rem), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 1.75rem), transparent); }
+.m-tl-user__fold { display: block; min-height: 32px; margin: 2px 0 -4px; padding: 0; border: 0; background: none; color: var(--text-secondary); font: inherit; font-size: 13.5px; line-height: 1.3; -webkit-tap-highlight-color: transparent; }
+.m-tl-user__fold:active { color: var(--text-primary); }
 .m-tl-user__images { display: flex; gap: 6px; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
 .m-tl-user__image { flex: none; padding: 0; border: 1px solid var(--ui-line); border-radius: 10px; overflow: hidden; background: transparent; }
 .m-tl-user__image img { display: block; max-width: 184px; max-height: 120px; object-fit: cover; }
