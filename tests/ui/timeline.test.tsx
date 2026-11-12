@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach } from 'vitest'
 import type { ChatItem, ThreadDisplayState } from '../../src/connection/types'
 import { JumpToLatest, Timeline } from '../../src/ui/timeline/Timeline'
+import { Markdown, keepLiteralBackslashes } from '../../src/ui/timeline/Markdown'
 
 afterEach(() => cleanup())
 
@@ -265,5 +266,16 @@ describe('timeline', () => {
     fireEvent.click(row)
     expect(screen.getAllByTestId('tool-task')[0].querySelectorAll('.m-tl-sub__full p')).toHaveLength(2)
     expect(screen.getByRole('button', { name: 'Measure on Android, Failed' })).toHaveTextContent(/Failed\s·\sNo device\./)
+  })
+
+  it('shows backslashes and code as written, and wraps code until Wrap is turned off', () => {
+    expect(keepLiteralBackslashes('a\\/b \\* `c\\` \\\\host')).toBe('a\\\\/b \\* `c\\` \\\\\\\\host')
+    const { container } = render(<Markdown text={'At C:\\me\\.cache and /^a\\/b/ but \\*not italic\\*.\n\n```sh\nnpm test -- --run\n```'} />)
+    expect(container.querySelector('p')).toHaveTextContent('At C:\\me\\.cache and /^a\\/b/ but *not italic*.')
+    const block = container.querySelector('.m-code')!
+    expect(block).not.toHaveAttribute('data-wrap')
+    fireEvent.click(screen.getByRole('button', { name: "Don't wrap lines" }))
+    expect(block).toHaveAttribute('data-wrap', 'off')
+    expect(screen.getByRole('button', { name: 'Wrap lines' })).toHaveAttribute('aria-pressed', 'false')
   })
 })

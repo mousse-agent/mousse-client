@@ -5,7 +5,7 @@ import { memo, useMemo, useState, type ReactNode } from 'react'
 import { marked, type Token, type Tokens } from 'marked'
 import { copyText, openLink, safeHref } from './actions'
 import { useHighlight } from './useHighlight'
-import { Check, Copy } from './icons'
+import { Check, Copy, TextWrap } from './icons'
 import { MessageImage } from './ImageLightbox'
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'" }
@@ -21,21 +21,91 @@ function decode(text: string): string {
   })
 }
 
+/** Characters that mean nothing to Markdown, so a backslash before one is part of the text. */
+const LITERAL_AFTER_BACKSLASH = new Set(['/', '"', "'", '\\'])
+/** ASCII punctuation: what Markdown lets a backslash escape. */
+const ESCAPABLE = /[!-/:-@[-`{-~]/
+/** The text before a backslash ends inside a drive path (`C:\…`) or a network path (`\\host\…`). */
+const IN_PATH = /(?:^|[^\w\\])(?:[A-Za-z]:[\\/]?|\\\\[\w.$-])\S*$/
+/** Math, where a backslash belongs to TeX: `\(`, `\[`, `\begin{` or a pair of `$`. Such a line is left as written. */
+const MATH = /\\[([]|\\begin\{|\$[^$]*\$/
+
+/**
+ * Markdown drops the backslash of an escape in prose, so `/^a\/b$/` showed as `/^a/b$/`, `\\server` as `\server` and
+ * `C:\me\.cache` as `C:\me.cache` (desktop markdown.tsx keepLiteralBackslashes). The backslash is kept before `/`,
+ * `"`, `'` and `\`, and before any punctuation inside a drive or network path; `\*` and `\_` still escape. Code
+ * spans, math and indented lines are left as written; fences never reach here.
+ */
+export function keepLiteralBackslashes(prose: string): string {
+  if (!prose.includes('\\')) return prose
+  let span = 0
+  let math = false
+  return prose
+    .split('\n')
+    .map((line) => {
+      if (math || /^\s*\$\$/.test(line)) {
+        if ((line.match(/\$\$/g)?.length ?? 0) % 2 === 1) math = !math
+        return line
+      }
+      if (!line.trim()) span = 0
+      if ((/^(?: {4}|\t)/.test(line) && !span) || MATH.test(line)) return line
+      let out = ''
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i]
+        if (char === '`') {
+          let run = 1
+          while (line[i + run] === '`') run++
+          if (!span) span = run
+          else if (run === span) span = 0
+          out += line.slice(i, i + run)
+          i += run - 1
+          continue
+        }
+        if (char !== '\\' || span) {
+          out += char
+          continue
+        }
+        const next = line[i + 1]
+        if (next === undefined) {
+          out += char
+          continue
+        }
+        const literal = LITERAL_AFTER_BACKSLASH.has(next) || (ESCAPABLE.test(next) && IN_PATH.test(line.slice(0, i)))
+        if (!literal) out += char + next
+        else if (next === '\\') out += '\\\\\\\\'
+        else out += '\\\\' + next
+        i++
+      }
+      return out
+    })
+    .join('\n')
+}
+
 /** The desktop's list clean-ups: "1." lines split by blank lines stay one list; 3+ newlines collapse. */
 function prepare(source: string): string {
   const parts = source.split(/(^(?:`{3,}|~{3,})[^\n]*\n[\s\S]*?^(?:`{3,}|~{3,})[ \t]*$)/m)
   return parts
-    .map((part, index) => (index % 2 ? part : part.replace(/\n{3,}/g, '\n\n').replace(/^(\s*\d+\.\s[^\n]*)\n\n(?=\s*\d+\.\s)/gm, '$1\n')))
+    .map((part, index) =>
+      index % 2 ? part : keepLiteralBackslashes(part.replace(/\n{3,}/g, '\n\n').replace(/^(\s*\d+\.\s[^\n]*)\n\n(?=\s*\d+\.\s)/gm, '$1\n')),
+    )
     .join('')
 }
 
+/**
+ * A reply's code block (agent-ui.css): no frame, a light tint, the language in small mono at the top left, Wrap and
+ * Copy at the top right. Long lines wrap; Wrap switches a block to one line per line with a horizontal scroll.
+ */
 export function CodeBlock({ code, language }: { code: string; language?: string }) {
   const [copied, setCopied] = useState(false)
+  const [wrap, setWrap] = useState(true)
   const html = useHighlight(code, language)
   return (
-    <div className="m-code">
+    <div className="m-code" data-wrap={wrap ? undefined : 'off'}>
       <div className="m-code__header">
         <span className="m-code__lang">{language || 'text'}</span>
+        <button type="button" className="m-code__copy" aria-label={wrap ? "Don't wrap lines" : 'Wrap lines'} aria-pressed={wrap} onClick={() => setWrap((value) => !value)}>
+          <TextWrap size={14} />
+        </button>
         <button
           type="button"
           className="m-code__copy"

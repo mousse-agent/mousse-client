@@ -89,7 +89,10 @@ export function showcaseItems(base: number): ChatItem[] {
       text:
         'Found it. After a sleep the socket closes with **1006**, but `onClose` treated a clean close as final and never reset the backoff.\n\n' +
         '| Close code | Before | After |\n|:--|:--|:--|\n| 1000 | stop | stop unless resumed |\n| 1006 | wait 30s | retry now |\n\n' +
-        '```ts\nschedule(resumed ? 0 : delay)\n```\n\n' +
+        '```ts\nschedule(resumed ? 0 : delay) // a long line that wraps on a phone instead of scrolling sideways by default\n```\n\n' +
+        '## Where it lives\n\nThe log on Windows is at C:\\Users\\ada\\.mousse\\relay.log, and the pattern /^a\\/b/ keeps its slash.\n\n' +
+        '> Sleep closes sockets with 1006, never 1000.\n\n' +
+        '1. Close handler\n   - resets the backoff\n   - keeps the session\n2. Tests\n\n' +
         '- [x] Reproduce with a test\n- [x] Fix the close handler\n- [ ] Ship it\n\nSee [the WebSocket close codes](https://developer.mozilla.org/docs/Web/API/CloseEvent/code).',
       createdAt: t(38),
       status: 'done',

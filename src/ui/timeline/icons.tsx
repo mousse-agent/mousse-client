@@ -26,6 +26,7 @@ import Search01Icon from '@hugeicons/core-free-icons/Search01Icon'
 import SparklesIcon from '@hugeicons/core-free-icons/SparklesIcon'
 import Task01Icon from '@hugeicons/core-free-icons/Task01Icon'
 import TerminalIcon from '@hugeicons/core-free-icons/TerminalIcon'
+import TextWrapIcon from '@hugeicons/core-free-icons/TextWrapIcon'
 import Tick02Icon from '@hugeicons/core-free-icons/Tick02Icon'
 import Cancel01Icon from '@hugeicons/core-free-icons/Cancel01Icon'
 import ViewIcon from '@hugeicons/core-free-icons/ViewIcon'
@@ -82,6 +83,7 @@ export const Bot = /* @__PURE__ */ icon('Bot', Robot01Icon)
 export const Search = /* @__PURE__ */ icon('Search', Search01Icon)
 export const Sparkles = /* @__PURE__ */ icon('Sparkles', SparklesIcon)
 export const Terminal = /* @__PURE__ */ icon('Terminal', TerminalIcon)
+export const TextWrap = /* @__PURE__ */ icon('TextWrap', TextWrapIcon)
 export const VolumeHigh = /* @__PURE__ */ icon('VolumeHigh', VolumeHighIcon)
 export const Wrench = /* @__PURE__ */ icon('Wrench', Wrench01Icon)
 export const X = /* @__PURE__ */ icon('X', Cancel01Icon)
