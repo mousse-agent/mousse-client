@@ -4,7 +4,7 @@ import type { ThreadState } from '../hooks/useThread'
 import type { ThreadQueue } from '../hooks/useThreadQueue'
 import { errorMessage } from '../hooks/useAsync'
 import { useRouter } from '../state/router'
-import { loadFavorites, saveFavorites } from '../lib/composerPrefs'
+import { loadFavorites, loadSendMode, saveFavorites, saveSendMode, type SendMode } from '../lib/composerPrefs'
 import { Composer, type ComposerControls } from './Composer'
 import { shownPermission } from './ComposerSheets'
 import { Notice } from './primitives'
@@ -40,6 +40,9 @@ export function ThreadComposer({ session, threadId, thread, queue, addition, com
   const [usage, setUsage] = useState<ContextUsage>()
   const [error, setError] = useState<string>()
   const [prefill, setPrefill] = useState<{ text: string; key: number; append?: boolean }>()
+  const sendModeKey = `${session.nodeId}.${threadId}`
+  const [sendMode, setSendMode] = useState<SendMode>(() => loadSendMode(sendModeKey))
+  useEffect(() => setSendMode(loadSendMode(sendModeKey)), [sendModeKey])
   useEffect(() => {
     if (addition) setPrefill({ ...addition, append: true })
   }, [addition])
@@ -157,6 +160,7 @@ export function ThreadComposer({ session, threadId, thread, queue, addition, com
         onSend={send}
         onStop={() => void thread.stop()}
         onSteer={(text) => attempt(() => session.steer(threadId, text))}
+        sendMode={options ? { mode: sendMode, onSwitch: () => { const next = sendMode === 'steer' ? 'queue' : 'steer'; setSendMode(next); saveSendMode(sendModeKey, next) } } : undefined}
         onNewThread={newThread}
       />
     </>

@@ -685,6 +685,10 @@ html[data-keyboard='open'] .m-thread__composer { padding-bottom: 8px; }
 }
 .m-composer__action:active:not(:disabled) { transform: scale(0.94); }
 
+/* The send mode while a reply runs (composer-send-mode-btn): Queue is a plain icon, Steer gets a soft fill. */
+.m-composer__mode { padding: 2px 3px; background-clip: content-box; }
+.m-composer__mode[data-steer] { color: var(--text-primary); background-color: color-mix(in srgb, var(--text-primary) 9%, transparent); }
+
 /* Footer: the model button on the left, context, attach and send on the right (ComposerFooter). */
 .m-composer__footer { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-width: 0; container-type: inline-size; }
 .m-composer__pills { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 1; overflow: hidden; }

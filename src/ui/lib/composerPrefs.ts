@@ -57,3 +57,30 @@ export function loadLastProject(nodeId: string): string | undefined {
 export function saveLastProject(nodeId: string, projectId: string): void {
   write(`mousse.newThread.project.${nodeId}`, projectId)
 }
+
+/** What the composer's send does while a reply runs: queue the message, or steer it into the reply. */
+export type SendMode = 'queue' | 'steer'
+
+const STEER_THREADS = 'mousse.composer.steerThreads.v1'
+/** More threads than anyone keeps in Steer; past it the oldest choice is dropped. */
+const MAX_STEER_THREADS = 500
+
+function steerThreads(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(read(STEER_THREADS) ?? '[]')
+    return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+/** The thread's send mode, as the desktop keeps it per thread; a thread queues until it is switched. */
+export function loadSendMode(key: string): SendMode {
+  return steerThreads().includes(key) ? 'steer' : 'queue'
+}
+
+export function saveSendMode(key: string, mode: SendMode): void {
+  const others = steerThreads().filter((entry) => entry !== key)
+  const next = mode === 'steer' ? [...others, key].slice(-MAX_STEER_THREADS) : others
+  write(STEER_THREADS, next.length ? JSON.stringify(next) : null)
+}

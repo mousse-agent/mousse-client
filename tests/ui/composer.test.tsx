@@ -160,6 +160,29 @@ describe('composer controls', () => {
     await waitFor(async () => expect((await session().listQueue(SHOWCASE))[0].content).toBe('Mine'))
   })
 
+  it('steers by default in a thread switched to Steer, and Send now steers a queued message', async () => {
+    const { session } = await open('t-voices', { tickMs: 200 })
+    type('Long job')
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await screen.findByRole('button', { name: 'Stop' })
+    type('Later')
+    fireEvent.click(screen.getByRole('button', { name: 'Queue message' }))
+    const queue = await screen.findByRole('region', { name: 'Queued messages' })
+    await within(queue).findByRole('button', { name: 'Send now' })
+
+    // Switching the mode never sends; the send button then steers.
+    fireEvent.click(screen.getByRole('button', { name: 'Send mode: Queue' }))
+    expect(screen.getByRole('button', { name: 'Send mode: Steer' })).toBeInTheDocument()
+    type('Use the cached icons')
+    fireEvent.click(screen.getByRole('button', { name: 'Steer message' }))
+    await waitFor(() => expect(session().sent.map((entry) => [entry.kind, entry.text])).toContainEqual(['steer', 'Use the cached icons']))
+
+    fireEvent.click(within(queue).getByRole('button', { name: 'Send now' }))
+    // It leaves the list at the tap.
+    expect(within(queue).queryByText('Later')).not.toBeInTheDocument()
+    await waitFor(() => expect(session().sent.map((entry) => [entry.kind, entry.text])).toContainEqual(['steer', 'Later']))
+  })
+
   it('stops a turn with /stop', async () => {
     await open('t-voices', { tickMs: 200 })
     type('Long job')
