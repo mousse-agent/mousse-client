@@ -3,7 +3,9 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { isBotsUnsupported, parseAttachmentImage, parseBot, parseBotMessage, parseDetail, parseLook, parseMemory, SessionBots } from '../../src/connection/bots'
 import { parseLists } from '../../src/connection/lists'
 import { mergeLists } from '../../src/ui/sidebar/model'
-import { botMessageTime, quoteOf, workElapsed } from '../../src/ui/bots/BotChat'
+import { botMessageTime, pinnedOf, quoteOf, upsertMessages, workElapsed } from '../../src/ui/bots/BotChat'
+import { botMessageLabel, placeMessages } from '../../src/ui/bots/messageGroups'
+import { botImageSource } from '../../src/ui/bots/BotImages'
 import { installMatchMedia, renderApp } from './helpers'
 
 function memoryStorage(): Storage {
@@ -128,13 +130,78 @@ describe('bot chat helpers', () => {
   })
 })
 
+describe('the bot chat’s groups, pins and pictures', () => {
+  const at = (minutes: number) => new Date(Date.UTC(2026, 10, 12, 10, minutes)).toISOString()
+  it('groups one sender’s messages within ten minutes, with a day line per day', () => {
+    const places = placeMessages([
+      { author: 'bot', at: at(0) }, { author: 'bot', at: at(5) }, { author: 'owner', at: at(6) }, { author: 'owner', at: at(30) },
+    ], new Date(at(40)))
+    expect(places.map((place) => [place.starts, place.ends])).toEqual([[true, false], [false, true], [true, true], [true, true]])
+    expect(places[0].day).toBe('Today')
+    expect(places[1].day).toBeUndefined()
+  })
+  it('labels reminders and work reports', () => {
+    expect(botMessageLabel({ id: 'bm_rem_1', kind: 'run_report', author: 'bot' })).toBe('Reminder')
+    expect(botMessageLabel({ id: 'bm_x', kind: 'run_report', author: 'bot' })).toBe('Work report')
+    expect(botMessageLabel({ id: 'bm_x', kind: 'text', author: 'bot' })).toBeUndefined()
+  })
+  it('pins the newest open ask and the bot’s error, each pointing at its message', () => {
+    const messages = [
+      { seq: 1, id: 'a', at: at(0), author: 'bot' as const, kind: 'text' as const, text: '', chips: [], ask: { askId: 'k', title: 'read Gmail', note: '', status: 'open' as const } },
+      { seq: 2, id: 'e', at: at(1), author: 'bot' as const, kind: 'error' as const, text: '', chips: [], error: { text: 'Gmail sign-in expired' } },
+    ]
+    expect(pinnedOf(messages, { name: 'Pip', error: { text: 'Gmail sign-in expired' } })).toEqual([
+      { kind: 'ask', id: 'a', text: 'Pip wants to read Gmail' },
+      { kind: 'error', id: 'e', text: 'Gmail sign-in expired' },
+    ])
+    expect(pinnedOf([], { name: 'Pip' })).toEqual([])
+  })
+  it('keeps each message once, in order', () => {
+    const one = { seq: 2, id: 'b', at: at(0), author: 'bot' as const, kind: 'text' as const, text: 'old', chips: [] }
+    const merged = upsertMessages([one], [{ ...one, text: 'new' }, { ...one, seq: 1, id: 'a' }])
+    expect(merged.map((message) => `${message.id}:${message.text}`)).toEqual(['a:old', 'b:new'])
+  })
+  it('shows only raster data images, and never loads a web image', () => {
+    expect(botImageSource('data:image/png;base64,iVBORw0KGgo=').kind).toBe('data')
+    expect(botImageSource('data:image/svg+xml;base64,PHN2Zz4=').kind).toBe('blocked')
+    expect(botImageSource('https://example.com/a.png').kind).toBe('link')
+    expect(botImageSource('/Users/me/a.png').kind).toBe('blocked')
+  })
+})
+
 describe('bots on the phone', () => {
+  it('shows the chat in groups, with labels, pictures and the open ask pinned', async () => {
+    // jsdom has no object URLs.
+    Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:picture'), revokeObjectURL: vi.fn() })
+    renderApp({ signedIn: true, routes: [{ name: 'home' }, { name: 'bot', nodeId: 'node-studio', botId: 'bot-inbox' }] })
+    expect(await screen.findByText('Reminder')).toBeInTheDocument()
+    expect(screen.getAllByRole('separator').map((line) => line.textContent)).toContain('Today')
+    // The owner's attached picture is read from the computer; the reply's data image shows inline; the web one is a link.
+    expect(await screen.findByRole('button', { name: 'Open image: receipt.png' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open image: Mail this week' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'the bank’s site' })).toBeInTheDocument()
+    expect(within(screen.getByRole('status', { name: 'Waiting on you' })).getByRole('button', { name: 'Pip wants to read your Gmail' })).toBeInTheDocument()
+    // One face per group: Pip's first two messages share one.
+    expect(document.querySelectorAll('.bot-msg--bot.is-group-start').length).toBeLessThan(document.querySelectorAll('.bot-msg--bot').length)
+  })
+
+  it('lists reminders and memory in About, each removable', async () => {
+    renderApp({ signedIn: true, routes: [{ name: 'home' }, { name: 'bot', nodeId: 'node-studio', botId: 'bot-inbox' }] })
+    fireEvent.click(await screen.findByRole('button', { name: 'About Pip' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel reminder: Pay the electricity bill' }))
+    await waitFor(() => expect(screen.queryByText('Pay the electricity bill')).not.toBeInTheDocument())
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove memory: No em dashes in summaries.' }))
+    await waitFor(() => expect(screen.queryByText('No em dashes in summaries.')).not.toBeInTheDocument())
+    expect(screen.getByText('Mail from the bank always needs me.')).toBeInTheDocument()
+  })
+
   it('lists the bots in the Chats tab and opens a bot’s chat', async () => {
     renderApp({ signedIn: true })
     fireEvent.click(await screen.findByRole('tab', { name: 'Chats' }))
     const roster = await screen.findByRole('region', { name: 'Bots' })
     expect(within(roster).getByRole('button', { name: 'Message Pip' })).toBeInTheDocument()
-    expect(screen.getByLabelText('1 unread')).toBeInTheDocument()
+    expect(screen.getAllByLabelText('1 unread').length).toBeGreaterThan(0)
+    expect(within(roster).getByLabelText('1 unread')).toBeInTheDocument()
     fireEvent.click(within(roster).getByRole('button', { name: 'Message Pip' }))
     expect(await screen.findByText(/sort your inbox/)).toBeInTheDocument()
     expect(screen.getByRole('group', { name: 'Pip wants to read your Gmail' })).toBeInTheDocument()

@@ -11,6 +11,7 @@ import PauseIcon from '@hugeicons/core-free-icons/PauseIcon'
 import PlayIcon from '@hugeicons/core-free-icons/PlayIcon'
 import Shield01Icon from '@hugeicons/core-free-icons/Shield01Icon'
 import Brain01Icon from '@hugeicons/core-free-icons/Brain01Icon'
+import Notification03Icon from '@hugeicons/core-free-icons/Notification03Icon'
 import ArrowTurnBackwardIcon from '@hugeicons/core-free-icons/ArrowTurnBackwardIcon'
 import ShuffleIcon from '@hugeicons/core-free-icons/ShuffleIcon'
 import ArrowDown02Icon from '@hugeicons/core-free-icons/ArrowDown02Icon'
@@ -167,5 +168,6 @@ export const Pause = /* @__PURE__ */ createIcon('Pause', PauseIcon)
 export const Play = /* @__PURE__ */ createIcon('Play', PlayIcon)
 export const Shield = /* @__PURE__ */ createIcon('Shield', Shield01Icon)
 export const Brain = /* @__PURE__ */ createIcon('Brain', Brain01Icon)
+export const Bell = /* @__PURE__ */ createIcon('Bell', Notification03Icon)
 export const Reply = /* @__PURE__ */ createIcon('Reply', ArrowTurnBackwardIcon)
 export const Shuffle = /* @__PURE__ */ createIcon('Shuffle', ShuffleIcon)

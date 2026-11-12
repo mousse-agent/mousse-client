@@ -1,7 +1,7 @@
 // Markdown for replies, thoughts and plans, styled like the desktop's `an-md-*` rules
 // (agent-elements/markdown.tsx). marked only tokenizes; every token renders as a React element,
 // so raw HTML in a reply shows as text and never runs.
-import { memo, useMemo, useState, type ReactNode } from 'react'
+import { createContext, memo, useContext, useMemo, useState, type ReactNode } from 'react'
 import { marked, type Token, type Tokens } from 'marked'
 import { copyText, openLink, safeHref } from './actions'
 import { useHighlight } from './useHighlight'
@@ -60,6 +60,20 @@ export function CodeBlock({ code, language }: { code: string; language?: string 
   )
 }
 
+/**
+ * How a view draws the images in its Markdown, instead of loading them: the bot chat shows `data:` pictures and
+ * leaves web images as links (bots/BotImages.tsx). Without one, an image opens large on a tap.
+ */
+export const MarkdownImageRenderer = createContext<((image: { src: string; alt?: string }) => ReactNode) | undefined>(undefined)
+
+function ImageToken({ href, alt, title }: { href: string; alt: string; title?: string }) {
+  const render = useContext(MarkdownImageRenderer)
+  if (render) return <>{render({ src: href, alt })}</>
+  const src = safeHref(href)
+  // Images open large on a tap, as the desktop's MessageImage.
+  return src && !src.startsWith('mailto:') ? <MessageImage src={src} alt={alt} title={title} /> : <>{alt}</>
+}
+
 function inline(tokens: Token[] | undefined, key = ''): ReactNode[] {
   return (tokens ?? []).map((token, index) => inlineToken(token, `${key}${index}`))
 }
@@ -112,9 +126,7 @@ function inlineToken(token: Token, key: string): ReactNode {
     }
     case 'image': {
       const image = token as Tokens.Image
-      const src = safeHref(image.href)
-      // Images open large on a tap, as the desktop's MessageImage.
-      return src && !src.startsWith('mailto:') ? <MessageImage key={key} src={src} alt={image.text} title={image.title ?? undefined} /> : image.text
+      return <ImageToken key={key} href={image.href} alt={image.text} title={image.title ?? undefined} />
     }
     case 'html': {
       const text = (token as Tokens.HTML).text

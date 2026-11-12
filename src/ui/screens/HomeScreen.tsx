@@ -249,7 +249,7 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
   const botComputerName = selectedBot ? byNode.get(selectedBot.nodeId)?.name : undefined
   const pane = selected
     ? <ThreadPane nodeId={selected.nodeId} threadId={selected.threadId} name={selectedComputer?.name ?? 'Computer'} wide={wide} />
-    : selectedBot ? <BotPane nodeId={selectedBot.nodeId} botId={selectedBot.botId} name={botComputerName ?? 'Computer'} wide={wide} /> : null
+    : selectedBot ? <BotPane nodeId={selectedBot.nodeId} botId={selectedBot.botId} name={botComputerName ?? 'Computer'} labelled={labelled} wide={wide} /> : null
   const newBot = botComputer && (
     <NewBotHost
       key={botComputer.nodeId}
@@ -346,7 +346,7 @@ function NewBotHost({ open, nodeId, computerName, onClose, onCreated }: { open: 
 }
 
 /** One bot's chat on its computer, or why it cannot open. */
-function BotPane({ nodeId, botId, name, wide }: { nodeId: string; botId: string; name: string; wide: boolean }) {
+function BotPane({ nodeId, botId, name, labelled, wide }: { nodeId: string; botId: string; name: string; labelled: boolean; wide: boolean }) {
   const router = useRouter()
   const computer = useComputer(nodeId)
   const { link, lists, session, store } = computer
@@ -385,8 +385,9 @@ function BotPane({ nodeId, botId, name, wide }: { nodeId: string; botId: string;
       </div></div>
     )
   }
+  // The header shows only the name, as on the desktop (what it does is in About); with several computers, whose it is.
   const title = bot?.name ?? 'Bot'
-  const subtitle = bot ? `${bot.state === 'idle' ? 'Bot' : bot.stateText || 'Bot'} · ${name}` : name
+  const subtitle = !bot || labelled ? name : undefined
   if (wide) return <><TopBar title={title} subtitle={subtitle} trailing={info} />{body}</>
   return (
     <main className="m-screen">
