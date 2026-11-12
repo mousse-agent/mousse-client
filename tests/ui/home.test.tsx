@@ -66,7 +66,8 @@ describe('one thread list', () => {
     renderApp({ signedIn: true })
     fireEvent.click(await screen.findByText('Landing page copy'))
     expect(await screen.findByRole('heading', { name: 'Landing page copy' })).toBeInTheDocument()
-    expect(screen.getByText('Studio Mac')).toBeInTheDocument()
+    // The header says where the thread is: its project, then its computer.
+    expect(screen.getByText('website · Studio Mac')).toBeInTheDocument()
     expect(await screen.findByLabelText('Message')).toBeInTheDocument()
   })
 
