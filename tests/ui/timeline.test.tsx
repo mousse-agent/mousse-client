@@ -338,4 +338,18 @@ describe('timeline', () => {
     render(<Timeline items={[items[0], { ...failed, error: { message: 'Limit hit.', code: 'provider_usage_limit' } }]} display={idle} active={false} />)
     expect(screen.getByRole('alert')).toHaveTextContent('Usage limit reached')
   })
+
+  it('keeps the tool name the runtime gave a row, and guesses only from a sentence', () => {
+    const row = (toolCall: Record<string, unknown>, kind = 'tool_call') =>
+      toChatItem({ id: 'x', role: 'assistant', content: '', kind, timestamp: '2026-11-13T10:00:00Z', toolCall: { summary: '', details: [], status: 'complete', ...toolCall } })?.tool
+    expect(row({ title: 'x', toolName: 'mcp__mousse__thread_list' })).toMatchObject({ name: 'Mcp', server: 'mousse', rawName: 'thread_list' })
+    expect(row({ title: 'ToolSearch', input: { query: 'select:mcp__mousse__thread_list,Read' } })).toMatchObject({ name: 'ToolSearch' })
+    expect(row({ title: 'Searching the web' })?.name).toBe('Generic')
+    expect(row({ title: 'Terminal' })?.name).toBe('Bash')
+    expect(row({ title: 'TaskOutput', toolName: 'TaskOutput' }, 'mcp_tool_call')?.name).toBe('TaskOutput')
+    expect(row({ title: 'Grep', toolName: 'Grep', summary: 'Grep' })?.input).toEqual({ pattern: '', query: '' })
+    const search: ChatItem = { id: 'ts', role: 'tool', kind: 'tool', text: '', createdAt: at + 1, status: 'done', tool: row({ title: 'ToolSearch', input: { query: 'select:mcp__mousse__thread_list,Read' } })! }
+    render(<Timeline items={[search]} display={idle} active={false} />)
+    expect(screen.getByTestId('tool-generic')).toHaveTextContent('Loaded toolsthread_list, Read')
+  })
 })

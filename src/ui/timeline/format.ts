@@ -513,6 +513,19 @@ export function genericTitle(tool: ChatToolCall, state: ToolState): { title: str
       return { title: pending ? 'Stopping shell' : 'Shell stopped', subtitle: typeof input.pid === 'number' ? `pid ${input.pid}` : '' }
     case 'cloning':
       return { title: pending ? 'Cloning repo' : 'Repo cloned', subtitle: str(input.repo) }
+    case 'ToolSearch': {
+      // Claude Code's tool search: `select:A,B` loads those tools by name; anything else is a search.
+      const query = str(input.query).trim()
+      const subtitle = query.startsWith('select:')
+        ? query
+            .slice('select:'.length)
+            .split(',')
+            .map((name) => name.trim().split('__').pop() ?? '')
+            .filter(Boolean)
+            .join(', ')
+        : query
+      return { title: pending ? 'Loading tools' : state === 'error' ? "Couldn't load tools" : 'Loaded tools', subtitle }
+    }
     default: {
       const name = tool.rawName || tool.title || 'Tool'
       const subtitle = tool.title && tool.title !== name ? tool.title : truncate(tool.summary, 50)
@@ -822,6 +835,8 @@ function toolProgress(item: ChatItem): TurnProgress {
   const tool = item.tool!
   const detail = inputDetail(tool.input)
   if (isSubagentItem(item)) return { kind: 'running-tool', label: 'Running subagent…', detail }
+  // A tool search loads tools for the model: the line says what its row says.
+  if (tool.name === 'ToolSearch') return { kind: 'running-tool', label: 'Loading tools…', detail, tool: tool.name }
   const name = tool.name === 'Mcp' ? mcpDisplayName(tool) : tool.name === 'Generic' ? tool.rawName || 'tool' : tool.name
   const noInput = !tool.input || Object.entries(tool.input).every(([key, value]) => PLACEHOLDER_INPUT_KEYS.has(key) || value === undefined || value === null || value === '')
   if (noInput) return { kind: 'preparing-tool', label: `Preparing ${name}…`, tool: tool.name }
