@@ -1,7 +1,9 @@
 // The owner's personal bots on a computer (the desktop's Chats tab, Bots section): their summaries
 // arrive in the lists stream, and their chats are read and written with the `bots.*` methods the
-// computer offers phones. Shapes follow mousse/src/shared/bots/personal/chat.ts. No payload carries a
-// model, an instance id or a computer path.
+// computer offers phones. Shapes follow mousse/src/shared/bots/personal/chat.ts and the phone methods
+// of mousse/src/mms/bridge/remote/RemoteBots.ts. No payload carries a model, an instance id or a
+// computer path. A computer from before a method or field leaves that feature out on the phone: a
+// method it does not offer fails with `BotsUnsupportedError`, and a missing field reads as absent.
 
 export type BotState = 'idle' | 'working' | 'needs_you' | 'stuck' | 'paused'
 export type BotChipIcon = 'search' | 'web' | 'read' | 'edit' | 'schedule' | 'memory' | 'ask' | 'think' | 'name' | 'warning'
@@ -58,6 +60,8 @@ export interface BotChatMessage {
   activationId?: string
   attachments?: Array<{ name: string }>
   replyTo?: BotChatQuote
+  /** The owner's message: the request id it was sent with, which matches it to the bubble shown while it was on its way. */
+  clientRequestId?: string
 }
 
 export interface BotWorkItem {
@@ -96,12 +100,32 @@ export interface BotChatPage {
 
 export interface BotPermissionItem { id: string; title: string; note: string; grantedAt: string }
 export interface BotRunItem { id: string; label: string; nextAt?: string; kind: 'schedule' }
-export interface BotDetail { summary: ListBot; permissions: BotPermissionItem[]; runs: BotRunItem[] }
+/** One waiting reminder (one-off, not yet said). `work`: it starts work at its time rather than only saying `text`. */
+export interface BotReminderItem { id: string; dueAt: string; text: string; work?: true }
+/** `reminders` is absent from computers that don't list them. */
+export interface BotDetail { summary: ListBot; permissions: BotPermissionItem[]; runs: BotRunItem[]; reminders?: BotReminderItem[] }
+
+/** One thing the bot remembers, as About lists it (`bots.memory.list`, active entries with text only). */
+export interface BotMemoryItem { id: string; text: string; kind: string }
+
+/** An image file of a chat message, read from the computer. */
+export interface BotAttachmentImage { mimeType: string; data: string }
+
+/** A method this computer does not offer phones: the phone leaves that feature out. */
+export class BotsUnsupportedError extends Error {
+  constructor(message = 'Update Mousse on this computer to use its bots from your phone.') {
+    super(message)
+    this.name = 'BotsUnsupportedError'
+  }
+}
+
+export const isBotsUnsupported = (error: unknown): boolean => error instanceof BotsUnsupportedError
 
 /** The bot methods of one computer. Every call fails with a plain message when the computer is older and has none. */
 export interface ComputerBots {
   chat(botId: string, page?: { beforeSeq?: number; limit?: number }): Promise<BotChatPage>
-  send(botId: string, text: string, replyTo?: string): Promise<BotChatMessage>
+  /** `clientRequestId` matches the sent message to the bubble shown while it was on its way; a retry with the same one adds no second message. */
+  send(botId: string, text: string, replyTo?: string, clientRequestId?: string): Promise<BotChatMessage>
   stop(botId: string): Promise<void>
   stopWork(botId: string, workId: string): Promise<void>
   markRead(botId: string, seq: number): Promise<void>
@@ -110,6 +134,13 @@ export interface ComputerBots {
   pause(botId: string): Promise<ListBot>
   resume(botId: string): Promise<ListBot>
   create(input: { look: BotLook; description: string; name?: string }): Promise<ListBot>
+  /** Cancels a waiting reminder; it never fires. */
+  cancelReminder(botId: string, reminderId: string): Promise<BotDetail>
+  /** What the bot remembers. */
+  memory(botId: string): Promise<BotMemoryItem[]>
+  forgetMemory(botId: string, id: string): Promise<void>
+  /** The image file `name` of message `messageId`, as base64 PNG, JPEG, GIF or WebP. */
+  attachment(botId: string, messageId: string, name: string): Promise<BotAttachmentImage>
 }
 
 const BOT_STATES = new Set<BotState>(['idle', 'working', 'needs_you', 'stuck', 'paused'])
@@ -189,6 +220,7 @@ export function parseBotMessage(value: unknown): BotChatMessage | undefined {
     ...(str(value.activationId) ? { activationId: value.activationId as string } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(reply ? { replyTo: reply } : {}),
+    ...(str(value.clientRequestId) ? { clientRequestId: value.clientRequestId as string } : {}),
   }
 }
 
@@ -260,7 +292,35 @@ export function parseDetail(value: unknown): BotDetail | undefined {
       isObject(entry) && str(entry.id) && str(entry.label)
         ? { id: entry.id as string, label: entry.label as string, ...(str(entry.nextAt) ? { nextAt: entry.nextAt as string } : {}), kind: 'schedule' as const }
         : undefined),
+    ...(Array.isArray(value.reminders)
+      ? {
+        reminders: listOf(value.reminders, (entry) =>
+          isObject(entry) && str(entry.id) && str(entry.dueAt) && typeof entry.text === 'string'
+            ? { id: entry.id as string, dueAt: entry.dueAt as string, text: entry.text, ...(entry.work === true ? { work: true as const } : {}) }
+            : undefined),
+      }
+      : {}),
   }
+}
+
+/** `bots.memory.list`: the entries every turn carries (active, with text). */
+export function parseMemory(value: unknown): BotMemoryItem[] | undefined {
+  if (!isObject(value) || !Array.isArray(value.entries)) return undefined
+  return listOf(value.entries, (entry) =>
+    isObject(entry) && str(entry.id) && str(entry.text) && (entry.status === undefined || entry.status === 'active')
+      ? { id: entry.id as string, text: entry.text as string, kind: str(entry.kind) ?? 'note' }
+      : undefined)
+}
+
+const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+
+/** `bots.chat.attachment`: a raster image as base64; undefined for anything else (SVG never shows). */
+export function parseAttachmentImage(value: unknown): BotAttachmentImage | undefined {
+  if (!isObject(value)) return undefined
+  const mimeType = str(value.mimeType) ?? str(value.mime)
+  const data = str(value.data) ?? str(value.base64)
+  if (!mimeType || !IMAGE_TYPES.has(mimeType.toLowerCase()) || !data || !/^[A-Za-z0-9+/=\s]+$/.test(data)) return undefined
+  return { mimeType: mimeType.toLowerCase(), data: data.replace(/\s+/g, '') }
 }
 
 type Rpc = (method: string, params: Record<string, unknown>, options?: { idem?: string }) => Promise<unknown>
@@ -281,8 +341,7 @@ export class SessionBots implements ComputerBots {
     } catch (error) {
       const code = (error as { code?: unknown } | undefined)?.code
       // A computer refuses a method it does not offer as a bare `forbidden`, with no reason.
-      if (code === 'forbidden' && (error as Error).message === 'forbidden')
-        throw new Error('Update Mousse on this computer to use its bots from your phone.')
+      if (code === 'forbidden' && (error as Error).message === 'forbidden') throw new BotsUnsupportedError()
       throw error
     }
   }
@@ -293,10 +352,10 @@ export class SessionBots implements ComputerBots {
     return value
   }
 
-  async send(botId: string, text: string, replyTo?: string): Promise<BotChatMessage> {
+  async send(botId: string, text: string, replyTo?: string, clientRequestId: string = crypto.randomUUID()): Promise<BotChatMessage> {
     const content = text.trim()
     if (!content) throw new Error('Write a message first.')
-    const value = await this.call('bots.chat.send', { botId, text: content, clientRequestId: crypto.randomUUID(), ...(replyTo ? { replyTo } : {}) }, true)
+    const value = await this.call('bots.chat.send', { botId, text: content, clientRequestId, ...(replyTo ? { replyTo } : {}) }, true)
     const message = isObject(value) ? parseBotMessage(value.message) : undefined
     if (!message) throw new Error('The computer sent an unexpected answer to bots.chat.send.')
     return message
@@ -346,5 +405,27 @@ export class SessionBots implements ComputerBots {
     const description = input.description.trim()
     if (!description) return Promise.reject(new Error('Say what the bot should do.'))
     return this.summary('bots.create', { look: input.look, description, ...(input.name?.trim() ? { name: input.name.trim() } : {}), clientRequestId: crypto.randomUUID() })
+  }
+
+  async cancelReminder(botId: string, reminderId: string): Promise<BotDetail> {
+    const value = parseDetail(await this.call('bots.reminders.cancel', { botId, reminderId }, true))
+    if (!value) throw new Error('The computer sent an unexpected answer to bots.reminders.cancel.')
+    return value
+  }
+
+  async memory(botId: string): Promise<BotMemoryItem[]> {
+    const value = parseMemory(await this.call('bots.memory.list', { botId }, false))
+    if (!value) throw new Error('The computer sent an unexpected answer to bots.memory.list.')
+    return value
+  }
+
+  async forgetMemory(botId: string, id: string): Promise<void> {
+    await this.call('bots.memory.forget', { botId, id }, true)
+  }
+
+  async attachment(botId: string, messageId: string, name: string): Promise<BotAttachmentImage> {
+    const value = parseAttachmentImage(await this.call('bots.chat.attachment', { botId, messageId, name }, false))
+    if (!value) throw new Error('This file can’t be shown here.')
+    return value
   }
 }

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
-import { parseBot, parseBotMessage, parseLook, SessionBots } from '../../src/connection/bots'
+import { isBotsUnsupported, parseAttachmentImage, parseBot, parseBotMessage, parseDetail, parseLook, parseMemory, SessionBots } from '../../src/connection/bots'
 import { parseLists } from '../../src/connection/lists'
 import { mergeLists } from '../../src/ui/sidebar/model'
 import { botMessageTime, quoteOf, workElapsed } from '../../src/ui/bots/BotChat'
@@ -75,6 +75,44 @@ describe('the bot methods', () => {
   it('says to update Mousse when the computer does not offer bots to phones', async () => {
     const bots = new SessionBots(async () => { throw Object.assign(new Error('forbidden'), { code: 'forbidden' }) })
     await expect(bots.chat('b1')).rejects.toThrow('Update Mousse on this computer')
+  })
+
+  it('sends with the caller’s request id, and reads the reminders, memory and images of newer computers', async () => {
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = []
+    const bots = new SessionBots(async (method, params) => {
+      calls.push({ method, params })
+      if (method === 'bots.chat.send') return { message: { seq: 4, id: 'm4', at: 'now', author: 'owner', kind: 'text', text: 'hi', chips: [], clientRequestId: params.clientRequestId } }
+      if (method === 'bots.reminders.cancel') return { summary: { id: 'b1', name: 'Pip' }, permissions: [], runs: [], reminders: [] }
+      if (method === 'bots.memory.list') return { entries: [{ id: 'm1', text: 'No em dashes', kind: 'owner', status: 'active' }, { id: 'm2', text: null, status: 'forgotten' }], gauge: '' }
+      if (method === 'bots.chat.attachment') return { mimeType: 'image/png', data: 'iVBORw0KGgo=' }
+      return {}
+    })
+    expect((await bots.send('b1', 'hi', undefined, 'req-1')).clientRequestId).toBe('req-1')
+    expect(calls[0].params.clientRequestId).toBe('req-1')
+    expect((await bots.cancelReminder('b1', 'rem_1')).reminders).toEqual([])
+    expect(await bots.memory('b1')).toEqual([{ id: 'm1', text: 'No em dashes', kind: 'owner' }])
+    await bots.forgetMemory('b1', 'm1')
+    expect(await bots.attachment('b1', 'm4', 'photo.png')).toEqual({ mimeType: 'image/png', data: 'iVBORw0KGgo=' })
+    expect(calls.map((call) => call.method)).toEqual(['bots.chat.send', 'bots.reminders.cancel', 'bots.memory.list', 'bots.memory.forget', 'bots.chat.attachment'])
+    expect(calls[1].params).toEqual({ botId: 'b1', reminderId: 'rem_1' })
+    expect(calls[4].params).toEqual({ botId: 'b1', messageId: 'm4', name: 'photo.png' })
+  })
+
+  it('marks a method an older computer lacks as unsupported, so the phone can leave its feature out', async () => {
+    const bots = new SessionBots(async () => { throw Object.assign(new Error('forbidden'), { code: 'forbidden' }) })
+    const failure = await bots.memory('b1').catch((error: unknown) => error)
+    expect(isBotsUnsupported(failure)).toBe(true)
+    const refused = await new SessionBots(async () => { throw Object.assign(new Error('Answer this on the computer.'), { code: 'forbidden' }) }).chat('b1').catch((error: unknown) => error)
+    expect(isBotsUnsupported(refused)).toBe(false)
+  })
+
+  it('reads an older computer’s detail without reminders, and only raster images', () => {
+    expect(parseDetail({ summary: { id: 'b1' }, permissions: [], runs: [] })).not.toHaveProperty('reminders')
+    expect(parseDetail({ summary: { id: 'b1' }, permissions: [], runs: [], reminders: [{ id: 'r', dueAt: 'x', text: 'Pay', work: true }, { id: 'bad' }] })?.reminders).toEqual([{ id: 'r', dueAt: 'x', text: 'Pay', work: true }])
+    expect(parseMemory({})).toBeUndefined()
+    expect(parseAttachmentImage({ mimeType: 'image/svg+xml', data: 'PHN2Zz4=' })).toBeUndefined()
+    expect(parseAttachmentImage({ mimeType: 'image/png', data: '<script>' })).toBeUndefined()
+    expect(parseBotMessage({ seq: 1, id: 'm', author: 'owner', text: 'x', clientRequestId: 'r1' })?.clientRequestId).toBe('r1')
   })
 })
 
