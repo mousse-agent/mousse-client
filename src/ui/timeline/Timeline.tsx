@@ -554,7 +554,11 @@ const TurnView = memo(function TurnView({
   const segments = useMemo(() => segmentReplies(ordered, live), [ordered, live])
   // A failure is loud only when nothing came after it and the turn failed or was cut off.
   const recovered = useMemo(() => recoveredFailures(replies, !live && cutOff), [replies, live, cutOff])
-  const folded = useMemo(() => (live ? segments.map(() => false) : foldTurnWork(segments.map((segment) => foldRowOf(segment, recovered)))), [segments, live, recovered])
+  // Only a turn with a prompt has a Worked line to open its work from.
+  const folded = useMemo(
+    () => (live || !turn.user ? segments.map(() => false) : foldTurnWork(segments.map((segment) => foldRowOf(segment, recovered)))),
+    [segments, live, recovered, turn.user],
+  )
   const hasFold = folded.some(Boolean)
   const [workOpen, setWorkOpen] = useState(false)
   const lastReplyAt = turn.replies.reduce((latest, item) => Math.max(latest, item.createdAt), 0)
