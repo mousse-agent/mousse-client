@@ -85,7 +85,8 @@
 }
 
 /* ---------- Status icons ---------- */
-.m-sb-spin { animation: m-sb-spin 1s linear infinite; }
+/* Steps, not every frame: each frame of a loop redraws the whole window (desktop ab4e3b320). */
+.m-sb-spin { animation: m-sb-spin 1s steps(12) infinite; }
 @keyframes m-sb-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }

@@ -90,7 +90,7 @@ h1, h2, h3, p { margin: 0; }
   color: var(--text-secondary);
 }
 
-.m-spinner { animation: m-spin 900ms linear infinite; }
+.m-spinner { animation: m-spin 900ms steps(12) infinite; }
 @keyframes m-spin { to { transform: rotate(360deg); } }
 /* Shown only when loading takes a moment: a saved thread opens without the spinner flashing. */
 .m-loading--late { animation: m-late 0s linear 250ms both; }
@@ -107,8 +107,6 @@ h1, h2, h3, p { margin: 0; }
   padding: var(--safe-top) 6px 0;
   border-bottom: 1px solid var(--ui-line);
   background: color-mix(in srgb, var(--app-window-bg) 86%, transparent);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
-  backdrop-filter: blur(16px) saturate(140%);
   position: relative;
   z-index: 2;
 }
@@ -301,7 +299,7 @@ h1, h2, h3, p { margin: 0; }
   height: 7px;
   background: var(--status-running);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-running) 20%, transparent);
-  animation: m-pulse 1.6s ease-in-out infinite;
+  animation: m-pulse 1.6s steps(24, jump-none) infinite;
 }
 @keyframes m-pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--status-running) 8%, transparent); } }
 
