@@ -56,7 +56,7 @@
 .bot-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bot-chip svg { flex: none; }
 .bot-chip b { font-weight: 500; color: var(--accent); }
-.bot-chip.is-live svg { animation: m-spin 1s linear infinite; }
+.bot-chip.is-live svg { animation: m-spin 1s steps(12) infinite; }
 
 /* Its chat turn running, or waiting for internet. */
 .bot-run-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); }
