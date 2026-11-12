@@ -50,7 +50,7 @@ export function showcaseItems(base: number): ChatItem[] {
       createdAt: t(41.2),
       status: 'done',
       toolName: 'Bash',
-      tool: { name: 'Bash', title: 'Run', summary: '', details: [], input: { command: 'npm test -- tests/net/link.test.ts' }, output: { stdout: ' ✓ link (12 tests)\n × reconnects after sleep\n\nTests  1 failed | 11 passed', exitCode: 1 } },
+      tool: { name: 'Bash', title: 'Run', summary: '', details: [], input: { command: 'npm test -- tests/net/link.test.ts' }, output: { stdout: ' ✓ link (12 tests)\n × reconnects after sleep\n\nTests  1 failed | 11 passed', exitCode: 1, durationMs: 2400 } },
     },
     {
       id: 's-ed1',

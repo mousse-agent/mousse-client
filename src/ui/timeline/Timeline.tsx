@@ -6,7 +6,7 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChatItem, QuestionAnswers, ThreadDisplayState } from '../../connection/types'
 import { normalizeToolName } from '../../connection/timelineItems'
 import { copyText } from './actions'
-import { PLAN_APPROVAL_PREFIX, TimelineActionsContext, type TimelineActions } from './context'
+import { PLAN_APPROVAL_PREFIX, RecoveredFailuresContext, TimelineActionsContext, type TimelineActions } from './context'
 import {
   formatResponseTime,
   formatTimestamp,
@@ -16,6 +16,7 @@ import {
   formatWorkingFor,
   groupLabel,
   groupTurns,
+  recoveredFailures,
   segmentReplies,
   shortPath,
   turnEdits,
@@ -375,12 +376,15 @@ function nestUnderTasks(replies: ChatItem[]): { flow: ChatItem[]; nested: Map<st
   return { flow, nested }
 }
 
-const TurnView = memo(function TurnView({ turn, live, startedAt }: { turn: Turn; live: boolean; startedAt?: number }) {
+const TurnView = memo(function TurnView({ turn, live, startedAt, endedBadly = false }: { turn: Turn; live: boolean; startedAt?: number; endedBadly?: boolean }) {
   const { flow, nested } = useMemo(() => nestUnderTasks(turn.replies), [turn.replies])
+  // A failure is loud only when nothing came after it and the turn failed or was cut off.
+  const recovered = useMemo(() => recoveredFailures(turn.replies, !live && endedBadly), [turn.replies, live, endedBadly])
   const segments = useMemo(() => segmentReplies(flow), [flow])
   const lastReplyAt = turn.replies.reduce((latest, item) => Math.max(latest, item.createdAt), 0)
   const durationMs = turn.user && lastReplyAt > turn.user.createdAt && turn.user.createdAt > 0 ? lastReplyAt - turn.user.createdAt : undefined
   return (
+    <RecoveredFailuresContext.Provider value={recovered}>
     <div className="m-tl-turn">
       {turn.user && <UserMessage item={turn.user} />}
       {turn.user && <WorkStatus live={live} startedAt={startedAt ?? turn.user.createdAt} durationMs={durationMs} />}
@@ -405,6 +409,7 @@ const TurnView = memo(function TurnView({ turn, live, startedAt }: { turn: Turn;
       </div>
       {!live && <EditSummary replies={turn.replies} />}
     </div>
+    </RecoveredFailuresContext.Provider>
   )
 })
 
@@ -449,7 +454,15 @@ export function Timeline({ items, display, active, onApprovePlan, onAddToDraft, 
       <div className="m-tl" data-testid="timeline">
         {turns.map((turn, index) => {
           const last = index === turns.length - 1
-          return <TurnView key={turn.key} turn={turn} live={last && active} startedAt={last && active ? display.turnStartedAt : undefined} />
+          return (
+            <TurnView
+              key={turn.key}
+              turn={turn}
+              live={last && active}
+              startedAt={last && active ? display.turnStartedAt : undefined}
+              endedBadly={last && (display.phase === 'failed' || display.phase === 'stopped')}
+            />
+          )
         })}
         {stoppedAfterLast && (
           <div className="m-tl-interrupted" data-testid="run-interrupted">

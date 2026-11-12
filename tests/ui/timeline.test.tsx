@@ -107,7 +107,8 @@ describe('timeline', () => {
       { id: 'x1', role: 'tool', kind: 'tool', text: '', createdAt: at + 1000, status: 'streaming', tool: { name: 'Bash', title: '', summary: '', details: [], input: { command: 'make' } } },
     ]
     const { rerender } = render(<Timeline items={live} display={{ questions: [], phase: 'tool_running', turnStartedAt: Date.now() - 5000 }} active />)
-    expect(screen.getByText('Running make')).toHaveClass('m-tl-shimmer--active')
+    expect(screen.getByText('Running')).toHaveClass('m-tl-shimmer--active')
+    expect(screen.getByTestId('tool-bash').querySelector('.m-tl-icon')).toHaveAttribute('data-state', 'running')
     expect(screen.getByTestId('work-status')).toHaveTextContent(/Working for \d+ seconds?/)
     rerender(<Timeline items={live} display={{ questions: [], phase: 'stopped' }} active={false} />)
     expect(screen.getByTestId('run-interrupted')).toHaveTextContent('Run interrupted')
@@ -165,5 +166,39 @@ describe('timeline', () => {
     expect(icon().querySelector('.m-thinking-icon__orbit')).not.toBeNull()
     rerender(<Timeline items={[items[0], { ...thought, status: 'done' }]} display={idle} active={false} />)
     expect(icon()).toHaveAttribute('data-thinking', 'done')
+  })
+
+  it('shows a command as one quiet row that opens to its output and exit line', () => {
+    const failing = (id: string, createdAt: number, output: unknown): ChatItem => ({
+      id,
+      role: 'tool',
+      kind: 'tool',
+      text: '',
+      createdAt,
+      status: 'done',
+      tool: { name: 'Bash', title: 'Run', summary: '', details: [], input: { command: "bash -lc 'npm test'" }, output },
+    })
+    const turn: ChatItem[] = [
+      items[0],
+      failing('c1', at + 1000, 'Exit code 1\n × reconnects\nTests 1 failed'),
+      { id: 'c2', role: 'assistant', kind: 'message', text: 'Fixed it.', createdAt: at + 5000, status: 'done' },
+    ]
+    render(<Timeline items={turn} display={idle} active={false} />)
+    // The shell wrapper is gone from the row, and the failure the agent got past is quiet: no red label, no exit badge.
+    const row = screen.getByRole('button', { name: /Failed npm test/ })
+    expect(row.querySelector('.m-tl-row__label--error')).toBeNull()
+    expect(row.querySelector('.m-tl-icon')).toHaveAttribute('data-state', 'recovered')
+    expect(row).not.toHaveTextContent('exit 1')
+    fireEvent.click(row)
+    const body = screen.getByTestId('tool-bash')
+    expect(body.querySelector('.m-tl-out__fail')).toHaveTextContent('× reconnects')
+    expect(body.querySelector('.m-tl-out__exit')).toHaveTextContent('exit 1')
+    expect(body).not.toHaveTextContent('Exit code 1')
+    cleanup()
+    // A failure that ended a failed turn stays loud.
+    render(<Timeline items={turn.slice(0, 2)} display={{ questions: [], phase: 'failed' }} active={false} />)
+    const loud = screen.getByRole('button', { name: /Failed npm test/ })
+    expect(loud.querySelector('.m-tl-row__label--error')).not.toBeNull()
+    expect(loud).toHaveTextContent('exit 1')
   })
 })

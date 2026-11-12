@@ -32,9 +32,38 @@ export function thoughtHeading(content: string | undefined): string {
   return plain.length <= 64 ? plain : `${plain.slice(0, 61).trimEnd()}...`
 }
 
-export function commandSummary(command: string): string {
-  const collapsed = command.replace(/\s+/g, ' ').trim()
-  return collapsed.length <= 64 ? collapsed : `${collapsed.slice(0, 61).trimEnd()}...`
+const SHELL_WRAPPER = /^(?:\S*[\\/])?(?:bash|sh|zsh|dash|fish|ksh)(?:\.exe)?\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c\s+([\s\S]+)$/
+const CMD_WRAPPER = /^(?:\S*[\\/])?cmd(?:\.exe)?\s+(?:\/[a-zA-Z]\s+)*\/[ck]\s+([\s\S]+)$/i
+const POWERSHELL_WRAPPER =
+  /^(?:\S*[\\/])?(?:powershell|pwsh)(?:\.exe)?\s+(?:-(?:NoProfile|NoLogo|NonInteractive|NoExit|Login)\s+|-(?:ExecutionPolicy|ep|WindowStyle)\s+\S+\s+)*-(?:Command|c)\s+([\s\S]+)$/i
+const ENV_WRAPPER = /^env\s+(?:(?:-\S+|[A-Za-z_][A-Za-z0-9_]*=\S*)\s+)*([\s\S]+)$/
+const SUDO_WRAPPER = /^sudo\s+(?:-\S+\s+)*([\s\S]+)$/
+
+function unquote(text: string): string {
+  const trimmed = text.trim()
+  const quote = trimmed[0]
+  if ((quote === '"' || quote === "'") && trimmed.length >= 2 && trimmed.endsWith(quote)) {
+    const inner = trimmed.slice(1, -1)
+    return quote === '"' ? inner.replace(/\\(["\\$`])/g, '$1') : inner
+  }
+  return trimmed
+}
+
+/**
+ * The command a shell invocation runs, for a one-line label (shared/agentActivity.ts commandLabel): `bash -lc '…'`,
+ * `sh -c`, `env FOO=1 …`, `sudo …`, `cmd /c …` and `powershell -Command …` are unwrapped and spacing collapses.
+ */
+export function commandLabel(command: string): string {
+  let current = command.trim()
+  for (let depth = 0; depth < 5; depth += 1) {
+    const match =
+      SHELL_WRAPPER.exec(current) ?? POWERSHELL_WRAPPER.exec(current) ?? CMD_WRAPPER.exec(current) ?? ENV_WRAPPER.exec(current) ?? SUDO_WRAPPER.exec(current)
+    if (!match) break
+    const inner = unquote(match[1]!)
+    if (!inner || inner === current) break
+    current = inner
+  }
+  return current.replace(/\s+/g, ' ').trim()
 }
 
 /** Strips sandbox prefixes and starts at the first apps|packages|src|lib|components folder. */
@@ -85,17 +114,123 @@ export function bashCommand(tool: ChatToolCall): string {
   return str(tool.input?.command)
 }
 
-/** stdout and stderr, or the plain result text, and whether the exit code says it worked. */
-export function bashOutput(tool: ChatToolCall): { text: string; ok: boolean } {
+/** The line some runtimes (Claude Code) put before a failed command's output: `Exit code 1`. */
+const EXIT_CODE_LINE = /^Exit code (-?\d+)(?:\r?\n|$)/
+
+/** A command's result text split into its exit code and its output, when it starts with `Exit code N`. */
+export function splitExitCode(result: string): { exitCode?: number; output: string } {
+  const match = EXIT_CODE_LINE.exec(result)
+  if (!match) return { output: result }
+  return { exitCode: Number(match[1]), output: result.slice(match[0].length) }
+}
+
+export interface BashResult {
+  text: string
+  /** False when the exit code says it failed. */
+  ok: boolean
+  exitCode?: number
+  durationMs?: number
+  /** Earlier output was cut; `bytes` is how much there was. */
+  truncated?: boolean
+  bytes?: number
+  cwd?: string
+}
+
+/** stdout and stderr, or the plain result text, with the exit code, time and folder when the result says. */
+export function bashOutput(tool: ChatToolCall): BashResult {
   const output = tool.output
-  if (typeof output === 'string') return { text: output, ok: true }
+  const cwd = str(tool.input?.cwd) || undefined
+  if (typeof output === 'string') {
+    const { exitCode, output: text } = splitExitCode(output)
+    return { text, ok: exitCode === undefined || exitCode === 0, ...(exitCode !== undefined ? { exitCode } : {}), ...(cwd ? { cwd } : {}) }
+  }
   if (isObject(output)) {
     const stdout = str(output.stdout) || str(output.output)
     const stderr = str(output.stderr)
-    const exit = output.exitCode ?? output.exit_code
-    return { text: [stdout, stderr].filter(Boolean).join('\n'), ok: exit === undefined || exit === 0 }
+    let text = [stdout, stderr].filter(Boolean).join('\n')
+    let exit = typeof output.exitCode === 'number' ? output.exitCode : typeof output.exit_code === 'number' ? output.exit_code : undefined
+    if (exit === undefined) {
+      const split = splitExitCode(text)
+      if (split.exitCode !== undefined) ({ exitCode: exit, output: text } = split)
+    }
+    const durationMs = typeof output.durationMs === 'number' ? output.durationMs : undefined
+    const bytes = typeof output.bytes === 'number' ? output.bytes : undefined
+    return {
+      text,
+      ok: exit === undefined || exit === 0,
+      ...(exit !== undefined ? { exitCode: exit } : {}),
+      ...(durationMs !== undefined ? { durationMs } : {}),
+      ...(output.truncated === true ? { truncated: true } : {}),
+      ...(bytes !== undefined ? { bytes } : {}),
+      ...(cwd || str(output.cwd) ? { cwd: cwd || str(output.cwd) } : {}),
+    }
   }
-  return { text: output === undefined ? '' : JSON.stringify(output, null, 2), ok: true }
+  return { text: output === undefined ? '' : JSON.stringify(output, null, 2), ok: true, ...(cwd ? { cwd } : {}) }
+}
+
+/** Terminal escape sequences (colours, cursor moves, titles): plain text shows them as noise. */
+// eslint-disable-next-line no-control-regex
+const ESCAPE_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\)|[@-Z\\-_])/g
+/** A line a test runner or compiler marks as a failure: `× adds`, `FAIL a.test.ts`, `Error: …`, `npm ERR! …`. */
+const FAILURE_LINE = /^\s*(?:[×✗✘✕]\s|(?:FAIL|FAILED)\b|ERR!|npm ERR!|[A-Za-z]*Error:|error(?:\[[A-Z0-9]+\])?:)/
+
+/** The output as lines, escape sequences removed, with failure lines marked for the danger colour. */
+export function bashOutputLines(output: string): Array<{ text: string; failed: boolean }> {
+  return output
+    .replace(ESCAPE_PATTERN, '')
+    .split('\n')
+    .map((text) => ({ text, failed: FAILURE_LINE.test(text) }))
+}
+
+/** "850ms", "2.4s", "1m 5s", for a command's exit line. */
+export function formatCommandDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  const seconds = ms / 1000
+  if (seconds < 60) return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s`
+  return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** Whether a call failed, finished or not. */
+export function toolFailed(item: ChatItem): boolean {
+  if (item.status === 'error') return true
+  const tool = item.tool
+  if (!tool) return false
+  if (isObject(tool.output) && tool.output.success === false) return true
+  return tool.name === 'Bash' && item.status === 'done' && !bashOutput(tool).ok
+}
+
+/**
+ * The failed calls of a turn the agent got past (mousseToUI.ts markRecoveredFailures): a later call succeeded, a
+ * reply followed, or the turn ended normally. Their rows stay quiet. A failure is loud only when nothing came after
+ * it and the turn ended on an error or was cut off (`endedBadly`).
+ */
+export function recoveredFailures(replies: ChatItem[], endedBadly: boolean): Set<string> {
+  const recovered = new Set<string>()
+  let pending: string[] = []
+  const settle = (failed: boolean) => {
+    if (!failed) for (const id of pending) recovered.add(id)
+    pending = []
+  }
+  for (const item of replies) {
+    if (item.error) {
+      settle(true)
+      continue
+    }
+    if (item.kind === 'tool' && item.tool) {
+      if (toolFailed(item)) pending.push(item.id)
+      else if (item.status === 'done') settle(false)
+      continue
+    }
+    if (item.role === 'assistant' && item.kind === 'message' && item.text.trim()) settle(false)
+  }
+  settle(endedBadly)
+  return recovered
 }
 
 // ---- Diffs ----

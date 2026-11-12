@@ -9,6 +9,8 @@ import Brain01Icon from '@hugeicons/core-free-icons/Brain01Icon'
 import BubbleChatQuestionIcon from '@hugeicons/core-free-icons/BubbleChatQuestionIcon'
 import CancelCircleIcon from '@hugeicons/core-free-icons/CancelCircleIcon'
 import Copy01Icon from '@hugeicons/core-free-icons/Copy01Icon'
+import Edit02Icon from '@hugeicons/core-free-icons/Edit02Icon'
+import ArrowDown01Icon from '@hugeicons/core-free-icons/ArrowDown01Icon'
 import File02Icon from '@hugeicons/core-free-icons/File02Icon'
 import FileAddIcon from '@hugeicons/core-free-icons/FileAddIcon'
 import FileScriptIcon from '@hugeicons/core-free-icons/FileScriptIcon'
@@ -53,6 +55,7 @@ function icon(name: string, svg: IconSvgElement): TimelineIcon {
 export const ArrowDown = /* @__PURE__ */ icon('ArrowDown', ArrowDown02Icon)
 export const Brain = /* @__PURE__ */ icon('Brain', Brain01Icon)
 export const Check = /* @__PURE__ */ icon('Check', Tick02Icon)
+export const ChevronDown = /* @__PURE__ */ icon('ChevronDown', ArrowDown01Icon)
 export const ChevronRight = /* @__PURE__ */ icon('ChevronRight', ArrowRight01Icon)
 export const CircleX = /* @__PURE__ */ icon('CircleX', CancelCircleIcon)
 export const ClipboardList = /* @__PURE__ */ icon('ClipboardList', Task01Icon)
@@ -72,6 +75,7 @@ export const Logout = /* @__PURE__ */ icon('Logout', Logout01Icon)
 export const MessageQuestion = /* @__PURE__ */ icon('MessageQuestion', BubbleChatQuestionIcon)
 export const MessageSquare = /* @__PURE__ */ icon('MessageSquare', BubbleChatIcon)
 export const Monitor = /* @__PURE__ */ icon('Monitor', ComputerIcon)
+export const Pencil = /* @__PURE__ */ icon('Pencil', Edit02Icon)
 export const Paperclip = /* @__PURE__ */ icon('Paperclip', Attachment01Icon)
 export const Plug = /* @__PURE__ */ icon('Plug', PlugIcon)
 export const Bot = /* @__PURE__ */ icon('Bot', Robot01Icon)
