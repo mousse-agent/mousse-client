@@ -17,7 +17,7 @@ import {
   applyEffortToModelId,
   type ModelFamily
 } from '../lib/modelVariants'
-import { ArrowDown, ArrowUp, Check, Copy, LayoutGrid, Pencil, ShieldCheck, ShieldOff, Sparkles, Star, Steer, Trash2, Wand2, Zap } from './icons'
+import { ArrowDown, ArrowTurnForward, ArrowUp, Check, Copy, LayoutGrid, Pencil, ShieldCheck, ShieldOff, Sparkles, Star, Trash2, Wand2, Zap } from './icons'
 import { ProviderIcon } from './providerIcons'
 import { SearchField } from './primitives'
 import { Sheet } from './Sheet'
@@ -430,8 +430,8 @@ export function QueueItemSheet({ item, onClose, canSteer, isFirst, isLast, onSte
       {item && (
         <div className="m-options" role="menu" aria-label="Queued message">
           <p className="m-queue-preview">{item.content}</p>
-          {canSteer && <SheetOption leading={<Steer size={16} />} title="Steer into the current turn" onClick={run(onSteer)} />}
-          <SheetOption leading={<Pencil size={16} />} title="Edit" detail="Moves it back to the composer" onClick={run(onEdit)} />
+          {canSteer && <SheetOption leading={<ArrowTurnForward size={16} />} title="Send now" onClick={run(onSteer)} />}
+          <SheetOption leading={<Pencil size={16} />} title="Edit" detail="Edits it in place; it keeps its place" onClick={run(onEdit)} />
           {!isFirst && <SheetOption leading={<ArrowUp size={16} />} title="Move up" onClick={run((entry) => onMove(entry, -1))} />}
           {!isLast && <SheetOption leading={<ArrowDown size={16} />} title="Move down" onClick={run((entry) => onMove(entry, 1))} />}
           <SheetOption leading={<Copy size={16} />} title="Copy text" onClick={run((entry) => { void navigator.clipboard?.writeText(entry.content).catch(() => undefined) })} />

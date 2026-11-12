@@ -787,13 +787,75 @@ html[data-theme='light'] .m-provider-icon--mono { filter: none; }
 .m-command__args { font-weight: 400; color: var(--ui-faint); }
 .m-command__detail { font-size: 12.5px; color: var(--text-secondary); }
 
-/* Queued messages (QueuedMessages). */
-.m-queue { display: flex; flex-direction: column; gap: 4px; padding: 6px 6px 6px 12px; border-radius: 14px; border: 1px solid var(--ui-line); background: color-mix(in srgb, var(--ui-raised) 70%, transparent); }
-.m-queue__heading { font-size: 11.5px; font-weight: 600; color: var(--text-secondary); letter-spacing: 0.02em; }
-.m-queue ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.m-queue__item { display: flex; align-items: center; gap: 4px; min-height: 36px; }
-.m-queue__text { flex: 1; min-width: 0; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.m-queue__badge { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; color: var(--text-secondary); }
+/* Queued messages at the end of the conversation (QueuedMessages, queued-messages.css): each one a sent
+   prompt's bubble, dimmed until it sends, with a line of actions under it. A phone has no hover, so the
+   line's buttons always show, at half strength. */
+.m-queued { display: flex; flex-direction: column; margin-top: 10px; }
+.m-queued__item { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.m-queued__bubble { opacity: 0.6; transition: opacity 150ms ease; -webkit-touch-callout: none; }
+.m-queued__item[data-busy] .m-queued__bubble { opacity: 0.4; }
+.m-queued__images { display: inline-flex; align-items: center; gap: 3px; margin-left: 8px; font-size: 12px; color: var(--text-secondary); vertical-align: middle; }
+.m-queued__line {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  min-height: 34px;
+  font-size: 13px;
+  color: var(--an-foreground-muted);
+}
+.m-queued__btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--an-foreground-muted);
+  opacity: 0.7;
+  transition: background-color 150ms ease, opacity 150ms ease;
+}
+/* Grow the hit area toward 44px without growing the line. */
+.m-queued__btn::after { content: ''; position: absolute; inset: -6px 0; }
+.m-queued__btn:active:not(:disabled) { opacity: 1; background: var(--ui-pressed); }
+.m-queued__btn:disabled { opacity: 0.3; }
+.m-queued__btn:focus-visible { outline: none; opacity: 1; background-image: var(--ui-focus-layer); }
+/* Send now (and Save) is the line's one coloured action. */
+.m-queued__btn--accent { color: var(--accent); opacity: 0.9; }
+.m-queued__state { display: inline-flex; align-items: center; gap: 4px; padding: 0 4px 0 6px; }
+.m-queued__line--label { min-height: 28px; }
+/* Edit in place: the bubble becomes a small editor of the same shape, at full strength. */
+.m-queued__editor {
+  box-sizing: border-box;
+  width: calc(100% - 24px);
+  padding: 7px 14px;
+  border-radius: var(--an-message-border-radius);
+  background: var(--an-user-message-bg);
+  border: 1px solid var(--ui-line-strong);
+}
+.m-queued__editor textarea {
+  display: block;
+  width: 100%;
+  max-height: 40vh;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  resize: none;
+  overflow-y: auto;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--chat-font-size);
+  line-height: var(--chat-line-height);
+}
+.m-queued__editor textarea:focus-visible { box-shadow: none; }
+.m-queued__changed { display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding-top: 4px; font-size: 13px; color: var(--warning); }
+.m-queued__text-btn { height: 30px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text-secondary); font: inherit; }
+.m-queued__text-btn:active { background: var(--ui-pressed); color: var(--text-primary); }
 .m-queue-preview { font-size: 14px; color: var(--text-secondary); white-space: pre-wrap; max-height: 120px; overflow: auto; }
 
 /* Menus in sheets (composer-mode-menu, model-picker-row). */

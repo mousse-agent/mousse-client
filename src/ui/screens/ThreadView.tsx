@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ComputerSession } from '../../connection/types'
 import { useThread } from '../hooks/useThread'
+import { useThreadQueue } from '../hooks/useThreadQueue'
 import { JumpToLatest, Timeline } from '../timeline/Timeline'
 import { planApprovalText } from '../timeline/context'
 import { ThreadComposer } from '../components/ThreadComposer'
+import { QueuedMessages } from '../components/QueuedMessages'
 import { MousseLogoOutline } from '../components/MousseLogoOutline'
 import { Notice, Spinner } from '../components/primitives'
 import { SpeechProvider } from '../speech/readAloud'
@@ -19,6 +21,10 @@ export interface ThreadViewProps {
 
 export function ThreadView({ session, threadId, onActivityChange, computerName }: ThreadViewProps) {
   const thread = useThread(session, threadId)
+  // While a compaction runs it holds the queue; Send now on the first message skips it.
+  const compacting = thread.active && thread.items.some((item) => item.kind === 'compaction' && item.status === 'streaming')
+  const hold = useMemo(() => (compacting ? {} : null), [compacting])
+  const queue = useThreadQueue(session, threadId, thread.active, hold)
   const scroller = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
   const [away, setAway] = useState(false)
@@ -43,7 +49,7 @@ export function ThreadView({ session, threadId, onActivityChange, computerName }
   useLayoutEffect(() => {
     const element = scroller.current
     if (element && stick.current) element.scrollTop = element.scrollHeight
-  }, [thread.items, thread.display])
+  }, [thread.items, thread.display, queue.items])
 
   useEffect(() => { stick.current = true }, [threadId])
 
@@ -80,12 +86,14 @@ export function ThreadView({ session, threadId, onActivityChange, computerName }
             />
           )}
           {thread.active && <div className="m-tl-reply-gap" data-reply-gap aria-hidden />}
+          {!thread.loading && <QueuedMessages queue={queue} />}
         </div>
       </div>
       <div className="m-thread__composer">
         {thread.items.length > 0 && <JumpToLatest live={thread.active} shown={away} onClick={jump} />}
         {thread.error && <Notice>{thread.error}</Notice>}
-        <ThreadComposer session={session} threadId={threadId} thread={thread} addition={addition} computerName={computerName} />
+        {queue.error && <Notice>{queue.error}</Notice>}
+        <ThreadComposer session={session} threadId={threadId} thread={thread} queue={queue} addition={addition} computerName={computerName} />
       </div>
     </div>
     </SpeechProvider>

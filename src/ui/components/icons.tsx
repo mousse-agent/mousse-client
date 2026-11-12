@@ -12,6 +12,8 @@ import PlayIcon from '@hugeicons/core-free-icons/PlayIcon'
 import Shield01Icon from '@hugeicons/core-free-icons/Shield01Icon'
 import Brain01Icon from '@hugeicons/core-free-icons/Brain01Icon'
 import ArrowTurnBackwardIcon from '@hugeicons/core-free-icons/ArrowTurnBackwardIcon'
+import ArrowTurnForwardIcon from '@hugeicons/core-free-icons/ArrowTurnForwardIcon'
+import Layers01Icon from '@hugeicons/core-free-icons/Layers01Icon'
 import ShuffleIcon from '@hugeicons/core-free-icons/ShuffleIcon'
 import ArrowDown02Icon from '@hugeicons/core-free-icons/ArrowDown02Icon'
 import ArrowUp01Icon from '@hugeicons/core-free-icons/ArrowUp01Icon'
@@ -110,6 +112,10 @@ export const Pencil = /* @__PURE__ */ createIcon('Pencil', Edit02Icon)
 export const Sparkles = /* @__PURE__ */ createIcon('Sparkles', SparklesIcon)
 export const Star = /* @__PURE__ */ createIcon('Star', StarIcon)
 export const Steer = /* @__PURE__ */ createIcon('Steer', Navigation03Icon)
+/** Send now / Steer: the arrow into the running reply. */
+export const ArrowTurnForward = /* @__PURE__ */ createIcon('ArrowTurnForward', ArrowTurnForwardIcon)
+/** The Queue send mode. */
+export const Layers = /* @__PURE__ */ createIcon('Layers', Layers01Icon)
 export const Trash2 = /* @__PURE__ */ createIcon('Trash2', Delete02Icon)
 export const ArrowUp = /* @__PURE__ */ createIcon('ArrowUp', ArrowUp02Icon)
 export const Check = /* @__PURE__ */ createIcon('Check', Tick02Icon)

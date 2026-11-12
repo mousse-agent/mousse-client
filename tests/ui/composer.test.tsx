@@ -5,6 +5,8 @@ import type { FakeMousseConnection } from '../../src/ui/dev/fakeConnection'
 
 beforeEach(() => installMatchMedia())
 
+const SHOWCASE = 't-showcase'
+
 const thread = (threadId: string) => [
   { name: 'home' as const },
   { name: 'thread' as const, nodeId: 'node-studio', threadId }
@@ -116,6 +118,46 @@ describe('composer controls', () => {
     const queue = await screen.findByRole('region', { name: 'Queued messages' })
     expect(within(queue).getByText('Second')).toBeInTheDocument()
     await waitFor(() => expect(session().sent.map((entry) => [entry.kind, entry.text])).toEqual([['send', 'First'], ['queue', 'Second'], ['send', 'Second']]), { timeout: 8000 })
+  })
+
+  it('shows queued messages at the end of the conversation, edits one in place and moves it', async () => {
+    const { session } = await open(SHOWCASE)
+    const queue = await screen.findByRole('region', { name: 'Queued messages' })
+    // The full text of each, with one Queued label for the group.
+    expect(within(queue).getByText(/first retry after 1 s/)).toBeInTheDocument()
+    expect(within(queue).getAllByText('Queued')).toHaveLength(1)
+
+    fireEvent.click(within(queue).getAllByRole('button', { name: 'Edit queued message' })[0])
+    const editor = within(queue).getByRole('textbox', { name: 'Edit queued message' })
+    fireEvent.change(editor, { target: { value: 'Move the pill first.' } })
+    fireEvent.click(within(queue).getByRole('button', { name: 'Save' }))
+    // (A controlled textarea's text is its value too: look for the bubble.)
+    expect(await within(queue).findByText('Move the pill first.', { selector: '.m-queued__bubble' })).toBeInTheDocument()
+    // Saved in place: same message, same place, nothing sent.
+    const listed = await session().listQueue(SHOWCASE)
+    expect(listed.map((item) => [item.id, item.content])).toEqual([['q-show-1', 'Move the pill first.'], ['q-show-2', expect.stringMatching(/^And add a test/)]])
+    expect(session().sent).toEqual([])
+
+    fireEvent.click(within(queue).getAllByRole('button', { name: 'Move down' })[0])
+    await waitFor(async () => expect((await session().listQueue(SHOWCASE)).map((item) => item.id)).toEqual(['q-show-2', 'q-show-1']))
+
+    fireEvent.click(within(queue).getAllByRole('button', { name: 'Remove queued message' })[0])
+    await waitFor(async () => expect((await session().listQueue(SHOWCASE)).map((item) => item.id)).toEqual(['q-show-1']))
+    expect(within(queue).queryByText(/first retry/)).not.toBeInTheDocument()
+  })
+
+  it('keeps an edit whose message changed elsewhere until the draft is kept or dropped', async () => {
+    const { session } = await open(SHOWCASE)
+    const queue = await screen.findByRole('region', { name: 'Queued messages' })
+    fireEvent.click(within(queue).getAllByRole('button', { name: 'Edit queued message' })[0])
+    fireEvent.change(within(queue).getByRole('textbox', { name: 'Edit queued message' }), { target: { value: 'Mine' } })
+    await session().editQueued(SHOWCASE, 'q-show-1', 'Theirs')
+    fireEvent.click(within(queue).getByRole('button', { name: 'Save' }))
+    expect(await within(queue).findByRole('alert')).toHaveTextContent('Changed elsewhere')
+    expect(within(queue).getByRole('button', { name: 'Save' })).toBeDisabled()
+    fireEvent.click(within(queue).getByRole('button', { name: 'Keep mine' }))
+    fireEvent.click(within(queue).getByRole('button', { name: 'Save' }))
+    await waitFor(async () => expect((await session().listQueue(SHOWCASE))[0].content).toBe('Mine'))
   })
 
   it('stops a turn with /stop', async () => {
