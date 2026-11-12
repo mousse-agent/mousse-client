@@ -603,6 +603,9 @@ button.m-applet__name:focus-visible { outline: 2px solid var(--accent); outline-
 /* global.css .turn-work: label then a hairline. */
 .m-tl-work { display: flex; align-items: center; gap: 10px; color: var(--an-foreground-muted); font-size: 12.5px; }
 .m-tl-work__label { flex: none; font-variant-numeric: tabular-nums; }
+/* " · Stopped" after a cut-off turn's time: one muted word. */
+.m-tl-work__end { color: var(--an-foreground-muted); }
+.m-sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 /* A finished turn's line opens its work in place: "Worked for 32s ›"; the chevron turns down while it is open. */
 .m-tl-work__toggle { display: inline-flex; align-items: center; gap: 2px; min-height: 32px; margin: -8px 0; padding: 0 6px 0 0; border: 0; background: none; color: inherit; font: inherit; -webkit-tap-highlight-color: transparent; }
 .m-tl-work__toggle:active { color: var(--text-primary); }

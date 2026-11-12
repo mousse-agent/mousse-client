@@ -4,6 +4,7 @@ import { afterEach } from 'vitest'
 import type { ChatItem, ThreadDisplayState } from '../../src/connection/types'
 import { JumpToLatest, Timeline } from '../../src/ui/timeline/Timeline'
 import { Markdown, keepLiteralBackslashes } from '../../src/ui/timeline/Markdown'
+import { toChatItem } from '../../src/connection/timelineItems'
 
 afterEach(() => cleanup())
 
@@ -293,5 +294,36 @@ describe('timeline', () => {
     } finally {
       height.mockRestore()
     }
+  })
+
+  it('marks a turn a Stop or a restart cut off, and keeps the order it ran in', () => {
+    const turn: ChatItem[] = [
+      items[0],
+      { id: 'w1', role: 'assistant', kind: 'message', text: 'Running the tests first.', createdAt: at + 1000, status: 'done' },
+      { ...items[2], id: 'b9', createdAt: at + 2000, status: 'streaming' },
+      { id: 'end', role: 'system', kind: 'message', text: 'Turn stopped.', createdAt: at + 3000, status: 'done', turnEnd: { cause: 'user' } },
+      { id: 'u9', role: 'user', kind: 'message', text: 'Go on', createdAt: at + 10_000, status: 'done' },
+      { id: 'end2', role: 'system', kind: 'message', text: '', createdAt: at + 12_000, status: 'done', turnEnd: { cause: 'daemon_restart' } },
+    ]
+    const { container } = render(<Timeline items={turn} display={idle} active={false} />)
+    const [first, second] = screen.getAllByTestId('work-status')
+    expect(first).toHaveTextContent('Worked for 3s · Stopped: You stopped this turn before it finished.')
+    expect(second).toHaveTextContent('Worked for 2s · Interrupted')
+    // The marker line itself shows nothing.
+    expect(screen.queryByText('Turn stopped.')).not.toBeInTheDocument()
+    // The text written before the command stays above it, and the cut-off command reads Interrupted.
+    fireEvent.click(within(first).getByRole('button'))
+    const rows = [...container.querySelectorAll('.m-tl-turn')[0].querySelectorAll('.m-tl-answer > *')].map((node) => node.textContent)
+    expect(rows[0]).toContain('Running the tests first.')
+    expect(rows[1]).toContain('Interrupted')
+  })
+
+  it('reads why a turn was cut off from the transcript line', () => {
+    const stop = toChatItem({ id: 's', role: 'system', content: 'Turn stopped.', timestamp: '2026-11-13T10:00:00Z' })
+    expect(stop?.turnEnd).toEqual({ cause: 'user' })
+    const crash = toChatItem({ id: 'c', role: 'system', content: 'x', timestamp: '2026-11-13T10:00:00Z', turnEnd: { cause: 'crash', tools: ['Bash'] } })
+    expect(crash?.turnEnd).toEqual({ cause: 'crash', tools: ['Bash'] })
+    const failed = toChatItem({ id: 'e', role: 'assistant', content: '', timestamp: '2026-11-13T10:00:00Z', error: { message: 'Overloaded.', code: 'provider_overloaded', details: { supportId: 'ab-12' } } })
+    expect(failed?.error).toEqual({ message: 'Overloaded. Reference: ab-12', code: 'provider_overloaded' })
   })
 })

@@ -3,7 +3,7 @@
 // "Working for…" line, per-message actions, the turn's file changes, and the end-of-thread
 // states (interrupted, failed, provider unreachable, questions waiting).
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
-import type { ChatItem, QuestionAnswers, ThreadDisplayState } from '../../connection/types'
+import type { ChatItem, QuestionAnswers, ThreadDisplayState, TurnEnd } from '../../connection/types'
 import { normalizeToolName } from '../../connection/timelineItems'
 import { copyText } from './actions'
 import { PLAN_APPROVAL_PREFIX, RecoveredFailuresContext, TimelineActionsContext, type TimelineActions } from './context'
@@ -360,12 +360,15 @@ function WorkStatus({
   startedAt,
   durationMs,
   fold,
+  end,
 }: {
   live: boolean
   startedAt?: number
   durationMs?: number
   /** A finished turn whose work folds behind this line: the line opens it in place ("Worked for 32s ›"). */
   fold?: { open: boolean; onToggle: () => void }
+  /** A finished turn that a Stop, a restart or a crash cut off: " · Stopped" after its time. */
+  end?: TurnEnd
 }) {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -377,19 +380,46 @@ function WorkStatus({
   const elapsed = live && startedAt ? Math.max(0, now - startedAt) : durationMs
   // A turn with work to open always has its line, even with no time to show.
   const label = elapsed !== undefined ? (live ? formatWorkingFor(elapsed) : formatWorkedFor(elapsed)) : fold && !live ? 'Worked' : undefined
-  if (label === undefined) return null
+  const mark = !live && end ? <TurnEndLabel end={end} separate={label !== undefined} /> : null
+  if (label === undefined && !mark) return null
   return (
     <div className="m-tl-work" data-testid="work-status" data-live={live || undefined}>
       {fold && !live ? (
         <button type="button" className="m-tl-work__label m-tl-work__toggle" aria-expanded={fold.open} onClick={fold.onToggle}>
           {label}
+          {mark}
           <ChevronRight size={14} className={`m-tl-work__chevron${fold.open ? ' m-tl-work__chevron--open' : ''}`} />
         </button>
       ) : (
-        <Shimmer active={live} className="m-tl-work__label">{label}</Shimmer>
+        <Shimmer active={live} className="m-tl-work__label">
+          {label}
+          {mark}
+        </Shimmer>
       )}
       <div className="m-tl-work__rule" aria-hidden />
     </div>
+  )
+}
+
+const TURN_END_WORDS: Record<TurnEnd['cause'], { word: string; detail: string }> = {
+  user: { word: 'Stopped', detail: 'You stopped this turn before it finished.' },
+  agent: { word: 'Stopped', detail: 'An agent in another thread stopped this turn.' },
+  daemon_restart: { word: 'Interrupted', detail: 'Mousse restarted during this turn.' },
+  crash: { word: 'Interrupted', detail: 'Mousse quit during this turn.' },
+}
+
+/** " · Stopped" after a cut-off turn's time: one muted word; why goes to its tooltip and to screen readers. */
+function TurnEndLabel({ end, separate }: { end: TurnEnd; separate: boolean }) {
+  const { word, detail } = TURN_END_WORDS[end.cause] ?? TURN_END_WORDS.user
+  const title = end.tools?.length ? `${detail} May have run: ${end.tools.join(', ')}` : detail
+  return (
+    <>
+      {separate ? ' · ' : null}
+      <span className="m-tl-work__end" data-turn-end={end.cause} title={title}>
+        {word}
+        <span className="m-sr-only">: {title}</span>
+      </span>
+    </>
   )
 }
 
@@ -483,6 +513,7 @@ const TurnView = memo(function TurnView({
   endedBadly = false,
   phase,
   waiting = false,
+  hideEnd = false,
 }: {
   turn: Turn
   live: boolean
@@ -491,13 +522,19 @@ const TurnView = memo(function TurnView({
   /** The running turn's phase, for its live line. */
   phase?: string
   waiting?: boolean
+  /** The last turn's Stopped mark gives way while the "Run interrupted" notice shows for it. */
+  hideEnd?: boolean
 }) {
-  const { flow, nested } = useMemo(() => nestUnderTasks(turn.replies), [turn.replies])
-  // A finished turn ends on its answer: the work that led to it comes above it.
-  const ordered = useMemo(() => (live ? flow : settleFinishedTurn(flow, endedBadly)), [flow, live, endedBadly])
+  // Mousse's line that a Stop or a restart cut the turn off shows nothing itself: the Worked line reads it.
+  const end = useMemo(() => [...turn.replies].reverse().find((item) => item.turnEnd)?.turnEnd, [turn.replies])
+  const replies = useMemo(() => (end ? turn.replies.filter((item) => !item.turnEnd) : turn.replies), [turn.replies, end])
+  const { flow, nested } = useMemo(() => nestUnderTasks(replies), [replies])
+  const cutOff = endedBadly || !!end
+  // A finished turn ends on its answer: the work that led to it comes above it. A cut-off one keeps its order.
+  const ordered = useMemo(() => (live ? flow : settleFinishedTurn(flow, cutOff)), [flow, live, cutOff])
   const segments = useMemo(() => segmentReplies(ordered, live), [ordered, live])
   // A failure is loud only when nothing came after it and the turn failed or was cut off.
-  const recovered = useMemo(() => recoveredFailures(turn.replies, !live && endedBadly), [turn.replies, live, endedBadly])
+  const recovered = useMemo(() => recoveredFailures(replies, !live && cutOff), [replies, live, cutOff])
   const folded = useMemo(() => (live ? segments.map(() => false) : foldTurnWork(segments.map((segment) => foldRowOf(segment, recovered)))), [segments, live, recovered])
   const hasFold = folded.some(Boolean)
   const [workOpen, setWorkOpen] = useState(false)
@@ -542,6 +579,7 @@ const TurnView = memo(function TurnView({
             startedAt={startedAt ?? turn.user.createdAt}
             durationMs={durationMs}
             fold={hasFold ? { open: workOpen, onToggle: () => setWorkOpen((open) => !open) } : undefined}
+            end={hideEnd ? undefined : end}
           />
         )}
         <div className="m-tl-answer">
@@ -619,6 +657,7 @@ export function Timeline({ items, display, active, onApprovePlan, onAddToDraft, 
               endedBadly={last && (display.phase === 'failed' || display.phase === 'stopped')}
               phase={last && active ? display.phase : undefined}
               waiting={last && active && waiting}
+              hideEnd={last && stoppedAfterLast}
             />
           )
         })}

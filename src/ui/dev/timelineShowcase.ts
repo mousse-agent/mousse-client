@@ -207,6 +207,19 @@ export function showcaseItems(base: number): ChatItem[] {
       status: 'error',
       error: { message: 'Provider returned 429: rate limited. Try again in a minute.', code: 'rate_limited' },
     },
+    { id: 's-u3', role: 'user', kind: 'message', text: 'Also write the docs note.', createdAt: t(20), status: 'done' },
+    { id: 's-n3', role: 'assistant', kind: 'message', text: 'Checking how the docs are built first.', createdAt: t(19.8), status: 'done' },
+    {
+      id: 's-bs3',
+      role: 'tool',
+      kind: 'tool',
+      text: '',
+      createdAt: t(19.6),
+      status: 'done',
+      toolName: 'Bash',
+      tool: { name: 'Bash', title: 'Bash', summary: '', details: [], input: { command: 'npm run docs:build' } },
+    },
+    { id: 's-end3', role: 'system', kind: 'message', text: 'Turn stopped.', createdAt: t(19), status: 'done', turnEnd: { cause: 'user' } },
   ]
 }
 

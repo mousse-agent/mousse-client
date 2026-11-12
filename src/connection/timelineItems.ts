@@ -13,6 +13,7 @@ import type {
   ChatToolCall,
   PendingQuestion,
   PendingQuestions,
+  TurnEnd,
 } from './types'
 import type { DesktopMessage } from './threadProjection'
 
@@ -240,10 +241,30 @@ function errorOf(value: unknown): { message: string; code?: string } | undefined
   if (!value) return undefined
   if (typeof value === 'string') return { message: value }
   if (isObject(value)) {
-    const message = str(value.message) || 'The computer reported an error.'
+    let message = str(value.message).trim() || 'The computer reported an error.'
+    // The reference the error was logged under, when the message does not name it (mousseToUI.ts errorText).
+    const supportId = isObject(value.details) ? str(value.details.supportId) : ''
+    if (supportId && !message.includes(supportId)) message = `${message} Reference: ${supportId}`
     return { message, ...(str(value.code) ? { code: str(value.code) } : {}) }
   }
   return { message: 'The computer reported an error.' }
+}
+
+/** The transcript lines of a turn a Stop or a restart cut off; lines older than `turnEnd` are read by them. */
+const TURN_STOPPED_TEXT = 'Turn stopped.'
+const RESTART_INTERRUPTED_TEXT = 'Turn interrupted by a Mousse restart.'
+const TURN_END_CAUSES = new Set(['user', 'agent', 'daemon_restart', 'crash'])
+
+/** Why a Mousse line says its turn was cut off, or undefined when it says nothing of the kind. */
+function turnEndOf(message: DesktopMessage): TurnEnd | undefined {
+  const end = message.turnEnd
+  if (isObject(end) && TURN_END_CAUSES.has(str(end.cause))) {
+    const tools = Array.isArray(end.tools) ? end.tools.filter((tool): tool is string => typeof tool === 'string').slice(0, 20) : []
+    return { cause: str(end.cause) as TurnEnd['cause'], ...(tools.length ? { tools } : {}) }
+  }
+  if (message.content === TURN_STOPPED_TEXT) return { cause: 'user' }
+  if (message.content === RESTART_INTERRUPTED_TEXT) return { cause: 'daemon_restart' }
+  return undefined
 }
 
 const modelLabel = (value: unknown): string =>
@@ -317,6 +338,10 @@ export function toChatItem(message: DesktopMessage): ChatItem | undefined {
     if (!message.content.trim() && itemKind !== 'compaction') return undefined
     return { ...base, role: 'system', kind: itemKind, text: message.content, status: streaming ? 'streaming' : 'done' }
   }
+
+  // The line a Stop, a restart or a crash wrote as it cut the turn off: a marker the turn's Worked line reads.
+  const turnEnd = message.role === 'system' ? turnEndOf(message) : undefined
+  if (turnEnd) return { ...base, role: 'system', kind: 'message', text: message.content, status: 'done', turnEnd }
 
   // Plain user / assistant / system text.
   if (message.role === 'assistant' && streaming && !message.content.trim() && !error) return undefined
