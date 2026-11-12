@@ -2,11 +2,14 @@
 export class NetError extends Error {
   readonly code: string
   readonly retryable: boolean
-  constructor(code: string, message: string = code, options?: { retryable?: boolean; cause?: unknown }) {
+  /** Why a `forbidden` refusal happened, when the computer says (`setting_off`, `capability`, ...). */
+  readonly reason?: string
+  constructor(code: string, message: string = code, options?: { retryable?: boolean; cause?: unknown; reason?: string }) {
     super(message, options?.cause === undefined ? undefined : { cause: options.cause })
     this.name = 'NetError'
     this.code = code
     this.retryable = options?.retryable ?? RETRYABLE.has(code)
+    if (options?.reason) this.reason = options.reason
   }
 }
 
@@ -44,6 +47,12 @@ export interface WireError {
   cause?: Array<{ code?: string; message: string }>
 }
 
+/** The desktop's sync session puts a refusal's reason in the cause chain as `forbidden.<reason>`. */
+const FORBIDDEN_REASON_PREFIX = 'forbidden.'
+
 export function fromWireError(error: WireError): NetError {
-  return new NetError(error.code, error.message || error.code, { retryable: error.retryable })
+  const reason = error.code === 'forbidden'
+    ? error.cause?.find((entry) => entry.code?.startsWith(FORBIDDEN_REASON_PREFIX))?.code?.slice(FORBIDDEN_REASON_PREFIX.length)
+    : undefined
+  return new NetError(error.code, error.message || error.code, { retryable: error.retryable, ...(reason && /^[a-z_]{1,32}$/.test(reason) ? { reason } : {}) })
 }

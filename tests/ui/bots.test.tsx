@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
-import { isBotsUnsupported, parseAttachmentImage, parseBot, parseBotMessage, parseDetail, parseLook, parseMemory, SessionBots } from '../../src/connection/bots'
+import { isBotsUnsupported, parseAttachmentPart, plainBotError, parseBot, parseBotMessage, parseDetail, parseLook, parseMemory, SessionBots } from '../../src/connection/bots'
 import { parseLists } from '../../src/connection/lists'
+import { fromWireError } from '../../src/net/errors'
 import { mergeLists } from '../../src/ui/sidebar/model'
 import { botMessageTime, pinnedOf, quoteOf, upsertMessages, workElapsed } from '../../src/ui/bots/BotChat'
 import { botMessageLabel, placeMessages } from '../../src/ui/bots/messageGroups'
@@ -86,7 +87,8 @@ describe('the bot methods', () => {
       if (method === 'bots.chat.send') return { message: { seq: 4, id: 'm4', at: 'now', author: 'owner', kind: 'text', text: 'hi', chips: [], clientRequestId: params.clientRequestId } }
       if (method === 'bots.reminders.cancel') return { summary: { id: 'b1', name: 'Pip' }, permissions: [], runs: [], reminders: [] }
       if (method === 'bots.memory.list') return { entries: [{ id: 'm1', text: 'No em dashes', kind: 'owner', status: 'active' }, { id: 'm2', text: null, status: 'forgotten' }], gauge: '' }
-      if (method === 'bots.chat.attachment') return { mimeType: 'image/png', data: 'iVBORw0KGgo=' }
+      // A 6-byte image in two parts.
+      if (method === 'bots.chat.attachment') return params.offset ? { name: 'p.png', mime: 'image/png', size: 6, offset: 3, dataB64: btoa('def') } : { name: 'p.png', mime: 'image/png', size: 6, offset: 0, dataB64: btoa('abc') }
       return {}
     })
     expect((await bots.send('b1', 'hi', undefined, 'req-1')).clientRequestId).toBe('req-1')
@@ -94,26 +96,41 @@ describe('the bot methods', () => {
     expect((await bots.cancelReminder('b1', 'rem_1')).reminders).toEqual([])
     expect(await bots.memory('b1')).toEqual([{ id: 'm1', text: 'No em dashes', kind: 'owner' }])
     await bots.forgetMemory('b1', 'm1')
-    expect(await bots.attachment('b1', 'm4', 'photo.png')).toEqual({ mimeType: 'image/png', data: 'iVBORw0KGgo=' })
-    expect(calls.map((call) => call.method)).toEqual(['bots.chat.send', 'bots.reminders.cancel', 'bots.memory.list', 'bots.memory.forget', 'bots.chat.attachment'])
+    const image = await bots.attachment('b1', 'm4', 1)
+    expect(image.mimeType).toBe('image/png')
+    expect(new TextDecoder().decode(image.bytes)).toBe('abcdef')
+    expect(calls.map((call) => call.method)).toEqual(['bots.chat.send', 'bots.reminders.cancel', 'bots.memory.list', 'bots.memory.forget', 'bots.chat.attachment', 'bots.chat.attachment'])
     expect(calls[1].params).toEqual({ botId: 'b1', reminderId: 'rem_1' })
-    expect(calls[4].params).toEqual({ botId: 'b1', messageId: 'm4', name: 'photo.png' })
+    expect(calls[4].params).toEqual({ botId: 'b1', messageId: 'm4', index: 1 })
+    expect(calls[5].params).toEqual({ botId: 'b1', messageId: 'm4', index: 1, offset: 3 })
   })
 
-  it('marks a method an older computer lacks as unsupported, so the phone can leave its feature out', async () => {
-    const bots = new SessionBots(async () => { throw Object.assign(new Error('forbidden'), { code: 'forbidden' }) })
-    const failure = await bots.memory('b1').catch((error: unknown) => error)
+  it('says each refusal plainly: the computer sends only its code', async () => {
+    // The computer's words never cross the wire: a refusal arrives as "Not permitted." with a code, and maybe a reason.
+    const refusal = (code: string, reason?: string) => Object.assign(new Error('Not permitted.'), { code, ...(reason ? { reason } : {}) })
+    const failure = await new SessionBots(async () => { throw refusal('forbidden') }).memory('b1').catch((error: unknown) => error)
     expect(isBotsUnsupported(failure)).toBe(true)
-    const refused = await new SessionBots(async () => { throw Object.assign(new Error('Answer this on the computer.'), { code: 'forbidden' }) }).chat('b1').catch((error: unknown) => error)
-    expect(isBotsUnsupported(refused)).toBe(false)
+    expect(String(plainBotError('bots.chat.list', refusal('forbidden', 'setting_off')))).toContain('doesn’t share its bots')
+    expect(isBotsUnsupported(plainBotError('bots.chat.list', refusal('forbidden', 'setting_off')))).toBe(false)
+    expect((plainBotError('bots.asks.answer', refusal('forbidden')) as Error).message).toBe('Answer this on the computer.')
+    expect((plainBotError('bots.reminders.cancel', refusal('stream_unknown')) as Error).message).toBe('This reminder is gone.')
+    expect((plainBotError('bots.get', refusal('stream_unknown')) as Error).message).toBe('This bot is gone.')
+    // The sync session carries the reason in the cause chain.
+    const wire = fromWireError({ code: 'forbidden', message: 'Not permitted.', retryable: false, cause: [{ code: 'forbidden.setting_off', message: 'Not permitted.' }] })
+    expect(wire.reason).toBe('setting_off')
+    expect(fromWireError({ code: 'forbidden', message: 'Not permitted.', retryable: false }).reason).toBeUndefined()
+    const offline = Object.assign(new Error('The computer is offline.'), { code: 'route_unreachable' })
+    expect(plainBotError('bots.get', offline)).toBe(offline)
   })
 
   it('reads an older computer’s detail without reminders, and only raster images', () => {
     expect(parseDetail({ summary: { id: 'b1' }, permissions: [], runs: [] })).not.toHaveProperty('reminders')
     expect(parseDetail({ summary: { id: 'b1' }, permissions: [], runs: [], reminders: [{ id: 'r', dueAt: 'x', text: 'Pay', work: true }, { id: 'bad' }] })?.reminders).toEqual([{ id: 'r', dueAt: 'x', text: 'Pay', work: true }])
     expect(parseMemory({})).toBeUndefined()
-    expect(parseAttachmentImage({ mimeType: 'image/svg+xml', data: 'PHN2Zz4=' })).toBeUndefined()
-    expect(parseAttachmentImage({ mimeType: 'image/png', data: '<script>' })).toBeUndefined()
+    expect(parseAttachmentPart({ mime: 'image/svg+xml', size: 5, offset: 0, dataB64: 'PHN2Zz4=' })).toBeUndefined()
+    expect(parseAttachmentPart({ mime: 'image/png', size: 5, offset: 0, dataB64: '<script>' })).toBeUndefined()
+    expect(parseAttachmentPart({ mime: 'image/png', size: 2, offset: 0, dataB64: btoa('abc') })).toBeUndefined()
+    expect(parseBotMessage({ seq: 1, id: 'm', author: 'owner', text: '', attachments: [{ name: 'a.png', mime: 'image/png', image: true }, { name: 'b.pdf' }] })?.attachments).toEqual([{ name: 'a.png', mime: 'image/png', image: true }, { name: 'b.pdf' }])
     expect(parseBotMessage({ seq: 1, id: 'm', author: 'owner', text: 'x', clientRequestId: 'r1' })?.clientRequestId).toBe('r1')
   })
 })
@@ -193,6 +210,10 @@ describe('bots on the phone', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Remove memory: No em dashes in summaries.' }))
     await waitFor(() => expect(screen.queryByText('No em dashes in summaries.')).not.toBeInTheDocument())
     expect(screen.getByText('Mail from the bank always needs me.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove search the web' }))
+    await waitFor(() => expect(screen.queryByText('Search the web')).not.toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Remove every day · 08:00' }))
+    expect(await screen.findByText(/Only when you message it/)).toBeInTheDocument()
   })
 
   it('lists the bots in the Chats tab and opens a bot’s chat', async () => {

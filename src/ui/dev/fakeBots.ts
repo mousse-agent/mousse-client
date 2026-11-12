@@ -1,13 +1,13 @@
 // Bots for the demo build (VITE_FAKE_CONNECTION=1) and the UI tests: two bots with a chat each, an
 // open ask, a piece of work, a reminder, pictures, and replies that arrive a moment after a message.
-import type { BotAttachmentImage, BotChatMessage, BotChatPage, BotDetail, BotLook, BotMemoryItem, BotReminderItem, ComputerBots, ListBot } from '../../connection/bots'
+import type { BotAttachmentImage, BotChatMessage, BotChatPage, BotDetail, BotLook, BotMemoryItem, BotPermissionItem, BotReminderItem, BotRunItem, ComputerBots, ListBot } from '../../connection/bots'
 
 /** A small picture: the photo the owner attached, and the chart in a reply. */
 const PICTURE = 'iVBORw0KGgoAAAANSUhEUgAAABgAAAAQCAIAAACDRijCAAADRklEQVR42g3MsQquIBgA0Pucd2lpaWlpaWlpaWlpEa6CCCKFEUYI8UEJIogURtTQ69z/PMD58xc9CbpTFDN05igUyJfIVcjWyDRoaxF0aEVIE7QwpASaJJIKDRoJQNwg5hANiET0789f/CT4TnHM8JnjUGBfYldhW2PT4K3F0OEVYU3wwrASeJJYKjxoLABzg5nDNGAS8S+iT0LvlMaMnjkNBfUldRW1NTUN3VoKHV0R1YQujCpBJ0mlooOmAig3lDlKAyWR/iL+JPxOecz4mfNQcF9yV3Fbc9PwreXQ8RVxTfjCuBJ8klwqPmgugHPDmeM0cBL5L+qfpL/TPmb9mfeh6H3Zu6q3dW+afmt76PoV9Zr0C+uV6CfZS9UPuhfQc9Mz19PQk9j/ovFJxjsdYzae+RiK0Zejq0Zbj6YZt3aEblzRqMm4sFGJcZKjVOOgRwEjNyNzIw0jieMvmp9kvtM5ZvOZz6GYfTm7arb1bJp5a2fo5hXNmswLm5WYJzlLNQ96FjBzMzM30zCTOP8i/ST6TnXM9JnrUGhfaldpW2vT6K3V0OkVaU30wrQSepJaKj1oLUBzo5nTNGgS9S+CJ4E7hZjBmUMowJfgKrA1mAa2FqCDFYEmsDBQAiYJUsGgQQBwA8wBDUAi/KL9SfY73WO2n/keit2Xu6t2W++m2bd2h25f0a7JvrBdiX2Su1T7oHcBOzc7czsNO4n7L7JPYu/UxsyeuQ2F9aV1lbW1NY3dWgudXZHVxC7MKmEnaaWyg7YCLDeWOUuDJdH+Iv8k/k59zPyZ+1B4X3pXeVt70/it9dD5FXlN/MK8En6SXio/aC/Ac+OZ8zR4Ev0vOp7kuNMjZseZH6E4fHm46rD1YZpjaw/ojhUdmhwLO5Q4JnlIdQz6EHBwczB30HCQePyi60muO71idp35FYrLl5erLltfprm29oLuWtGlybWwS4lrkpdU16AvARc3F3MXDReJ1y96n+S90zdm75m/oXh9+brqtfVrmndrX+jeFb2avAt7lXgn+Ur1DvoV8HLzMvfS8JL4/qLvSb47/WL2nfkXis+Xn6s+W3+m+bb2g+5b0afJt7BPiW+Sn1TfoD8BHzcfcx8NH4nfv/9RPP8vpV9HpQAAAABJRU5ErkJggg=='
 
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
 
-interface FakeBot { bot: ListBot; messages: BotChatMessage[]; reminders: BotReminderItem[]; memory: BotMemoryItem[] }
+interface FakeBot { bot: ListBot; messages: BotChatMessage[]; reminders: BotReminderItem[]; memory: BotMemoryItem[]; schedules: BotRunItem[]; permissions: BotPermissionItem[] }
 
 function initialBots(): FakeBot[] {
   return [
@@ -17,12 +17,14 @@ function initialBots(): FakeBot[] {
         look: { colour: 'teal', accessory: 'headphones' }, state: 'needs_you', stateText: 'Wants to read your Gmail',
         last: { text: 'I need to read your Gmail to sort it.', at: minutesAgo(12), author: 'bot' }, unread: 1, createdAt: minutesAgo(60 * 24 * 3),
       },
+      schedules: [{ id: 's1', label: 'every day · 08:00', nextAt: minutesAgo(-600), kind: 'schedule' }],
+      permissions: [{ id: 'p1', title: 'search the web', note: 'Only reading pages.', grantedAt: minutesAgo(60 * 24 * 3) }],
       reminders: [{ id: 'rem_1', dueAt: minutesAgo(-60 * 26), text: 'Pay the electricity bill' }],
       memory: [{ id: 'm1', text: 'Mail from the bank always needs me.', kind: 'owner' }, { id: 'm2', text: 'No em dashes in summaries.', kind: 'owner' }],
       messages: [
         { seq: 1, id: 'm1', at: minutesAgo(60 * 24 * 3), author: 'bot', kind: 'text', text: "Hi! I'm **Pip**. Each morning at 8 I'll sort your inbox and tell you what needs you.", chips: [{ icon: 'name', text: 'Picked a name', highlight: 'Pip' }] },
         { seq: 2, id: 'm1b', at: minutesAgo(60 * 24 * 3 - 1), author: 'bot', kind: 'text', text: 'Tell me what matters most, and I’ll remember it.', chips: [] },
-        { seq: 3, id: 'm1c', at: minutesAgo(60 * 24 * 2), author: 'owner', kind: 'text', text: 'Here’s the receipt from the bank, keep an eye out for more like it.', chips: [], attachments: [{ name: 'receipt.png' }] },
+        { seq: 3, id: 'm1c', at: minutesAgo(60 * 24 * 2), author: 'owner', kind: 'text', text: 'Here’s the receipt from the bank, keep an eye out for more like it.', chips: [], attachments: [{ name: 'receipt.png', mime: 'image/png', image: true }, { name: 'statement.pdf', mime: 'application/pdf' }] },
         { seq: 4, id: 'm1d', at: minutesAgo(60 * 24 * 2 - 2), author: 'bot', kind: 'text', text: `Got it. This week so far:\n\n![Mail this week](data:image/png;base64,${PICTURE})\n\nMore on [the bank’s site](https://example.com/statements).`, chips: [{ icon: 'memory', text: 'Remembered', highlight: 'bank receipts' }] },
         { seq: 5, id: 'bm_rem_0', at: minutesAgo(60 * 20), author: 'bot', kind: 'run_report', text: 'Reminder: water the plants.', chips: [] },
         { seq: 6, id: 'm2', at: minutesAgo(15), author: 'owner', kind: 'text', text: 'Can you start today?', chips: [] },
@@ -42,6 +44,8 @@ function initialBots(): FakeBot[] {
         last: { text: 'Checking the nightly now.', at: minutesAgo(3), author: 'bot' }, unread: 0, createdAt: minutesAgo(60 * 24 * 9),
         work: [{ id: 'act-9', title: 'Check tonight’s nightly', status: 'running', startedAt: minutesAgo(4) }],
       },
+      schedules: [],
+      permissions: [{ id: 'p1', title: 'search the web', note: 'Only reading pages.', grantedAt: minutesAgo(60 * 24 * 9) }],
       reminders: [],
       memory: [],
       messages: [
@@ -139,8 +143,8 @@ export class FakeBots implements ComputerBots {
     const entry = this.find(botId)
     return {
       summary: { ...entry.bot },
-      permissions: [{ id: 'p1', title: 'search the web', note: 'Only reading pages.', grantedAt: entry.bot.createdAt }],
-      runs: botId === 'bot-inbox' ? [{ id: 's1', label: 'every day · 08:00', nextAt: minutesAgo(-600), kind: 'schedule' }] : [],
+      permissions: [...entry.permissions],
+      runs: [...entry.schedules],
       reminders: [...entry.reminders],
     }
   }
@@ -160,11 +164,24 @@ export class FakeBots implements ComputerBots {
     entry.memory = entry.memory.filter((item) => item.id !== id)
   }
 
-  async attachment(botId: string, messageId: string, name: string): Promise<BotAttachmentImage> {
+  async attachment(botId: string, messageId: string, index: number): Promise<BotAttachmentImage> {
     const message = this.find(botId).messages.find((candidate) => candidate.id === messageId)
-    if (!message?.attachments?.some((file) => file.name === name)) throw new Error('This file is gone.')
-    return { mimeType: 'image/png', data: PICTURE }
+    if (!message?.attachments?.[index]?.image) throw new Error('This picture is gone.')
+    return { mimeType: 'image/png', bytes: Uint8Array.from(atob(PICTURE), (char) => char.charCodeAt(0)) }
   }
+
+  async removeSchedule(botId: string, scheduleId: string): Promise<BotDetail> {
+    const entry = this.find(botId)
+    entry.schedules = entry.schedules.filter((run) => run.id !== scheduleId)
+    return this.get(botId)
+  }
+
+  async revokePermission(botId: string, permissionId: string): Promise<BotDetail> {
+    const entry = this.find(botId)
+    entry.permissions = entry.permissions.filter((item) => item.id !== permissionId)
+    return this.get(botId)
+  }
+
 
   async pause(botId: string): Promise<ListBot> {
     const entry = this.find(botId)
@@ -183,7 +200,7 @@ export class FakeBots implements ComputerBots {
   async create(input: { look: BotLook; description: string; name?: string }): Promise<ListBot> {
     const id = `bot-${++this.seq}`
     const name = input.name?.trim() || 'Nova'
-    const entry: FakeBot = { bot: { id, name, description: input.description, look: input.look, state: 'idle', stateText: '', unread: 1, createdAt: new Date().toISOString() }, messages: [], reminders: [], memory: [] }
+    const entry: FakeBot = { bot: { id, name, description: input.description, look: input.look, state: 'idle', stateText: '', unread: 1, createdAt: new Date().toISOString() }, messages: [], reminders: [], memory: [], schedules: [], permissions: [] }
     this.bots.push(entry)
     this.push(entry, { author: 'bot', kind: 'text', text: `Hi, I'm **${name}**. ${input.description} Tell me when to start.`, chips: [{ icon: 'name', text: 'Picked a name', highlight: name }] })
     this.changed()

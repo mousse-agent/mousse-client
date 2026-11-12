@@ -3,7 +3,9 @@
 // computer offers phones. Shapes follow mousse/src/shared/bots/personal/chat.ts and the phone methods
 // of mousse/src/mms/bridge/remote/RemoteBots.ts. No payload carries a model, an instance id or a
 // computer path. A computer from before a method or field leaves that feature out on the phone: a
-// method it does not offer fails with `BotsUnsupportedError`, and a missing field reads as absent.
+// method it does not offer fails with `BotsUnsupportedError`, and a missing field reads as absent. A
+// computer whose "Share bots with other devices" is off lists no bots and refuses every call
+// (`BotsNotSharedError`).
 
 export type BotState = 'idle' | 'working' | 'needs_you' | 'stuck' | 'paused'
 export type BotChipIcon = 'search' | 'web' | 'read' | 'edit' | 'schedule' | 'memory' | 'ask' | 'think' | 'name' | 'warning'
@@ -40,6 +42,8 @@ export interface BotAskCard {
 
 export type BotMessageKind = 'text' | 'run_report' | 'notice' | 'error'
 
+export interface BotChatFile { name: string; mime?: string; image?: true }
+
 export interface BotChatQuote {
   id: string
   author: 'owner' | 'bot'
@@ -58,7 +62,8 @@ export interface BotChatMessage {
   ask?: BotAskCard
   error?: BotError
   activationId?: string
-  attachments?: Array<{ name: string }>
+  /** A file's name and type; `image` when `attachment` can read it (a computer from before images sends the name only). */
+  attachments?: BotChatFile[]
   replyTo?: BotChatQuote
   /** The owner's message: the request id it was sent with, which matches it to the bubble shown while it was on its way. */
   clientRequestId?: string
@@ -108,8 +113,8 @@ export interface BotDetail { summary: ListBot; permissions: BotPermissionItem[];
 /** One thing the bot remembers, as About lists it (`bots.memory.list`, active entries with text only). */
 export interface BotMemoryItem { id: string; text: string; kind: string }
 
-/** An image file of a chat message, read from the computer. */
-export interface BotAttachmentImage { mimeType: string; data: string }
+/** An image file of a chat message, read from the computer: PNG, JPEG, GIF or WebP. */
+export interface BotAttachmentImage { mimeType: string; bytes: Uint8Array }
 
 /** A method this computer does not offer phones: the phone leaves that feature out. */
 export class BotsUnsupportedError extends Error {
@@ -120,6 +125,14 @@ export class BotsUnsupportedError extends Error {
 }
 
 export const isBotsUnsupported = (error: unknown): boolean => error instanceof BotsUnsupportedError
+
+/** The computer's "Share bots with other devices" is off: every bot call is refused. */
+export class BotsNotSharedError extends Error {
+  constructor() {
+    super('This computer doesn’t share its bots with other devices. Turn on Share bots with other devices in Mousse there (Settings, Devices).')
+    this.name = 'BotsNotSharedError'
+  }
+}
 
 /** The bot methods of one computer. Every call fails with a plain message when the computer is older and has none. */
 export interface ComputerBots {
@@ -139,8 +152,12 @@ export interface ComputerBots {
   /** What the bot remembers. */
   memory(botId: string): Promise<BotMemoryItem[]>
   forgetMemory(botId: string, id: string): Promise<void>
-  /** The image file `name` of message `messageId`, as base64 PNG, JPEG, GIF or WebP. */
-  attachment(botId: string, messageId: string, name: string): Promise<BotAttachmentImage>
+  /** The image at `index` of message `messageId`'s files. */
+  attachment(botId: string, messageId: string, index: number): Promise<BotAttachmentImage>
+  /** About → Runs → Remove. */
+  removeSchedule(botId: string, scheduleId: string): Promise<BotDetail>
+  /** About → Can use → Remove. */
+  revokePermission(botId: string, permissionId: string): Promise<BotDetail>
 }
 
 const BOT_STATES = new Set<BotState>(['idle', 'working', 'needs_you', 'stuck', 'paused'])
@@ -203,7 +220,9 @@ function quote(value: unknown): BotChatQuote | undefined {
 
 export function parseBotMessage(value: unknown): BotChatMessage | undefined {
   if (!isObject(value) || !str(value.id) || typeof value.seq !== 'number') return undefined
-  const attachments = listOf(value.attachments, (entry) => (isObject(entry) && str(entry.name) ? { name: entry.name as string } : undefined))
+  const attachments = listOf(value.attachments, (entry): BotChatFile | undefined => (isObject(entry) && str(entry.name)
+    ? { name: entry.name as string, ...(str(entry.mime) ? { mime: entry.mime as string } : {}), ...(entry.image === true ? { image: true as const } : {}) }
+    : undefined))
   const asked = ask(value.ask)
   const error = botError(value.error)
   const reply = quote(value.replyTo)
@@ -313,20 +332,62 @@ export function parseMemory(value: unknown): BotMemoryItem[] | undefined {
 }
 
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+/** The largest image the phone reads, as the computer limits it. */
+export const MAX_BOT_IMAGE_BYTES = 1536 * 1024
 
-/** `bots.chat.attachment`: a raster image as base64; undefined for anything else (SVG never shows). */
-export function parseAttachmentImage(value: unknown): BotAttachmentImage | undefined {
+/** One part of `bots.chat.attachment`: a raster image's type, its size and the bytes from `offset`; undefined for anything else. */
+export function parseAttachmentPart(value: unknown): { mime: string; size: number; offset: number; bytes: Uint8Array } | undefined {
   if (!isObject(value)) return undefined
-  const mimeType = str(value.mimeType) ?? str(value.mime)
-  const data = str(value.data) ?? str(value.base64)
-  if (!mimeType || !IMAGE_TYPES.has(mimeType.toLowerCase()) || !data || !/^[A-Za-z0-9+/=\s]+$/.test(data)) return undefined
-  return { mimeType: mimeType.toLowerCase(), data: data.replace(/\s+/g, '') }
+  const mime = str(value.mime)?.toLowerCase()
+  const data = typeof value.dataB64 === 'string' ? value.dataB64 : undefined
+  const { size, offset } = value
+  if (!mime || !IMAGE_TYPES.has(mime) || data === undefined || !/^[A-Za-z0-9+/=]*$/.test(data)) return undefined
+  if (typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0 || size > MAX_BOT_IMAGE_BYTES) return undefined
+  if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || offset > size) return undefined
+  let bytes: Uint8Array
+  try {
+    bytes = Uint8Array.from(atob(data), (char) => char.charCodeAt(0))
+  } catch {
+    return undefined
+  }
+  return offset + bytes.length <= size ? { mime, size, offset, bytes } : undefined
 }
 
 type Rpc = (method: string, params: Record<string, unknown>, options?: { idem?: string }) => Promise<unknown>
 
 function refusalOf(value: unknown): void {
   if (isObject(value) && value.ok === false) throw new Error(str(value.error) ?? 'The computer refused the request.')
+}
+
+/** What a thing a method names is called when the computer says it is gone (`stream_unknown`). */
+const GONE: Record<string, string> = {
+  'bots.reminders.cancel': 'This reminder is gone.',
+  'bots.schedules.remove': 'This schedule is gone.',
+  'bots.permissions.revoke': 'This permission is gone.',
+  'bots.memory.forget': 'This memory is gone.',
+  'bots.asks.answer': 'This ask is gone.',
+  'bots.chat.attachment': 'This picture is gone.',
+}
+
+/**
+ * A computer's refusal in plain words. Its own words stay on the computer: only the code crosses the wire (and a
+ * `forbidden` refusal's reason), so the phone says what each code means for the method it called.
+ */
+export function plainBotError(method: string, error: unknown): unknown {
+  const code = (error as { code?: unknown } | undefined)?.code
+  const reason = (error as { reason?: unknown } | undefined)?.reason
+  if (code === 'forbidden') {
+    if (reason === 'setting_off') return new BotsNotSharedError()
+    // A memory export ask needs a folder picker on the computer.
+    if (method === 'bots.asks.answer') return new Error('Answer this on the computer.')
+    // A method a computer does not offer phones is refused with no reason.
+    if (reason === undefined) return new BotsUnsupportedError()
+    return new Error('This phone may not do this on the computer.')
+  }
+  if (code === 'stream_unknown') return new Error(GONE[method] ?? 'This bot is gone.')
+  if (code === 'conflict') return new Error(method === 'bots.chat.attachment' ? 'This file can’t be shown here.' : 'The computer couldn’t do this now. It may have changed meanwhile.')
+  if (code === 'bad_request') return new Error('The computer didn’t accept this request.')
+  return error
 }
 
 /** `bots.*` over a computer session. */
@@ -339,10 +400,7 @@ export class SessionBots implements ComputerBots {
       refusalOf(value)
       return value
     } catch (error) {
-      const code = (error as { code?: unknown } | undefined)?.code
-      // A computer refuses a method it does not offer as a bare `forbidden`, with no reason.
-      if (code === 'forbidden' && (error as Error).message === 'forbidden') throw new BotsUnsupportedError()
-      throw error
+      throw plainBotError(method, error)
     }
   }
 
@@ -423,9 +481,39 @@ export class SessionBots implements ComputerBots {
     await this.call('bots.memory.forget', { botId, id }, true)
   }
 
-  async attachment(botId: string, messageId: string, name: string): Promise<BotAttachmentImage> {
-    const value = parseAttachmentImage(await this.call('bots.chat.attachment', { botId, messageId, name }, false))
-    if (!value) throw new Error('This file can’t be shown here.')
+  async attachment(botId: string, messageId: string, index: number): Promise<BotAttachmentImage> {
+    // Read in parts that each fit one reply, from the start to the size the first part names.
+    const parts: Uint8Array[] = []
+    let offset = 0
+    let total: number | undefined
+    let mime: string | undefined
+    for (let reads = 0; reads < 64; reads += 1) {
+      const part = parseAttachmentPart(await this.call('bots.chat.attachment', { botId, messageId, index, ...(offset ? { offset } : {}) }, false))
+      if (!part || part.offset !== offset || (total !== undefined && (part.size !== total || part.mime !== mime))) throw new Error('This file can’t be shown here.')
+      total = part.size
+      mime = part.mime
+      parts.push(part.bytes)
+      offset += part.bytes.length
+      if (offset >= total) {
+        const bytes = new Uint8Array(total)
+        let at = 0
+        for (const chunk of parts) { bytes.set(chunk, at); at += chunk.length }
+        return { mimeType: mime, bytes }
+      }
+      if (!part.bytes.length) break
+    }
+    throw new Error('This file can’t be shown here.')
+  }
+
+  async removeSchedule(botId: string, scheduleId: string): Promise<BotDetail> {
+    const value = parseDetail(await this.call('bots.schedules.remove', { botId, scheduleId }, true))
+    if (!value) throw new Error('The computer sent an unexpected answer to bots.schedules.remove.')
+    return value
+  }
+
+  async revokePermission(botId: string, permissionId: string): Promise<BotDetail> {
+    const value = parseDetail(await this.call('bots.permissions.revoke', { botId, permissionId }, true))
+    if (!value) throw new Error('The computer sent an unexpected answer to bots.permissions.revoke.')
     return value
   }
 }

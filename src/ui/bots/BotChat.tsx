@@ -35,7 +35,7 @@ import { Markdown, MarkdownImageRenderer } from '../timeline/Markdown'
 import { BotFace, type BotFaceState } from './face/BotFace'
 import { BOT_COLOUR_HEX, normalizeBotLook } from './look'
 import { botFullTime, botGroupTime, botMessageLabel, placeMessages } from './messageGroups'
-import { BotImageFiles, BotOtherFiles, isImageFile, renderBotImage } from './BotImages'
+import { BotImageFiles, BotOtherFiles, isImageAttachment, renderBotImage } from './BotImages'
 import './bots.css'
 
 const CHIP_ICONS: Record<BotChipIcon, IconComponent> = {
@@ -218,8 +218,8 @@ const sameMessage = (a: MessageProps, b: MessageProps) =>
 const Message = memo(function Message({ bot, bots, message, quote, starts, pending, onReply, onShow, onAnswer, onResume }: MessageProps) {
   const quoted = quote && message.replyTo
   const files = message.attachments ?? []
-  // An owner's message with images shows them only when the computer can send them; until then, name pills.
-  const images = files.some((file) => isImageFile(file.name)) && !pending
+  // Images the computer marks as readable show as pictures; the rest (and every file on an older computer) as name pills.
+  const images = !pending && files.some(isImageAttachment)
   if (message.author === 'owner') {
     return (
       <article className={`bot-msg bot-you${starts ? ' is-group-start' : ''}${quoted ? ' is-quoted' : ''}${pending ? ' is-pending' : ''}`} data-message-id={message.id} title={pending ? undefined : botFullTime(message.at)}>
@@ -373,11 +373,12 @@ export function BotAboutSheet({ open, bot, bots, onClose, onError }: { open: boo
       setBusy(false)
     }
   }
-  const cancel = async (reminderId: string) => {
+  /** Cancel and Remove: the detail comes back without the item. An older computer can't, and says where to do it. */
+  const change = async (run: () => Promise<BotDetail>, what: string) => {
     try {
-      setDetail(await bots.cancelReminder(bot.id, reminderId))
+      setDetail(await run())
     } catch (error) {
-      onError(isBotsUnsupported(error) ? 'Cancel this reminder on the computer: update Mousse there to cancel it from your phone.' : errorText(error))
+      onError(isBotsUnsupported(error) ? `${what} on the computer: update Mousse there to do it from your phone.` : errorText(error))
     }
   }
   const reminders = detail?.reminders ?? []
@@ -397,22 +398,28 @@ export function BotAboutSheet({ open, bot, bots, onClose, onError }: { open: boo
         {!detail ? <Spinner size={16} label="Loading" /> : detail.permissions.length === 0
           ? <p className="bot-about__empty">Nothing yet. It asks in the chat the first time it needs something.</p>
           : detail.permissions.map((item) => (
-            <div key={item.id} className="bot-about__row"><Shield size={15} aria-hidden /><span>{capital(item.title)}{item.note && <small>{item.note}</small>}</span></div>
+            <div key={item.id} className="bot-about__row">
+              <Shield size={15} aria-hidden /><span>{capital(item.title)}{item.note && <small>{item.note}</small>}</span>
+              <button type="button" aria-label={`Remove ${item.title}`} onClick={() => void change(() => bots.revokePermission(bot.id, item.id), 'Remove this permission')}>Remove</button>
+            </div>
           ))}
         <h3>Runs</h3>
         {reminders.map((reminder) => (
           <div key={reminder.id} className="bot-about__row" data-testid="bot-about-reminder">
             <Bell size={15} aria-hidden /><span><span className="bot-about__clamp">{reminder.text}</span><small>{reminder.work ? 'Starts' : 'Reminds'}: {reminderWhenText(reminder.dueAt)}</small></span>
-            <button type="button" aria-label={`Cancel reminder: ${reminder.text}`} onClick={() => void cancel(reminder.id)}>Cancel</button>
+            <button type="button" aria-label={`Cancel reminder: ${reminder.text}`} onClick={() => void change(() => bots.cancelReminder(bot.id, reminder.id), 'Cancel this reminder')}>Cancel</button>
           </div>
         ))}
         {detail?.runs.map((run) => (
-          <div key={run.id} className="bot-about__row"><Clock size={15} aria-hidden /><span>{capital(run.label)}{run.nextAt && <small>Next: {nextRunText(run.nextAt)}</small>}</span></div>
+          <div key={run.id} className="bot-about__row">
+            <Clock size={15} aria-hidden /><span>{capital(run.label)}{run.nextAt && <small>Next: {nextRunText(run.nextAt)}</small>}</span>
+            <button type="button" aria-label={`Remove ${run.label}`} onClick={() => void change(() => bots.removeSchedule(bot.id, run.id), 'Remove this schedule')}>Remove</button>
+          </div>
         ))}
         {detail && !detail.runs.length && !reminders.length && <p className="bot-about__empty">Only when you message it. Ask it to run on a schedule.</p>}
         <h3>Memory</h3>
         <Memory bot={bot} bots={bots} detail={detail} />
-        <p className="bot-about__empty bot-about__hint">Change its name, look and permissions by asking it, or in Mousse on the computer.</p>
+        <p className="bot-about__empty bot-about__hint">Change its name and look by asking it, or in Mousse on the computer.</p>
       </div>
     </Sheet>
   )

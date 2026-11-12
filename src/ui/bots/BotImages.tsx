@@ -1,11 +1,12 @@
 // Pictures in a bot's chat on the phone, after the desktop's BotImages.tsx and imageSources.ts: a
 // rounded thumbnail in a fixed box (so nothing moves when it loads), and a tap opens it large. An
-// attached image file is read from the computer once (`bots.chat.attachment`); a computer without
-// that method, or a file that can't be read, shows the file's name instead. A `data:` PNG, JPEG, GIF
+// attached image (the computer marks it `image`) is read from the computer once, in parts
+// (`bots.chat.attachment`); a computer without that method shows the file's name instead, and a file
+// that can't be read shows its name in the box. A `data:` PNG, JPEG, GIF
 // or WebP in a reply shows as it is. A web image is never loaded (it would tell its server who read
 // the chat and when): it shows as a link that opens in the browser. SVG never shows.
 import { useEffect, useState } from 'react'
-import { isBotsUnsupported, type BotChatMessage, type ComputerBots } from '../../connection/bots'
+import { isBotsUnsupported, type BotChatFile, type ComputerBots } from '../../connection/bots'
 import { Image as ImageIcon, Paperclip } from '../components/icons'
 import { openLink } from '../timeline/actions'
 import { ImageLightbox } from '../timeline/ImageLightbox'
@@ -20,6 +21,9 @@ export function isImageFile(name: string): boolean {
   const extension = /\.([a-z0-9]+)$/i.exec(name.trim())?.[1]?.toLowerCase()
   return extension !== undefined && IMAGE_EXTENSIONS.has(extension)
 }
+
+/** A message's file the phone can read as a picture: the computer marks it `image` (older ones send no type: never). */
+export const isImageAttachment = (file: BotChatFile): boolean => file.image === true && isImageFile(file.name)
 
 /** What an image's `src` in a bot chat may show as. A path on the computer can't be read from here. */
 export function botImageSource(src: string | undefined | null): BotImageSource {
@@ -57,14 +61,13 @@ function remember(key: string, image: FileImage): void {
   for (const listener of listeners) listener()
 }
 
-function loadFileImage(bots: ComputerBots, botId: string, messageId: string, name: string, key: string): Promise<void> {
+function loadFileImage(bots: ComputerBots, botId: string, messageId: string, index: number, key: string): Promise<void> {
   const known = loading.get(key)
   if (known) return known
   const read = (async () => {
     try {
-      const image = await bots.attachment(botId, messageId, name)
-      const bytes = Uint8Array.from(atob(image.data), (char) => char.charCodeAt(0))
-      remember(key, { url: URL.createObjectURL(new Blob([bytes], { type: image.mimeType })) })
+      const image = await bots.attachment(botId, messageId, index)
+      remember(key, { url: URL.createObjectURL(new Blob([image.bytes as BlobPart], { type: image.mimeType })) })
     } catch (error) {
       if (isBotsUnsupported(error)) noAttachments.add(bots)
       remember(key, { failed: true })
@@ -74,16 +77,16 @@ function loadFileImage(bots: ComputerBots, botId: string, messageId: string, nam
   return read
 }
 
-function useFileImage(bots: ComputerBots, botId: string, messageId: string, name: string): FileImage | undefined {
-  const key = `${botId}\n${messageId}\n${name}`
+function useFileImage(bots: ComputerBots, botId: string, messageId: string, index: number): FileImage | undefined {
+  const key = `${botId}\n${messageId}\n${index}`
   const [image, setImage] = useState(() => fileImages.get(key))
   useEffect(() => {
     const update = () => setImage(fileImages.get(key))
     listeners.add(update)
     update()
-    void loadFileImage(bots, botId, messageId, name, key)
+    void loadFileImage(bots, botId, messageId, index, key)
     return () => { listeners.delete(update) }
-  }, [bots, botId, messageId, name, key])
+  }, [bots, botId, messageId, index, key])
   return image
 }
 
@@ -118,29 +121,28 @@ function Thumb({ url, name, failed, className }: { url?: string; name?: string; 
   )
 }
 
-function FileThumb({ bots, botId, messageId, name }: { bots: ComputerBots; botId: string; messageId: string; name: string }) {
-  const image = useFileImage(bots, botId, messageId, name)
+function FileThumb({ bots, botId, messageId, index, name }: { bots: ComputerBots; botId: string; messageId: string; index: number; name: string }) {
+  const image = useFileImage(bots, botId, messageId, index)
   if (noAttachments.has(bots)) return <span className="bot-file-pill"><Paperclip size={12} aria-hidden />{name}</span>
   return <Thumb url={image?.url} name={name} failed={image?.failed} />
 }
 
-type BotFiles = NonNullable<BotChatMessage['attachments']>
-
-/** A message's attached images: one large, several in a small grid. Without `bots` (a computer that can't send them) they are name pills. */
-export function BotImageFiles({ files, bots, botId, messageId }: { files: BotFiles; bots?: ComputerBots; botId: string; messageId: string }) {
-  const images = bots ? files.filter((file) => isImageFile(file.name)) : []
-  if (!images.length || !bots) return null
-  if (noAttachments.has(bots)) return <BotOtherFiles files={images} images={false} />
+/** A message's attached images: one large, several in a small grid. A computer that can't send them shows name pills. */
+export function BotImageFiles({ files, bots, botId, messageId }: { files: BotChatFile[]; bots: ComputerBots; botId: string; messageId: string }) {
+  // The index is the file's place among all of the message's files, as the computer counts them.
+  const images = files.flatMap((file, index) => (isImageAttachment(file) ? [{ file, index }] : []))
+  if (!images.length) return null
+  if (noAttachments.has(bots)) return <BotOtherFiles files={images.map((entry) => entry.file)} images={false} />
   return (
     <div className="bot-images" data-count={Math.min(images.length, 4)}>
-      {images.map((file, index) => <FileThumb key={`${index}:${file.name}`} bots={bots} botId={botId} messageId={messageId} name={file.name} />)}
+      {images.map(({ file, index }) => <FileThumb key={`${index}:${file.name}`} bots={bots} botId={botId} messageId={messageId} index={index} name={file.name} />)}
     </div>
   )
 }
 
 /** A message's other files (and its images when they can't be shown), as name pills. */
-export function BotOtherFiles({ files, images }: { files: BotFiles; images: boolean }) {
-  const others = images ? files.filter((file) => !isImageFile(file.name)) : files
+export function BotOtherFiles({ files, images }: { files: BotChatFile[]; images: boolean }) {
+  const others = images ? files.filter((file) => !isImageAttachment(file)) : files
   if (!others.length) return null
   return <div className="bot-you-files">{others.map((file, index) => <span key={`${index}:${file.name}`} className="bot-file-pill"><Paperclip size={12} aria-hidden />{file.name}</span>)}</div>
 }
