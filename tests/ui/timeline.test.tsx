@@ -326,4 +326,16 @@ describe('timeline', () => {
     const failed = toChatItem({ id: 'e', role: 'assistant', content: '', timestamp: '2026-11-13T10:00:00Z', error: { message: 'Overloaded.', code: 'provider_overloaded', details: { supportId: 'ab-12' } } })
     expect(failed?.error).toEqual({ message: 'Overloaded. Reference: ab-12', code: 'provider_overloaded' })
   })
+
+  it("shows a failed request with the provider's own title, message and reference", () => {
+    const failed: ChatItem = { id: 'f', role: 'assistant', kind: 'message', text: '', createdAt: at + 1000, status: 'error', error: { message: '529 Overloaded: try again soon. Reference: ab-12', code: 'provider_overloaded' } }
+    render(<Timeline items={[items[0], failed]} display={idle} active={false} />)
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('Provider error')
+    expect(alert.querySelector('.m-tl-error__message')).toHaveTextContent(/^529 Overloaded: try again soon\.$/)
+    expect(alert.querySelector('.m-tl-error__meta')).toHaveTextContent('Reference ab-12')
+    cleanup()
+    render(<Timeline items={[items[0], { ...failed, error: { message: 'Limit hit.', code: 'provider_usage_limit' } }]} display={idle} active={false} />)
+    expect(screen.getByRole('alert')).toHaveTextContent('Usage limit reached')
+  })
 })

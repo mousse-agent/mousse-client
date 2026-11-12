@@ -205,7 +205,7 @@ export function showcaseItems(base: number): ChatItem[] {
       text: 'The relay refused the request.',
       createdAt: t(27),
       status: 'error',
-      error: { message: 'Provider returned 429: rate limited. Try again in a minute.', code: 'rate_limited' },
+      error: { message: '429 rate_limit_error: Number of request tokens has exceeded your per-minute rate limit. Reference: 1ecec6b5-0d1f', code: 'provider_rate_limited' },
     },
     { id: 's-u3', role: 'user', kind: 'message', text: 'Also write the docs note.', createdAt: t(20), status: 'done' },
     { id: 's-n3', role: 'assistant', kind: 'message', text: 'Checking how the docs are built first.', createdAt: t(19.8), status: 'done' },

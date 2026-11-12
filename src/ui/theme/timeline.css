@@ -589,8 +589,9 @@ button.m-applet__name:focus-visible { outline: 2px solid var(--accent); outline-
 
 .m-tl-error { display: flex; gap: 8px; padding: 10px 12px; border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; background: rgba(239, 68, 68, 0.1); font-size: 14px; line-height: 1.45; }
 .m-tl-error__icon { flex: none; margin-top: 1px; color: #f87171; }
-.m-tl-error__title { font-weight: 550; color: #f87171; }
-.m-tl-error__message { color: var(--text-primary); overflow-wrap: anywhere; white-space: pre-wrap; }
+.m-tl-error__title { font-weight: 550; color: var(--danger); }
+.m-tl-error__message { margin-top: 2px; color: color-mix(in srgb, var(--text-primary) 80%, transparent); overflow-wrap: anywhere; white-space: pre-wrap; }
+.m-tl-error__meta { margin-top: 4px; color: var(--an-foreground-muted); font-size: 12.5px; user-select: text; overflow-wrap: anywhere; }
 
 /* ---------- System rows ---------- */
 .m-tl-handoff { display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--an-foreground-muted); font-size: 12px; }

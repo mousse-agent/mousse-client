@@ -238,13 +238,32 @@ const UserMessage = memo(function UserMessage({ item }: { item: ChatItem }) {
 
 // ---- Assistant and system rows ----
 
+/** The title of a failed request: the provider's own refusal, or Mousse's (mousseToUI.ts errorTitle). */
+export function errorTitle(code: string | undefined): string {
+  if (code === 'provider_usage_limit') return 'Usage limit reached'
+  return code?.startsWith('provider_') ? 'Provider error' : 'Request failed'
+}
+
+/** A message and the reference it was logged under at its end (`… Reference: 1ecec6b5-…`), apart. */
+export function splitErrorReference(message: string): { text: string; reference?: string } {
+  const match = /\s*Reference:\s*(\S+)\s*$/.exec(message)
+  if (!match) return { text: message.trim() }
+  return { text: message.slice(0, match.index).trim(), reference: match[1] }
+}
+
+/**
+ * A failed request (error-message.tsx): the title in the danger colour, then the message as the provider or Mousse
+ * gave it, and the reference it was logged under on a quiet line.
+ */
 function ErrorBox({ title = 'Request failed', message }: { title?: string; message: string }) {
+  const { text, reference } = splitErrorReference(message)
   return (
     <div className="m-tl-error" role="alert">
       <CircleX size={16} className="m-tl-error__icon" />
       <div>
         <div className="m-tl-error__title">{title}</div>
-        <div className="m-tl-error__message">{message}</div>
+        <div className="m-tl-error__message">{text}</div>
+        {reference && <div className="m-tl-error__meta">Reference {reference}</div>}
       </div>
     </div>
   )
@@ -272,7 +291,7 @@ const AssistantMessage = memo(function AssistantMessage({ item, live }: { item: 
           <Markdown text={item.text} streaming={streaming} />
         </div>
       )}
-      {item.error && <ErrorBox message={item.error.message} />}
+      {item.error && <ErrorBox title={errorTitle(item.error.code)} message={item.error.message} />}
       {item.incomplete && !streaming && <div className="m-tl-note">This reply stopped before it finished.</div>}
       {showActions && (
         <div className="m-tl-toolbar">
