@@ -172,6 +172,7 @@ class StubSession implements ComputerSession {
   listQueue = vi.fn()
   removeQueued = vi.fn()
   reorderQueue = vi.fn()
+  editQueued = vi.fn()
   steerQueued = vi.fn()
   contextUsage = vi.fn()
   watchLists(handlers: ListsHandlers) { this.handlers.add(handlers); return () => { this.handlers.delete(handlers) } }

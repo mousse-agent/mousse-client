@@ -44,7 +44,6 @@
 }
 .m-sidebar-tab:active:not(.is-active) { color: var(--text-primary); background: var(--ui-hover); }
 .m-sidebar-tab svg { flex-shrink: 0; }
-.m-sidebar-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .m-sidebar-tab.is-active {
   display: flex;
   align-items: center;
@@ -57,7 +56,7 @@
   font-size: 14px;
   font-weight: 600;
   background: var(--ui-raised);
-  box-shadow: var(--ui-specular), inset 0 0 0 1px var(--ui-line-strong), 0 1px 3px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--ui-specular), 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 .m-sidebar-tab.is-active svg { color: var(--accent); }
 
@@ -86,7 +85,8 @@
 }
 
 /* ---------- Status icons ---------- */
-.m-sb-spin { animation: m-sb-spin 1s linear infinite; }
+/* Steps, not every frame: each frame of a loop redraws the whole window (desktop ab4e3b320). */
+.m-sb-spin { animation: m-sb-spin 1s steps(12) infinite; }
 @keyframes m-sb-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }

@@ -1,4 +1,5 @@
-import type { Computer, ListProject } from '../../connection/types'
+import type { Computer, ListProject, LlmProviderOption, ModelSelection } from '../../connection/types'
+import { parseThinkingSuffixFromModelId } from './modelVariants'
 
 /** Computers that can run a thread from this phone: the account's computers this phone was added to. */
 export function threadComputers(computers: readonly Computer[]): Computer[] {
@@ -29,4 +30,12 @@ export function defaultProject(projects: readonly ListProject[], wanted?: string
 /** The computer's projects in its sidebar order. */
 export function sortedProjects(projects: readonly ListProject[]): ListProject[] {
   return [...projects].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
+}
+
+/** Whether the computer's model picker still offers `model`; a remembered model it no longer offers is not used. */
+export function offersModel(providers: readonly LlmProviderOption[], model: ModelSelection): boolean {
+  const provider = providers.find((entry) => (model.instanceId && entry.instanceId ? entry.instanceId === model.instanceId : entry.id === model.llmProvider))
+  if (!provider) return false
+  const base = parseThinkingSuffixFromModelId(model.model).baseId
+  return provider.models.some((entry) => entry.id === model.model || parseThinkingSuffixFromModelId(entry.id).baseId === base)
 }

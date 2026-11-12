@@ -24,3 +24,6 @@ export function planApprovalText(markdown: string): string {
 }
 
 export const PLAN_APPROVAL_PREFIX = 'The implementation plan is approved.'
+
+/** Failed calls the agent got past, by item id: their rows stay quiet (a dim icon and a small ×). */
+export const RecoveredFailuresContext = createContext<ReadonlySet<string>>(new Set())

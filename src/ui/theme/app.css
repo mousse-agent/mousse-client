@@ -32,7 +32,13 @@ button { cursor: pointer; }
 button:disabled { cursor: default; }
 h1, h2, h3, p { margin: 0; }
 
-:focus-visible { outline: none; box-shadow: var(--ui-focus-ring); }
+/* Keyboard focus is a fill, never an outline, ring or border (desktop polish.css "Keyboard focus").
+   Text fields show focus with their own fill. */
+:focus-visible { outline: none; }
+:is(button, a[href], summary, [role='button'], [role='link'], [role='menuitem'], [role='menuitemradio'],
+  [role='menuitemcheckbox'], [role='option'], [role='tab'], [role='switch'], [role='checkbox'], [role='radio']):focus-visible {
+  background-image: var(--ui-focus-layer);
+}
 
 .m-app {
   position: fixed;
@@ -84,7 +90,7 @@ h1, h2, h3, p { margin: 0; }
   color: var(--text-secondary);
 }
 
-.m-spinner { animation: m-spin 900ms linear infinite; }
+.m-spinner { animation: m-spin 900ms steps(12) infinite; }
 @keyframes m-spin { to { transform: rotate(360deg); } }
 /* Shown only when loading takes a moment: a saved thread opens without the spinner flashing. */
 .m-loading--late { animation: m-late 0s linear 250ms both; }
@@ -101,8 +107,6 @@ h1, h2, h3, p { margin: 0; }
   padding: var(--safe-top) 6px 0;
   border-bottom: 1px solid var(--ui-line);
   background: color-mix(in srgb, var(--app-window-bg) 86%, transparent);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
-  backdrop-filter: blur(16px) saturate(140%);
   position: relative;
   z-index: 2;
 }
@@ -295,7 +299,7 @@ h1, h2, h3, p { margin: 0; }
   height: 7px;
   background: var(--status-running);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-running) 20%, transparent);
-  animation: m-pulse 1.6s ease-in-out infinite;
+  animation: m-pulse 1.6s steps(24, jump-none) infinite;
 }
 @keyframes m-pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--status-running) 8%, transparent); } }
 
@@ -332,7 +336,7 @@ h1, h2, h3, p { margin: 0; }
   outline: none;
 }
 .m-input::placeholder { color: var(--an-input-placeholder-color, var(--ui-faint)); }
-.m-input:focus { border-color: rgba(var(--accent-rgb), 0.55); box-shadow: var(--ui-specular), var(--ui-focus-ring); }
+.m-input:focus { background-image: var(--ui-focus-layer); }
 
 .m-search {
   position: relative;
@@ -353,7 +357,7 @@ h1, h2, h3, p { margin: 0; }
   appearance: none;
 }
 .m-search input::-webkit-search-cancel-button { display: none; }
-.m-search input:focus { border-color: rgba(var(--accent-rgb), 0.5); box-shadow: var(--ui-focus-ring); }
+.m-search input:focus { background-image: var(--ui-focus-layer); }
 .m-search__clear {
   position: absolute;
   right: 0;
@@ -392,6 +396,7 @@ h1, h2, h3, p { margin: 0; }
   box-shadow: var(--ui-specular), 0 1px 4px rgba(0, 0, 0, 0.25);
   color: var(--text-primary);
 }
+.m-segmented__option[aria-selected='true']:focus-visible { background-image: var(--ui-focus-layer), var(--ui-sheen); }
 
 /* ---------- Chips ---------- */
 .m-chips {
@@ -685,6 +690,27 @@ html[data-keyboard='open'] .m-thread__composer { padding-bottom: 8px; }
 }
 .m-composer__action:active:not(:disabled) { transform: scale(0.94); }
 
+/* The send mode while a reply runs (composer-send-mode-btn): Queue is a plain icon, Steer gets a soft fill. */
+.m-composer__mode { padding: 2px 3px; background-clip: content-box; }
+.m-composer__mode[data-steer] { color: var(--text-primary); background-color: color-mix(in srgb, var(--text-primary) 9%, transparent); }
+
+/* Folded (compact-composer.css): scrolled up, the empty, unfocused composer keeps its one input line and the
+   send button; the footer folds away. Only a scroll-driven change eases (data-fold-motion), over 200ms. */
+.m-composer__fold { display: grid; grid-template-rows: 1fr; }
+.m-composer__fold > .m-composer__footer { min-height: 0; overflow: hidden; }
+.m-composer[data-folded] .m-composer__fold { grid-template-rows: 0fr; opacity: 0; }
+.m-composer[data-folded] { gap: 0; padding-bottom: 6px; padding-top: 6px; }
+.m-composer[data-fold-motion] .m-composer__fold { transition: grid-template-rows 200ms ease-out, opacity 200ms ease-out; }
+.m-composer[data-fold-motion] { transition: border-color 160ms ease, padding 200ms ease-out, gap 200ms ease-out; }
+.m-composer__folded-action { display: inline-flex; flex: none; }
+.m-composer[data-fold-motion] .m-composer__folded-action { animation: m-fade-in 200ms ease-out; }
+@keyframes m-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .m-composer[data-fold-motion] .m-composer__fold,
+  .m-composer[data-fold-motion] { transition: none; }
+  .m-composer[data-fold-motion] .m-composer__folded-action { animation: none; }
+}
+
 /* Footer: the model button on the left, context, attach and send on the right (ComposerFooter). */
 .m-composer__footer { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-width: 0; container-type: inline-size; }
 .m-composer__pills { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 1; overflow: hidden; }
@@ -787,13 +813,75 @@ html[data-theme='light'] .m-provider-icon--mono { filter: none; }
 .m-command__args { font-weight: 400; color: var(--ui-faint); }
 .m-command__detail { font-size: 12.5px; color: var(--text-secondary); }
 
-/* Queued messages (QueuedMessages). */
-.m-queue { display: flex; flex-direction: column; gap: 4px; padding: 6px 6px 6px 12px; border-radius: 14px; border: 1px solid var(--ui-line); background: color-mix(in srgb, var(--ui-raised) 70%, transparent); }
-.m-queue__heading { font-size: 11.5px; font-weight: 600; color: var(--text-secondary); letter-spacing: 0.02em; }
-.m-queue ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.m-queue__item { display: flex; align-items: center; gap: 4px; min-height: 36px; }
-.m-queue__text { flex: 1; min-width: 0; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.m-queue__badge { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; color: var(--text-secondary); }
+/* Queued messages at the end of the conversation (QueuedMessages, queued-messages.css): each one a sent
+   prompt's bubble, dimmed until it sends, with a line of actions under it. A phone has no hover, so the
+   line's buttons always show, at half strength. */
+.m-queued { display: flex; flex-direction: column; margin-top: 10px; }
+.m-queued__item { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.m-queued__bubble { opacity: 0.6; transition: opacity 150ms ease; -webkit-touch-callout: none; }
+.m-queued__item[data-busy] .m-queued__bubble { opacity: 0.4; }
+.m-queued__images { display: inline-flex; align-items: center; gap: 3px; margin-left: 8px; font-size: 12px; color: var(--text-secondary); vertical-align: middle; }
+.m-queued__line {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  min-height: 34px;
+  font-size: 13px;
+  color: var(--an-foreground-muted);
+}
+.m-queued__btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--an-foreground-muted);
+  opacity: 0.7;
+  transition: background-color 150ms ease, opacity 150ms ease;
+}
+/* Grow the hit area toward 44px without growing the line. */
+.m-queued__btn::after { content: ''; position: absolute; inset: -6px 0; }
+.m-queued__btn:active:not(:disabled) { opacity: 1; background: var(--ui-pressed); }
+.m-queued__btn:disabled { opacity: 0.3; }
+.m-queued__btn:focus-visible { outline: none; opacity: 1; background-image: var(--ui-focus-layer); }
+/* Send now (and Save) is the line's one coloured action. */
+.m-queued__btn--accent { color: var(--accent); opacity: 0.9; }
+.m-queued__state { display: inline-flex; align-items: center; gap: 4px; padding: 0 4px 0 6px; }
+.m-queued__line--label { min-height: 28px; }
+/* Edit in place: the bubble becomes a small editor of the same shape, at full strength. */
+.m-queued__editor {
+  box-sizing: border-box;
+  width: calc(100% - 24px);
+  padding: 7px 14px;
+  border-radius: var(--an-message-border-radius);
+  background: var(--an-user-message-bg);
+  border: 1px solid var(--ui-line-strong);
+}
+.m-queued__editor textarea {
+  display: block;
+  width: 100%;
+  max-height: 40vh;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  resize: none;
+  overflow-y: auto;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--chat-font-size);
+  line-height: var(--chat-line-height);
+}
+.m-queued__editor textarea:focus-visible { box-shadow: none; }
+.m-queued__changed { display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding-top: 4px; font-size: 13px; color: var(--warning); }
+.m-queued__text-btn { height: 30px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text-secondary); font: inherit; }
+.m-queued__text-btn:active { background: var(--ui-pressed); color: var(--text-primary); }
 .m-queue-preview { font-size: 14px; color: var(--text-secondary); white-space: pre-wrap; max-height: 120px; overflow: auto; }
 
 /* Menus in sheets (composer-mode-menu, model-picker-row). */
@@ -843,19 +931,87 @@ html[data-theme='light'] .m-provider-icon--mono { filter: none; }
 .m-context__swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
 
 /* ---------- Settings ---------- */
-.m-kv { display: flex; align-items: center; gap: 12px; min-height: 40px; }
-.m-kv > div { display: flex; flex-direction: column; min-width: 0; }
-.m-kv__label { font-size: 12.5px; color: var(--text-secondary); }
-.m-kv__value { font-size: 15.5px; overflow-wrap: anywhere; }
+/* ---------- Settings (mousse/src/renderer/styles/settings.css at phone sizes) ----------
+   A heading per group, then its rows on ONE subtle surface: a fill a few percent off the page and an
+   edge drawn only by light, no border and no other cards. One row anatomy: text left, one control
+   right, a hairline between rows. Buttons sit outside the surface. Rarely needed rows fold under one
+   Advanced heading at the end. */
+.m-settings {
+  --settings-surface: color-mix(in srgb, var(--text-primary) 4.5%, transparent);
+  --settings-surface-edge: inset 0 1px 0 rgba(255, 255, 255, 0.06), inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+  --settings-section-gap: 28px;
+  gap: 0;
+  padding-top: 20px;
+}
+html[data-theme='blacksphere-plus'] .m-settings {
+  --settings-surface: color-mix(in srgb, var(--text-primary) 5%, transparent);
+  --settings-surface-edge: inset 0 1px 0 rgba(255, 255, 255, 0.07), inset 0 -1px 0 rgba(0, 0, 0, 0.5);
+}
+html[data-theme='light'] .m-settings { --settings-surface-edge: inset 0 -1px 0 rgba(20, 16, 30, 0.05); }
+.m-set-group + .m-set-group, .m-set-fold { margin-top: var(--settings-section-gap); }
+.m-set-group__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 0 4px;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-primary);
+}
+.m-set-group__title svg { color: var(--text-secondary); flex: none; }
+.m-set-rows {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0 16px;
+  border-radius: var(--ui-card-radius);
+  background: var(--settings-surface);
+  box-shadow: var(--settings-surface-edge);
+}
+.m-set-row { display: flex; flex-direction: column; gap: 10px; padding: 12px 0; min-height: 52px; justify-content: center; }
+.m-set-rows .m-set-row { border-top: 1px solid var(--ui-line); }
+.m-set-rows > .m-set-row:first-child,
+.m-set-rows > .m-set-subrows:first-child > .m-set-row:first-child { border-top: 0; }
+.m-set-row__main { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.m-set-row__leading { flex: none; display: inline-flex; color: var(--text-secondary); }
+.m-set-row__text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.m-set-row__title { font-size: 15.5px; line-height: 1.35; color: var(--text-primary); overflow-wrap: anywhere; }
+.m-set-row__desc { font-size: 13.5px; line-height: 1.45; color: color-mix(in srgb, var(--text-primary) 60%, transparent); overflow-wrap: anywhere; }
+.m-set-row__control { flex: none; display: inline-flex; align-items: center; }
+.m-set-row__value { font-size: 14px; color: var(--text-secondary); }
+.m-set-after { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
 
-.m-swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--touch-target), 1fr)); gap: 6px; }
+/* The fold: a heading-sized toggle whose chevron turns to point down when open. */
+.m-set-fold__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: var(--touch-target);
+  margin: 0 0 4px;
+  padding: 0 8px 0 4px;
+  border: 0;
+  border-radius: var(--ui-control-radius);
+  background: none;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.m-set-fold__chevron { color: var(--text-secondary); transition: transform 180ms ease; }
+.m-set-fold__toggle[aria-expanded='true'] .m-set-fold__chevron { transform: rotate(90deg); transition-duration: 160ms; }
+
+/* Accent colours: bare circles in thumb-sized targets; a neutral ring and a check mark the chosen one. */
+.m-swatches { display: grid; grid-template-columns: repeat(6, minmax(var(--touch-target), 1fr)); justify-items: center; gap: 2px; }
 .m-swatch {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: var(--touch-target);
   height: var(--touch-target);
-  border-radius: 12px;
-  border: 1px solid var(--ui-line);
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
   background: transparent;
   color: #15121b;
   position: relative;
@@ -865,32 +1021,15 @@ html[data-theme='light'] .m-provider-icon--mono { filter: none; }
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   transform: translate(-50%, -50%);
   border-radius: 50%;
   background: var(--swatch);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
 }
 .m-swatch > * { position: relative; }
-.m-swatch[aria-checked='true'] { border-color: var(--swatch); }
-
-.m-disclosure {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: var(--touch-target);
-  padding: 0;
-  border: 0;
-  background: none;
-  text-align: left;
-}
-.m-disclosure span { flex: 1; }
-.m-disclosure__chevron { transition: transform 160ms ease; color: var(--ui-faint); }
-.m-disclosure[aria-expanded='true'] .m-disclosure__chevron { transform: rotate(180deg); }
-.m-advanced { margin: 0; display: grid; gap: 4px 0; }
-.m-advanced dt { font-size: 12.5px; color: var(--text-secondary); }
-.m-advanced dd { margin: 0 0 8px; font-size: 13.5px; overflow-wrap: anywhere; }
+.m-swatch[aria-checked='true']::before { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4), 0 0 0 2px var(--app-window-bg), 0 0 0 3.5px var(--text-primary); }
 
 /* ---------- Split view (tablets, unfolded phones) ---------- */
 @media (min-width: 768px) {

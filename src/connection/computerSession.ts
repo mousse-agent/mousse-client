@@ -27,6 +27,7 @@ import type {
   Project,
   QuestionAnswers,
   QueuedMessage,
+  QueueEditResult,
   SendOptions,
   SessionEndReason,
   SessionState,
@@ -457,6 +458,8 @@ export class RealComputerSession implements ComputerSession {
   private readonly watches = new Map<string, WatchEntry>()
   /** Runs this phone started, by thread: the `orchestrator.send` RPC id that `orchestrator.abort` names. */
   private readonly runs = new Map<string, string>()
+  /** The computer does not let a phone call `queue.edit` (Mousse before it was exposed to devices). */
+  private queueEditRefused = false
   private ended?: SessionEndReason
   private endedWith?: string
   private lists?: ListsWatch
@@ -751,6 +754,53 @@ export class RealComputerSession implements ComputerSession {
 
   async reorderQueue(threadId: string, orderedIds: string[]): Promise<void> {
     refusal(await this.leaf.rpc('queue.reorder', { threadId, orderedIds }, { idem: crypto.randomUUID() }))
+  }
+
+  async editQueued(threadId: string, itemId: string, content: string, expectedContent?: string): Promise<QueueEditResult> {
+    const text = content.trim()
+    if (!text) throw new Error('Write a message first.')
+    // Read the message with the queue's revision, so text changed elsewhere is not overwritten.
+    const listed = await this.leaf.rpc('queue.list', { threadId })
+    const items = queueOf(listed, 'queue.list')
+    const revision = isObject(listed) && typeof listed.revision === 'string' ? listed.revision : undefined
+    const current = items.find((item) => item.id === itemId)
+    if (!current || current.state !== 'pending') throw new Error('This message already started or is no longer queued.')
+    if (expectedContent !== undefined && current.content !== expectedContent) return { item: current, changed: true }
+    if (current.content === text) return { item: current }
+    if (!this.queueEditRefused) {
+      try {
+        const value = await this.leaf.rpc('queue.edit', { threadId, itemId, content: text, ...(revision ? { expectedRevision: revision } : {}) }, { idem: crypto.randomUUID() })
+        refusal(value)
+        return { item: (isObject(value) ? queued(value.item) : undefined) ?? { ...current, content: text } }
+      } catch (error) {
+        if (!(error instanceof NetError && error.code === 'forbidden')) throw error
+        this.queueEditRefused = true
+      }
+    }
+    return this.replaceQueued(threadId, current, text, items.map((item) => item.id))
+  }
+
+  /**
+   * An edit on a computer that does not let a phone edit: the new text is queued, the old message
+   * removed (the copy goes again if that fails, so nothing is lost or doubled) and the copy moved to
+   * the old one's place.
+   */
+  private async replaceQueued(threadId: string, current: QueuedMessage, text: string, order: string[]): Promise<QueueEditResult> {
+    if (current.imageCount > 0) throw new Error('This computer cannot edit a queued message with images. Remove it and send it again.')
+    const copy = await this.enqueueItem(threadId, text, current.mode !== undefined ? { mode: current.mode } : {})
+    if (!copy) return badAnswer('queue.enqueue')
+    try {
+      await this.removeQueued(threadId, current.id)
+    } catch (error) {
+      await this.removeQueued(threadId, copy).catch(() => undefined)
+      throw error
+    }
+    const now = (await this.listQueue(threadId)).map((item) => item.id)
+    const after = order.slice(order.indexOf(current.id) + 1).find((id) => id !== copy && now.includes(id))
+    const ids = now.filter((id) => id !== copy)
+    ids.splice(after ? ids.indexOf(after) : ids.length, 0, copy)
+    if (ids.join('\n') !== now.join('\n')) await this.reorderQueue(threadId, ids).catch(() => undefined)
+    return { item: { ...current, id: copy, content: text } }
   }
 
   async steerQueued(threadId: string, itemId: string): Promise<void> {

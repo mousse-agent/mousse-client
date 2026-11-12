@@ -31,6 +31,8 @@ export interface DesktopMessage {
   contextHandoff?: unknown
   responseMetadata?: unknown
   presentationParts?: unknown
+  /** On the line a Stop, a restart or a crash wrote as it cut a turn off: why it ended. */
+  turnEnd?: unknown
   toolCall?: { title?: string; summary?: string; toolName?: string; status?: string; details?: unknown; response?: unknown; input?: unknown }
 }
 

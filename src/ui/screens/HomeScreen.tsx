@@ -304,8 +304,11 @@ function ThreadPane({ nodeId, threadId, name, wide }: { nodeId: string; threadId
   const computer = useComputer(nodeId)
   const { link, lists, session, store } = computer
   const chat = lists?.chats.find((entry) => entry.threadId === threadId)
-  const title = chat?.name ?? lists?.threads.find((entry) => entry.id === threadId)?.title ?? 'Thread'
-  const subtitle = chat ? `Chat · ${name}` : name
+  const thread = lists?.threads.find((entry) => entry.id === threadId)
+  const title = chat?.name ?? thread?.title ?? 'Thread'
+  // Where the thread is, like the desktop title bar's path: its project, then the computer it runs on.
+  const projectName = thread?.projectId ? lists?.projects.find((entry) => entry.id === thread.projectId)?.name : undefined
+  const subtitle = chat ? `Chat · ${name}` : projectName ? `${projectName} · ${name}` : name
   const back = wide ? undefined : <IconButton label="Back" onClick={router.pop}><ChevronLeft size={22} /></IconButton>
 
   let body: ReactNode
