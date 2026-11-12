@@ -176,6 +176,35 @@ button.m-tl-row__header:active { background: var(--ui-pressed); }
 .m-tl-failed-mark { flex: none; font-size: 14px; line-height: 1; color: color-mix(in srgb, var(--danger) 70%, transparent); }
 
 .m-tl-group { display: flex; flex-direction: column; gap: 2px; margin-left: -20px; padding-left: 12px; border-left: 1px solid var(--an-border-color); }
+.m-tl-row__failed { color: var(--danger); }
+
+/* tool-calls-group.css: an open group is capped at about 18rem (half a short screen) and scrolls on its own, so a
+   long run of calls never pushes the answer far down. Where more rows are above or below, the edge fades out,
+   following the box's own scroll (a scroll-driven animation, so no script); a box that does not scroll has none. */
+@property --m-group-fade-top { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --m-group-fade-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }
+.m-tl-group-scroll {
+  max-height: min(18rem, 50dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--m-group-fade-top), #000 calc(100% - var(--m-group-fade-bottom)), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--m-group-fade-top), #000 calc(100% - var(--m-group-fade-bottom)), transparent 100%);
+  animation: m-group-fade linear both;
+  animation-timeline: scroll(self);
+}
+@keyframes m-group-fade {
+  0% { --m-group-fade-top: 0px; --m-group-fade-bottom: 24px; }
+  8%, 92% { --m-group-fade-top: 24px; --m-group-fade-bottom: 24px; }
+  100% { --m-group-fade-top: 24px; --m-group-fade-bottom: 0px; }
+}
+/* Inside the box the rows' left rule sits at the box's edge. */
+.m-tl-group-scroll > .m-tl-group { margin-left: 0; padding-left: 10px; }
+.m-tl-row__body:has(> .m-tl-group-scroll) { padding-left: 8px; }
+
+/* A thought being written: its newest words show. Too long for the row, it is cut at its start (the box runs right
+   to left so it overflows and takes the ellipsis on the left; the text inside keeps its own direction). */
+.m-tl-live-thought { direction: rtl; text-align: left; }
+.m-tl-live-thought > bdi { direction: ltr; unicode-bidi: isolate; }
 
 .m-tl-thought {
   max-height: 175px;
@@ -528,6 +557,23 @@ button.m-applet__name:focus-visible { outline: 2px solid var(--accent); outline-
 /* global.css .turn-work: label then a hairline. */
 .m-tl-work { display: flex; align-items: center; gap: 10px; color: var(--an-foreground-muted); font-size: 12.5px; }
 .m-tl-work__label { flex: none; font-variant-numeric: tabular-nums; }
+/* A finished turn's line opens its work in place: "Worked for 32s ›"; the chevron turns down while it is open. */
+.m-tl-work__toggle { display: inline-flex; align-items: center; gap: 2px; min-height: 32px; margin: -8px 0; padding: 0 6px 0 0; border: 0; background: none; color: inherit; font: inherit; -webkit-tap-highlight-color: transparent; }
+.m-tl-work__toggle:active { color: var(--text-primary); }
+.m-tl-work__toggle:focus-visible { outline: none; color: var(--text-primary); }
+.m-tl-work__chevron { flex: none; transition: transform 150ms ease-out; }
+.m-tl-work__chevron--open { transform: rotate(90deg); }
+
+/* turn-progress.css: the live line at the end of a running turn, laid out like a tool row so the row that comes
+   next takes its place. */
+.m-tl-progress-line { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 32px; padding: 2px; color: color-mix(in srgb, var(--text-secondary) 85%, transparent); font-size: var(--chat-font-size); font-weight: 450; line-height: 22px; user-select: none; }
+.m-tl-progress-line__label { flex: none; white-space: nowrap; }
+.m-tl-progress-line__detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; color: color-mix(in srgb, var(--text-secondary) 55%, transparent); }
+.m-tl-dots { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 3px; width: 18px; height: 18px; }
+.m-tl-dots > span { width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: 0.5; animation: m-tl-dot 1.2s steps(12, jump-none) infinite both; }
+.m-tl-dots > span:nth-child(2) { animation-delay: 0.2s; }
+.m-tl-dots > span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes m-tl-dot { 0%, 60%, 100% { opacity: 0.3; transform: scale(0.8); } 30% { opacity: 1; transform: scale(1); } }
 .m-tl-work__rule { flex: 1; height: 1px; background: var(--an-border-color); }
 
 /* app.css .turn-edits */
@@ -666,6 +712,6 @@ button.m-applet__name:focus-visible { outline: 2px solid var(--accent); outline-
 @media (prefers-reduced-motion: reduce) {
   .m-tl-shimmer--active { animation: none; background: none; color: var(--text-secondary) !important; }
   .m-tl-shimmer--active * { color: inherit !important; }
-  .m-tl-spin, .m-tl-waiting__dot, .m-tl-icon[data-state='running'] { animation: none; }
+  .m-tl-spin, .m-tl-waiting__dot, .m-tl-icon[data-state='running'], .m-tl-dots > span, .m-tl-group-scroll { animation: none; }
   .m-tl-jump { transition: none; }
 }

@@ -8,27 +8,38 @@ import { normalizeToolName } from '../../connection/timelineItems'
 import { copyText } from './actions'
 import { PLAN_APPROVAL_PREFIX, RecoveredFailuresContext, TimelineActionsContext, type TimelineActions } from './context'
 import {
+  describeTurnProgress,
+  foldTurnWork,
   formatResponseTime,
   formatTimestamp,
   formatTokens,
   formatTokensPerSecond,
   formatWorkedFor,
   formatWorkingFor,
-  groupLabel,
   groupTurns,
+  isActivity,
+  isLiveThought,
+  isRunningCall,
+  isSubagentItem,
   recoveredFailures,
   segmentReplies,
+  settleFinishedTurn,
   shortPath,
+  toolFailed,
   turnEdits,
+  workGroupIcon,
+  workGroupTitle,
+  type FoldRow,
+  type Segment,
   type Turn,
 } from './format'
-import { Bot, Check, ChevronRight, CircleX, Copy, FileText, Folder, Globe, Image as ImageIcon, Info, Link, Monitor, MessageSquare, Paperclip, VolumeHigh, X } from './icons'
+import { Bot, Check, ChevronRight, CircleX, ThinkingIcon, Copy, FileText, Folder, Globe, Image as ImageIcon, Info, Link, Monitor, MessageSquare, Paperclip, VolumeHigh, X } from './icons'
 import { Markdown } from './Markdown'
 import { ImageLightbox } from './ImageLightbox'
 import { AppletCard, AppletPending } from './AppletCard'
 import { ReadAloudButton as ComputerReadAloudButton, useComputerSpeech } from '../speech/readAloud'
 import { QuestionPrompt } from './QuestionPrompt'
-import { DiffStat, PlanCard, Shimmer, Spinner, ToolGroup, ToolItem } from './ToolCards'
+import { DiffStat, PlanCard, Shimmer, Spinner, ToolGroup, ToolIcon, ToolItem } from './ToolCards'
 
 // ---- Message actions ----
 
@@ -311,7 +322,18 @@ function ReplyItem({ item: raw, live, nested }: { item: ChatItem; live: boolean;
 
 // ---- Turn decorations ----
 
-function WorkStatus({ live, startedAt, durationMs }: { live: boolean; startedAt?: number; durationMs?: number }) {
+function WorkStatus({
+  live,
+  startedAt,
+  durationMs,
+  fold,
+}: {
+  live: boolean
+  startedAt?: number
+  durationMs?: number
+  /** A finished turn whose work folds behind this line: the line opens it in place ("Worked for 32s ›"). */
+  fold?: { open: boolean; onToggle: () => void }
+}) {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (!live) return
@@ -320,11 +342,43 @@ function WorkStatus({ live, startedAt, durationMs }: { live: boolean; startedAt?
     return () => clearInterval(timer)
   }, [live])
   const elapsed = live && startedAt ? Math.max(0, now - startedAt) : durationMs
-  if (elapsed === undefined) return null
+  // A turn with work to open always has its line, even with no time to show.
+  const label = elapsed !== undefined ? (live ? formatWorkingFor(elapsed) : formatWorkedFor(elapsed)) : fold && !live ? 'Worked' : undefined
+  if (label === undefined) return null
   return (
     <div className="m-tl-work" data-testid="work-status" data-live={live || undefined}>
-      <Shimmer active={live} className="m-tl-work__label">{live ? formatWorkingFor(elapsed) : formatWorkedFor(elapsed)}</Shimmer>
+      {fold && !live ? (
+        <button type="button" className="m-tl-work__label m-tl-work__toggle" aria-expanded={fold.open} onClick={fold.onToggle}>
+          {label}
+          <ChevronRight size={14} className={`m-tl-work__chevron${fold.open ? ' m-tl-work__chevron--open' : ''}`} />
+        </button>
+      ) : (
+        <Shimmer active={live} className="m-tl-work__label">{label}</Shimmer>
+      )}
       <div className="m-tl-work__rule" aria-hidden />
+    </div>
+  )
+}
+
+/**
+ * The live line at the end of a running turn (turn-progress.tsx): what it does now, in a few words. Thinking shows
+ * the turning atom; a running tool its own icon, pulsing; anything else three small dots.
+ */
+function TurnProgressRow({ replies, phase, waiting }: { replies: ChatItem[]; phase?: string; waiting: boolean }) {
+  const progress = describeTurnProgress(replies, phase, waiting)
+  if (!progress) return null
+  const thinking = progress.kind === 'thinking' || progress.kind === 'starting' || progress.kind === 'finishing'
+  return (
+    <div className="m-tl-progress-line" role="status" data-testid="turn-progress" data-kind={progress.kind}>
+      {thinking ? (
+        <span className="m-tl-icon"><ThinkingIcon size={18} active /></span>
+      ) : progress.tool ? (
+        <ToolIcon name={progress.tool} state="running" />
+      ) : (
+        <span className="m-tl-dots" aria-hidden><span /><span /><span /></span>
+      )}
+      <span className="m-tl-progress-line__label">{progress.label}</span>
+      {progress.detail && <span className="m-tl-progress-line__detail">{progress.detail}</span>}
     </div>
   )
 }
@@ -376,39 +430,101 @@ function nestUnderTasks(replies: ChatItem[]): { flow: ChatItem[]; nested: Map<st
   return { flow, nested }
 }
 
-const TurnView = memo(function TurnView({ turn, live, startedAt, endedBadly = false }: { turn: Turn; live: boolean; startedAt?: number; endedBadly?: boolean }) {
+/** What folding needs to know of one segment of a finished turn. */
+function foldRowOf(segment: Segment, recovered: ReadonlySet<string>): FoldRow {
+  const unrecovered = (item: ChatItem) => toolFailed(item) && !recovered.has(item.id)
+  if (segment.kind === 'group') return { kind: 'tools', keep: segment.items.some(unrecovered) }
+  const item = segment.item
+  if (isSubagentItem(item)) return { kind: 'cards', running: item.status === 'streaming' }
+  if (isActivity(item)) return { kind: 'message', toolsOnly: true, keep: unrecovered(item) }
+  // Errors, questions, plans, quick actions, notices, Mousse's own markers and applets stay in view.
+  if (item.role !== 'assistant' || item.kind !== 'message' || item.error || item.parts) return { kind: 'message', keep: true }
+  return { kind: 'message', text: !!item.text.trim() }
+}
+
+const TurnView = memo(function TurnView({
+  turn,
+  live,
+  startedAt,
+  endedBadly = false,
+  phase,
+  waiting = false,
+}: {
+  turn: Turn
+  live: boolean
+  startedAt?: number
+  endedBadly?: boolean
+  /** The running turn's phase, for its live line. */
+  phase?: string
+  waiting?: boolean
+}) {
   const { flow, nested } = useMemo(() => nestUnderTasks(turn.replies), [turn.replies])
+  // A finished turn ends on its answer: the work that led to it comes above it.
+  const ordered = useMemo(() => (live ? flow : settleFinishedTurn(flow, endedBadly)), [flow, live, endedBadly])
+  const segments = useMemo(() => segmentReplies(ordered, live), [ordered, live])
   // A failure is loud only when nothing came after it and the turn failed or was cut off.
   const recovered = useMemo(() => recoveredFailures(turn.replies, !live && endedBadly), [turn.replies, live, endedBadly])
-  const segments = useMemo(() => segmentReplies(flow), [flow])
+  const folded = useMemo(() => (live ? segments.map(() => false) : foldTurnWork(segments.map((segment) => foldRowOf(segment, recovered)))), [segments, live, recovered])
+  const hasFold = folded.some(Boolean)
+  const [workOpen, setWorkOpen] = useState(false)
   const lastReplyAt = turn.replies.reduce((latest, item) => Math.max(latest, item.createdAt), 0)
   const durationMs = turn.user && lastReplyAt > turn.user.createdAt && turn.user.createdAt > 0 ? lastReplyAt - turn.user.createdAt : undefined
+  const renderGroup = (items: ChatItem[]) => {
+    // A thought still being written stays out of the group: its own row is the turn's live line.
+    const liveThought = live && isLiveThought(items[items.length - 1]) ? items[items.length - 1] : undefined
+    const grouped = liveThought ? items.slice(0, -1) : items
+    const unrecovered = grouped.filter((item) => toolFailed(item) && !recovered.has(item.id)).length
+    // One finished call left beside the live thought is its own row: it says more than "Read 1 file".
+    const single = grouped.length === 1 && !isRunningCall(grouped[0]) ? grouped[0] : undefined
+    const icon = workGroupIcon(grouped)
+    return (
+      <>
+        {single ? (
+          <ToolItem item={single} live={live} nested={nested.get(single.id)} />
+        ) : grouped.length ? (
+          <ToolGroup
+            title={workGroupTitle(grouped)}
+            icon={icon === 'Thinking' ? <ThinkingIcon size={18} /> : <ToolIcon name={icon} state="done" />}
+            count={grouped.length}
+            failed={unrecovered}
+            live={live}
+          >
+            {grouped.map((item) => (
+              <ToolItem key={item.id} item={item} live={live} nested={nested.get(item.id)} />
+            ))}
+          </ToolGroup>
+        ) : null}
+        {liveThought && <ToolItem item={liveThought} live={live} />}
+      </>
+    )
+  }
   return (
     <RecoveredFailuresContext.Provider value={recovered}>
-    <div className="m-tl-turn">
-      {turn.user && <UserMessage item={turn.user} />}
-      {turn.user && <WorkStatus live={live} startedAt={startedAt ?? turn.user.createdAt} durationMs={durationMs} />}
-      <div className="m-tl-answer">
-        {segments.map((segment) =>
-          segment.kind === 'item' ? (
-            <ReplyItem key={segment.item.id} item={segment.item} live={live} nested={nested.get(segment.item.id)} />
-          ) : (
-            <div key={`${segment.items[0].id}-group`} data-testid="chat-item" data-role="tool">
-              <ToolGroup
-                label={groupLabel(segment.items)}
-                count={segment.items.length}
-                running={live && segment.items.some((item) => item.status === 'streaming')}
-              >
-                {segment.items.map((item) => (
-                  <ToolItem key={item.id} item={item} live={live} nested={nested.get(item.id)} />
-                ))}
-              </ToolGroup>
-            </div>
-          ),
+      <div className="m-tl-turn">
+        {turn.user && <UserMessage item={turn.user} />}
+        {turn.user && (
+          <WorkStatus
+            live={live}
+            startedAt={startedAt ?? turn.user.createdAt}
+            durationMs={durationMs}
+            fold={hasFold ? { open: workOpen, onToggle: () => setWorkOpen((open) => !open) } : undefined}
+          />
         )}
+        <div className="m-tl-answer">
+          {segments.map((segment, index) => {
+            if (folded[index] && !workOpen) return null
+            return segment.kind === 'item' ? (
+              <ReplyItem key={segment.item.id} item={segment.item} live={live} nested={nested.get(segment.item.id)} />
+            ) : (
+              <div key={`${segment.items[0].id}-group`} data-testid="chat-item" data-role="tool">
+                {renderGroup(segment.items)}
+              </div>
+            )
+          })}
+          {live && <TurnProgressRow replies={flow} phase={phase} waiting={waiting} />}
+        </div>
+        {!live && <EditSummary replies={turn.replies} />}
       </div>
-      {!live && <EditSummary replies={turn.replies} />}
-    </div>
     </RecoveredFailuresContext.Provider>
   )
 })
@@ -461,6 +577,8 @@ export function Timeline({ items, display, active, onApprovePlan, onAddToDraft, 
               live={last && active}
               startedAt={last && active ? display.turnStartedAt : undefined}
               endedBadly={last && (display.phase === 'failed' || display.phase === 'stopped')}
+              phase={last && active ? display.phase : undefined}
+              waiting={last && active && waiting}
             />
           )
         })}

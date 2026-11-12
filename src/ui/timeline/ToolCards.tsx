@@ -19,6 +19,7 @@ import {
   formatElapsed,
   genericTitle,
   hunks,
+  liveThoughtLine,
   mcpArgs,
   mcpTitle,
   outputText,
@@ -136,12 +137,16 @@ interface RowProps {
   detail?: string
   /** The detail is code (a command, a file name). */
   detailMono?: boolean
+  /** The detail is a thought being written: too long for the row, it is cut at its start, not its end. */
+  liveDetail?: boolean
   animating?: boolean
   /** A failed call: the icon turns red, and the label too unless the agent got past it (`recovered`). */
   failed?: boolean
   recovered?: boolean
   /** The icon draws its own state (the thinking atom); otherwise it pulses, dims or reddens with the row. */
   plainIcon?: boolean
+  /** Whether a running row's label shimmers; a thought turns its icon instead. */
+  shimmer?: boolean
   /** Short status after the detail (a failure count, an exit code); never cut. */
   badge?: ReactNode
   /** Children make the row expandable. */
@@ -159,10 +164,12 @@ export function ToolRow({
   label,
   detail,
   detailMono = false,
+  liveDetail = false,
   animating = false,
   failed = false,
   recovered = false,
   plainIcon = false,
+  shimmer = true,
   badge,
   children,
   defaultOpen = false,
@@ -185,10 +192,17 @@ export function ToolRow({
             {icon}
           </ToolStateIcon>
         ))}
-      <Shimmer active={animating} className={`m-tl-row__label${detail ? '' : ' m-tl-row__label--alone'}${loud ? ' m-tl-row__label--error' : ''}`}>
+      <Shimmer active={animating && shimmer} className={`m-tl-row__label${detail ? '' : ' m-tl-row__label--alone'}${loud ? ' m-tl-row__label--error' : ''}`}>
         {label}
       </Shimmer>
-      {detail && <span className={`m-tl-row__detail${detailMono ? ' m-tl-mono' : ''}`}>{detail}</span>}
+      {detail &&
+        (liveDetail ? (
+          <span className="m-tl-row__detail m-tl-live-thought" title={detail}>
+            <bdi>{detail}</bdi>
+          </span>
+        ) : (
+          <span className={`m-tl-row__detail${detailMono ? ' m-tl-mono' : ''}`}>{detail}</span>
+        ))}
       {quiet && <span className="m-tl-failed-mark" aria-label="failed">×</span>}
       {badge && <span className="m-tl-row__badge">{badge}</span>}
       {expandable && <ChevronRight size={16} className="m-tl-row__chevron" />}
@@ -240,15 +254,18 @@ function CopyIconButton({ text, label }: { text: string; label: string }) {
 export function ThinkingRow({ item, live }: { item: ChatItem; live: boolean }) {
   const running = item.status === 'streaming' && live
   const heading = thoughtHeading(item.text)
+  // While it streams, the thought as it is written follows the label on one line: its newest words show.
+  const line = running ? liveThoughtLine(item.text) : ''
   return (
     <ToolRow
       icon={<ThinkingIcon size={18} active={running} />}
       plainIcon
       label={running || !heading ? 'Thinking' : heading}
+      detail={line || undefined}
+      liveDetail
       animating={running}
+      shimmer={false}
       testId="tool-thinking"
-      // A thought being written shows its text as it comes (thinking-tool.tsx).
-      defaultOpen={running}
     >
       {item.text.trim() ? (
         <div className="m-tl-thought">
@@ -763,19 +780,40 @@ export const ToolItem = memo(function ToolItem({ item, live, nested = [] }: Tool
   }
 })
 
-/** The group of consecutive activity rows: collapsed by default, titled by the latest thought. */
-export function ToolGroup({ label, count, running, children }: { label: string; count: number; running: boolean; children: ReactNode }) {
-  const title = label || 'Tool calls'
+/**
+ * One still line for consecutive calls, titled with what they did ("Read 3 files and ran 2 commands"), closed until
+ * tapped (tool-calls-group.tsx). Open, the rows sit in a box capped at about 18rem that scrolls on its own, with soft
+ * edges where more rows are; while the turn runs it keeps its newest row in view.
+ */
+export function ToolGroup({ title, icon, count, failed = 0, live, children }: { title: string; icon: ReactNode; count: number; failed?: number; live: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(false)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const atEndRef = useRef(true)
+  useEffect(() => {
+    const box = scrollRef.current
+    if (box && live && atEndRef.current) box.scrollTop = box.scrollHeight
+  }, [count, live, open])
   return (
     <ToolRow
       testId="tool-group"
-      icon={label ? <ThinkingIcon size={18} active={running} /> : <Wrench size={18} />}
-      plainIcon={!!label}
-      label={title}
-      detail={label ? undefined : `${count}`}
-      animating={running}
+      icon={icon}
+      plainIcon
+      label={title || 'Tool calls'}
+      // Only failures the agent did not get past are named on the group line.
+      badge={failed > 0 ? <span className="m-tl-row__failed">· {failed} failed</span> : undefined}
+      open={open}
+      onToggle={() => setOpen((value) => !value)}
     >
-      <div className="m-tl-group">{children}</div>
+      <div
+        ref={scrollRef}
+        className="m-tl-group-scroll"
+        onScroll={(event) => {
+          const box = event.currentTarget
+          atEndRef.current = box.scrollHeight - box.scrollTop - box.clientHeight < 4
+        }}
+      >
+        <div className="m-tl-group">{children}</div>
+      </div>
     </ToolRow>
   )
 }

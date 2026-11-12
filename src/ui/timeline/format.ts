@@ -540,20 +540,34 @@ export function groupTurns(items: ChatItem[]): Turn[] {
   return turns
 }
 
-/** Thoughts and tool calls group together; questions stand alone, like the desktop. */
+/** Calls drawn on their own surface, never inside a group or folded behind a finished turn's line. */
+const STANDALONE_TOOLS = new Set(['Question', 'QuestionAnswers', 'QuickAction', 'ExitPlanMode', 'PlanWrite'])
+/** A runtime's own subagent: a card of its own, outside any group. */
+export const isSubagentItem = (item: ChatItem): boolean => item.kind === 'tool' && (item.tool?.name === 'Task' || item.tool?.name === 'Agent')
+
+/** Thoughts and tool calls group together; questions, plans, quick actions and subagents stand alone. */
 export function isActivity(item: ChatItem): boolean {
   if (item.kind === 'thinking') return true
-  return item.kind === 'tool' && item.tool?.name !== 'Question'
+  return item.kind === 'tool' && !!item.tool && !STANDALONE_TOOLS.has(item.tool.name) && !isSubagentItem(item)
 }
+
+/** A call (not a thought) that has not finished. */
+export const isRunningCall = (item: ChatItem): boolean => item.kind === 'tool' && item.status === 'streaming'
+/** A thought still being written. */
+export const isLiveThought = (item: ChatItem | undefined): boolean => item?.kind === 'thinking' && item.status === 'streaming'
 
 export type Segment = { kind: 'item'; item: ChatItem } | { kind: 'group'; items: ChatItem[] }
 
-/** Runs of two or more activity rows collapse into one group. */
-export function segmentReplies(replies: ChatItem[]): Segment[] {
+/**
+ * Runs of activity rows with two or more calls fold into one group; narration between them splits them. While the
+ * turn runs (`live`), a call still running folds into a group even alone: the live line under the work says what
+ * runs now, so it does not show twice.
+ */
+export function segmentReplies(replies: ChatItem[], live = false): Segment[] {
   const segments: Segment[] = []
   let run: ChatItem[] = []
   const flush = () => {
-    if (run.length >= 2) segments.push({ kind: 'group', items: run })
+    if (run.length >= 2 || (live && run.some(isRunningCall))) segments.push({ kind: 'group', items: run })
     else for (const item of run) segments.push({ kind: 'item', item })
     run = []
   }
@@ -568,7 +582,7 @@ export function segmentReplies(replies: ChatItem[]): Segment[] {
   return segments
 }
 
-/** The latest thought heading in a group, or "" to fall back to "Tool calls". */
+/** The latest thought heading in a group, or "". */
 export function groupLabel(items: ChatItem[]): string {
   for (let index = items.length - 1; index >= 0; index--) {
     const item = items[index]
@@ -578,6 +592,256 @@ export function groupLabel(items: ChatItem[]): string {
     }
   }
   return ''
+}
+
+// ---- Work groups (assistant-blocks.ts workGroupTitle) ----
+
+type WorkKind = 'edit' | 'command' | 'read' | 'search' | 'web' | 'fetch' | 'agent' | 'other' | 'thought'
+
+function workKindOf(item: ChatItem): WorkKind {
+  if (item.kind === 'thinking') return 'thought'
+  switch (item.tool?.name) {
+    case 'Read':
+      return 'read'
+    case 'Edit':
+    case 'Write':
+    case 'NotebookEdit':
+      return 'edit'
+    case 'Bash':
+      return 'command'
+    case 'Grep':
+    case 'Glob':
+      return 'search'
+    case 'WebSearch':
+      return 'web'
+    case 'WebFetch':
+      return 'fetch'
+    case 'Task':
+    case 'Agent':
+      return 'agent'
+    default:
+      return 'other'
+  }
+}
+
+/** Which kinds a title names first when a group did more than three kinds of thing: changes before reads. */
+const KIND_PRIORITY: WorkKind[] = ['edit', 'command', 'read', 'search', 'web', 'fetch', 'agent', 'other']
+const times = (count: number) => (count === 1 ? 'once' : count === 2 ? 'twice' : `${count} times`)
+
+function kindPhrase(kind: WorkKind, count: number): string {
+  switch (kind) {
+    case 'edit':
+      return `Edited ${plural(count, 'file')}`
+    case 'command':
+      return `Ran ${plural(count, 'command')}`
+    case 'read':
+      return `Read ${plural(count, 'file')}`
+    case 'search':
+      return `Searched code ${times(count)}`
+    case 'web':
+      return `Searched the web ${times(count)}`
+    case 'fetch':
+      return `Fetched ${plural(count, 'page')}`
+    case 'agent':
+      return `Ran ${plural(count, 'subagent')}`
+    default:
+      return `Used ${plural(count, 'tool')}`
+  }
+}
+
+type KindTally = { kind: WorkKind; calls: number; files: Set<string>; first: number; item: ChatItem }
+
+function tallyKinds(items: ChatItem[]): KindTally[] {
+  const tallies = new Map<WorkKind, KindTally>()
+  items.forEach((item, index) => {
+    const kind = workKindOf(item)
+    let tally = tallies.get(kind)
+    if (!tally) tallies.set(kind, (tally = { kind, calls: 0, files: new Set(), first: index, item }))
+    // Reading one file twice counts once.
+    const file = kind === 'read' || kind === 'edit' ? filePathOf(item.tool?.input).trim() : ''
+    if (file) {
+      if (!tally.files.has(file)) tally.calls += 1
+      tally.files.add(file)
+    } else tally.calls += 1
+  })
+  return [...tallies.values()]
+}
+
+/**
+ * What a group of calls did, by kind: "Read 3 files and ran 2 commands". Up to three kinds are named in the order
+ * they first ran; with more, the two that changed most are named and the rest counted as other actions. Thoughts
+ * are left out; a group of thoughts alone takes its latest thought's line.
+ */
+export function workGroupTitle(items: ChatItem[]): string {
+  const tallies = tallyKinds(items)
+  const work = tallies.filter((tally) => tally.kind !== 'thought')
+  if (work.length === 0) return groupLabel(items) || (tallies.length ? 'Thought' : '')
+  const named = [...work]
+    .sort((a, b) => KIND_PRIORITY.indexOf(a.kind) - KIND_PRIORITY.indexOf(b.kind))
+    .slice(0, work.length === 3 ? 3 : 2)
+    .sort((a, b) => a.first - b.first)
+  const rest = work.filter((tally) => !named.includes(tally)).reduce((sum, tally) => sum + tally.calls, 0)
+  const phrases = named.map((tally, index) => {
+    const phrase = kindPhrase(tally.kind, tally.calls)
+    return index === 0 ? phrase : phrase[0].toLowerCase() + phrase.slice(1)
+  })
+  if (rest > 0) phrases.push(plural(rest, 'other action'))
+  return phrases.length > 1 ? `${phrases.slice(0, -1).join(', ')} and ${phrases[phrases.length - 1]}` : phrases[0]
+}
+
+/** The tool whose icon stands for a group: its calls' tool when all are one kind, 'Thinking' for thoughts alone. */
+export function workGroupIcon(items: ChatItem[]): string | undefined {
+  const tallies = tallyKinds(items)
+  const work = tallies.filter((tally) => tally.kind !== 'thought')
+  if (work.length === 0) return tallies.length ? 'Thinking' : undefined
+  return work.length === 1 ? work[0].item.tool?.name : undefined
+}
+
+// ---- Settling and folding a finished turn (assistant-blocks.ts) ----
+
+const isReplyText = (item: ChatItem): boolean => item.role === 'assistant' && item.kind === 'message' && !!item.text.trim() && !item.error
+
+/**
+ * A finished turn as it reads once the work is done: its answer, the last reply with text, comes last, and work
+ * after it moves above it. A turn cut off by a Stop or a restart (`cutOff`) has no answer: when work followed its
+ * last text, that text was written before the work and the turn keeps the order it ran in.
+ */
+export function settleFinishedTurn(replies: ChatItem[], cutOff = false): ChatItem[] {
+  let answer = -1
+  for (let index = replies.length - 1; index >= 0; index--) {
+    if (isReplyText(replies[index])) {
+      answer = index
+      break
+    }
+  }
+  if (answer === -1) return replies
+  const after = replies.slice(answer + 1)
+  if (!after.some(isActivity)) return replies
+  if (cutOff) return replies
+  return [...replies.slice(0, answer), ...after.filter(isActivity), replies[answer], ...after.filter((item) => !isActivity(item))]
+}
+
+/** What `foldTurnWork` knows of one segment of a finished turn. */
+export type FoldRow = {
+  kind: 'message' | 'tools' | 'cards'
+  /** Tool calls and thoughts only. */
+  toolsOnly?: boolean
+  /** A reply with text (narration, or the answer). */
+  text?: boolean
+  /** Stays in view whatever the fold: an error, a question, a plan, a notice, a marker, an unrecovered failure. */
+  keep?: boolean
+  /** A subagent still working. */
+  running?: boolean
+}
+
+/**
+ * Which segments of a finished turn fold behind its "Worked for" line: the work (thoughts, groups, narration,
+ * finished subagents), not the answer. The answer is the last reply with text and no work after it; a turn cut off
+ * before it wrote one folds all of its work. What needs the person stays in view.
+ */
+export function foldTurnWork(rows: FoldRow[]): boolean[] {
+  let answer = -1
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]
+    if (row.kind === 'tools') break
+    if (row.kind === 'cards') continue
+    if (row.toolsOnly) break
+    if (row.keep) continue
+    if (row.text) answer = index
+    break
+  }
+  return rows.map((row, index) => {
+    if (row.kind === 'tools') return !row.keep
+    if (row.kind === 'cards') return !row.running
+    if (row.keep || index === answer) return false
+    return !!row.toolsOnly || !!row.text
+  })
+}
+
+// ---- A thought as it is written (format-tool.ts) ----
+
+const LIVE_THOUGHT_CHARS = 160
+
+/** The latest paragraph of a thought, as plain text on one line. */
+export function liveThoughtText(content: string | undefined): string {
+  if (!content?.trim()) return ''
+  const paragraphs = content.split(/\n\s*\n/).filter((block) => block.trim())
+  const latest = paragraphs[paragraphs.length - 1]
+    .split('\n')
+    .map((line) => line.trim().replace(/^#{1,6}\s+/, '').replace(/^>\s?/, ''))
+    .filter(Boolean)
+    .join(' ')
+  return stripInlineMarkdown(latest).replace(/(\*\*|__)/g, '').replace(/\s+/g, ' ').trim()
+}
+
+/** The newest words of a thought being written, starting at a word. */
+export function liveThoughtLine(content: string | undefined): string {
+  const plain = liveThoughtText(content)
+  if (plain.length <= LIVE_THOUGHT_CHARS) return plain
+  const tail = plain.slice(plain.length - LIVE_THOUGHT_CHARS)
+  const space = tail.indexOf(' ')
+  return `…${space > 0 && space < 24 ? tail.slice(space + 1) : tail}`
+}
+
+// ---- The live line under Working (turn-progress.tsx) ----
+
+export interface TurnProgress {
+  kind: 'starting' | 'thinking' | 'writing' | 'preparing-tool' | 'running-tool' | 'finishing'
+  label: string
+  /** What the running call works on, shown dim after the label. */
+  detail?: string
+  /** The running tool: the line shows its icon, pulsing. */
+  tool?: string
+}
+
+function inputDetail(input: unknown): string | undefined {
+  if (!isObject(input)) return undefined
+  for (const key of ['command', 'file_path', 'pattern', 'query', 'url', 'description', 'prompt']) {
+    const value = input[key]
+    if (typeof value === 'string' && value.trim()) {
+      const line = value.trim().split('\n')[0]
+      return line.length > 120 ? `${line.slice(0, 117)}…` : line
+    }
+  }
+  return undefined
+}
+
+/** Fields a call's row has before its arguments arrive; they say nothing about what it will do. */
+const PLACEHOLDER_INPUT_KEYS = new Set(['label', 'cwd'])
+
+function toolProgress(item: ChatItem): TurnProgress {
+  const tool = item.tool!
+  const detail = inputDetail(tool.input)
+  if (isSubagentItem(item)) {
+    return detail ? { kind: 'running-tool', label: 'Running subagent…', detail } : { kind: 'preparing-tool', label: 'Starting subagent…' }
+  }
+  const name = tool.name === 'Mcp' ? mcpDisplayName(tool) : tool.name === 'Generic' ? tool.rawName || 'tool' : tool.name
+  const noInput = !tool.input || Object.entries(tool.input).every(([key, value]) => PLACEHOLDER_INPUT_KEYS.has(key) || value === undefined || value === null || value === '')
+  if (noInput) return { kind: 'preparing-tool', label: `Preparing ${name}…`, tool: tool.name }
+  return { kind: 'running-tool', label: `Running ${name}…`, detail, tool: tool.name }
+}
+
+/**
+ * What a running turn does now, in a few words, for the line under its work. Null where something else already
+ * says it: a question waiting, a compaction running, or a thought being written (its row is the live line).
+ */
+export function describeTurnProgress(replies: ChatItem[], phase: string | undefined, waiting: boolean): TurnProgress | null {
+  if (waiting || phase === 'awaiting_input') return null
+  const last = replies[replies.length - 1]
+  if (last?.kind === 'compaction' && last.status === 'streaming') return null
+  if (isLiveThought(last)) return null
+  for (let index = replies.length - 1; index >= 0; index--) if (isRunningCall(replies[index])) return toolProgress(replies[index])
+  switch (phase) {
+    case 'streaming':
+      return { kind: 'writing', label: 'Writing…' }
+    case 'tool_running':
+      return { kind: 'running-tool', label: 'Running tools…' }
+    case 'finalizing':
+      return { kind: 'finishing', label: 'Thinking…' }
+    case 'queued':
+      return { kind: 'starting', label: 'Thinking…' }
+  }
+  return replies.length ? { kind: 'thinking', label: 'Thinking…' } : { kind: 'starting', label: 'Thinking…' }
 }
 
 export interface FileEdit {

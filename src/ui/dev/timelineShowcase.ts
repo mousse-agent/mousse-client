@@ -209,3 +209,29 @@ export function showcaseQuestions(): PendingQuestions[] {
     { requestId: 'showcase-q2', questions: [{ id: 'approval', prompt: 'Run `npm run release` on the computer?', options: [{ id: 'approve', label: 'Approve' }, { id: 'reject', label: 'Reject' }] }] },
   ]
 }
+
+/** A thread with a turn still running, for the live states: ?signedIn&screen=thread:node-studio:t-showcase-live */
+export const SHOWCASE_LIVE_THREAD_ID = 't-showcase-live'
+
+export function showcaseLiveItems(base: number): ChatItem[] {
+  const t = (seconds: number) => base - seconds * 1000
+  const call = (id: string, at: number, name: string, input: Record<string, unknown>, extra: Partial<ChatItem> = {}): ChatItem => ({
+    id,
+    role: 'tool',
+    kind: 'tool',
+    text: '',
+    createdAt: t(at),
+    status: 'done',
+    toolName: name,
+    tool: { name, title: name, summary: '', details: [], input },
+    ...extra,
+  })
+  return [
+    { id: 'l-u1', role: 'user', kind: 'message', text: 'Run the link tests and fix what fails.', createdAt: t(40), status: 'done' },
+    { id: 'l-th1', role: 'assistant', kind: 'thinking', text: '**Finding the tests**\n\nThe link tests live under tests/net.', createdAt: t(38), status: 'done' },
+    call('l-gl', 36, 'Glob', { pattern: 'tests/net/*.test.ts' }, { tool: { name: 'Glob', title: 'Glob', summary: '', details: [], input: { pattern: 'tests/net/*.test.ts' }, output: 'tests/net/link.test.ts\ntests/net/resume.test.ts' } }),
+    call('l-rd', 34, 'Read', { file_path: 'tests/net/link.test.ts' }),
+    { id: 'l-n1', role: 'assistant', kind: 'message', text: 'Both test files are small. Running them now.', createdAt: t(30), status: 'done' },
+    call('l-bs', 20, 'Bash', { command: 'npm test -- tests/net' }, { status: 'streaming', tool: { name: 'Bash', title: 'Bash', summary: '', details: [], input: { command: 'npm test -- tests/net' }, output: { stdout: ' ✓ link (12 tests)\n ✓ resume (3 tests)\n' } } }),
+  ]
+}

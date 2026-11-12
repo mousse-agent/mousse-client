@@ -29,7 +29,7 @@ import type {
   ThreadDisplayState,
   ThreadSummary
 } from '../../connection/types'
-import { SHOWCASE_THREAD_ID, showcaseItems, showcaseQuestions } from './timelineShowcase'
+import { SHOWCASE_LIVE_THREAD_ID, SHOWCASE_THREAD_ID, showcaseItems, showcaseLiveItems, showcaseQuestions } from './timelineShowcase'
 import { FakeComputerSpeech } from './fakeSpeech'
 
 export interface FakeConnectionOptions {
@@ -86,7 +86,8 @@ function initialThreads(): ThreadSummary[] {
     { id: 't-voices', projectId: 'p-mousse', title: 'Fetch extra Kokoro voices on first use', updatedAt: BASE_TIME - 3 * 3_600_000 },
     { id: 't-landing', projectId: 'p-site', title: 'Landing page copy', updatedAt: BASE_TIME - 26 * 3_600_000 },
     { id: 't-icons', projectId: 'p-client', title: 'Swap lucide for Hugeicons', updatedAt: BASE_TIME - 50 * 3_600_000, settled: true },
-    { id: SHOWCASE_THREAD_ID, projectId: 'p-mousse', title: 'Timeline showcase', updatedAt: BASE_TIME - 80 * 3_600_000 }
+    { id: SHOWCASE_THREAD_ID, projectId: 'p-mousse', title: 'Timeline showcase', updatedAt: BASE_TIME - 80 * 3_600_000 },
+    { id: SHOWCASE_LIVE_THREAD_ID, projectId: 'p-mousse', title: 'Live turn showcase', updatedAt: BASE_TIME - 81 * 3_600_000 }
   ]
 }
 
@@ -108,6 +109,7 @@ function initialChats(): ListChat[] {
 
 function initialItems(threadId: string, title: string): ChatItem[] {
   if (threadId === SHOWCASE_THREAD_ID) return showcaseItems(BASE_TIME)
+  if (threadId === SHOWCASE_LIVE_THREAD_ID) return showcaseLiveItems(Date.now())
   if (threadId === 't-redesign') {
     return [
       { id: 'i1', role: 'user', text: 'Make the phone app look like the desktop: same tokens, Geist, Hugeicons.', createdAt: BASE_TIME - 9 * 60_000, status: 'done' },

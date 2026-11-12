@@ -49,8 +49,13 @@ describe('timeline', () => {
     expect(screen.getByText('Fix the relay')).toBeInTheDocument()
     expect(screen.getByText('log.txt')).toBeInTheDocument()
     expect(screen.getByText('relay.ts')).toBeInTheDocument()
-    // The thought and the three tool calls collapse into a group titled by the thought.
-    const group = screen.getByRole('button', { name: /Reading the relay code/ })
+    // The finished turn folds its work behind its Worked line; the answer stays.
+    expect(screen.queryByTestId('tool-group')).not.toBeInTheDocument()
+    const worked = screen.getByRole('button', { name: 'Worked for 1m' })
+    expect(worked).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(worked)
+    // The thought and the two calls are one group that says what they did.
+    const group = screen.getByRole('button', { name: /Ran 1 command and edited 1 file/ })
     expect(group).toHaveAttribute('aria-expanded', 'false')
     fireEvent.click(group)
     expect(screen.getByRole('button', { name: /npm test -- relay/ })).toBeInTheDocument()
@@ -66,7 +71,6 @@ describe('timeline', () => {
     expect(screen.getByRole('link', { name: 'Docs' })).toHaveAttribute('href', 'https://example.com/')
     expect(screen.getByText(/<b>/)).toBeInTheDocument()
     // Worked-for line, turn file changes and response metadata.
-    expect(screen.getByText('Worked for 1m')).toBeInTheDocument()
     expect(screen.getByTestId('turn-edits')).toHaveTextContent('1 changed file')
     fireEvent.click(screen.getByRole('button', { name: 'Response metadata' }))
     expect(screen.getByRole('dialog', { name: 'Response metadata' })).toHaveTextContent('41.5 tok/s')
@@ -107,8 +111,11 @@ describe('timeline', () => {
       { id: 'x1', role: 'tool', kind: 'tool', text: '', createdAt: at + 1000, status: 'streaming', tool: { name: 'Bash', title: '', summary: '', details: [], input: { command: 'make' } } },
     ]
     const { rerender } = render(<Timeline items={live} display={{ questions: [], phase: 'tool_running', turnStartedAt: Date.now() - 5000 }} active />)
-    expect(screen.getByText('Running')).toHaveClass('m-tl-shimmer--active')
-    expect(screen.getByTestId('tool-bash').querySelector('.m-tl-icon')).toHaveAttribute('data-state', 'running')
+    // A running call folds into its group; the live line under the work says what runs now.
+    expect(screen.getByRole('button', { name: /Ran 1 command/ })).toBeInTheDocument()
+    const progress = screen.getByTestId('turn-progress')
+    expect(progress).toHaveTextContent('Running Bash…make')
+    expect(progress.querySelector('.m-tl-icon')).toHaveAttribute('data-state', 'running')
     expect(screen.getByTestId('work-status')).toHaveTextContent(/Working for \d+ seconds?/)
     rerender(<Timeline items={live} display={{ questions: [], phase: 'stopped' }} active={false} />)
     expect(screen.getByTestId('run-interrupted')).toHaveTextContent('Run interrupted')
@@ -164,7 +171,11 @@ describe('timeline', () => {
     const icon = () => container.querySelector('.m-thinking-icon')!
     expect(icon()).toHaveAttribute('data-thinking', 'active')
     expect(icon().querySelector('.m-thinking-icon__orbit')).not.toBeNull()
+    // Written so far, the thought follows the label; nothing else says Thinking.
+    expect(screen.getByTestId('tool-thinking')).toHaveTextContent('ThinkingWeighing options')
+    expect(screen.queryByTestId('turn-progress')).not.toBeInTheDocument()
     rerender(<Timeline items={[items[0], { ...thought, status: 'done' }]} display={idle} active={false} />)
+    fireEvent.click(screen.getByRole('button', { name: /Worked for/ }))
     expect(icon()).toHaveAttribute('data-thinking', 'done')
   })
 
@@ -184,6 +195,7 @@ describe('timeline', () => {
       { id: 'c2', role: 'assistant', kind: 'message', text: 'Fixed it.', createdAt: at + 5000, status: 'done' },
     ]
     render(<Timeline items={turn} display={idle} active={false} />)
+    fireEvent.click(screen.getByRole('button', { name: /Worked for/ }))
     // The shell wrapper is gone from the row, and the failure the agent got past is quiet: no red label, no exit badge.
     const row = screen.getByRole('button', { name: /Failed npm test/ })
     expect(row.querySelector('.m-tl-row__label--error')).toBeNull()
@@ -195,10 +207,41 @@ describe('timeline', () => {
     expect(body.querySelector('.m-tl-out__exit')).toHaveTextContent('exit 1')
     expect(body).not.toHaveTextContent('Exit code 1')
     cleanup()
-    // A failure that ended a failed turn stays loud.
+    // A failure that ended a failed turn stays loud, and in view when the work folds.
     render(<Timeline items={turn.slice(0, 2)} display={{ questions: [], phase: 'failed' }} active={false} />)
     const loud = screen.getByRole('button', { name: /Failed npm test/ })
     expect(loud.querySelector('.m-tl-row__label--error')).not.toBeNull()
     expect(loud).toHaveTextContent('exit 1')
+  })
+
+  it('keeps the answer last, and what needs the person in view, when a finished turn folds', () => {
+    const tool = (id: string, name: string, input: Record<string, unknown>, createdAt: number): ChatItem => ({
+      id,
+      role: 'tool',
+      kind: 'tool',
+      text: '',
+      createdAt,
+      status: 'done',
+      tool: { name, title: name, summary: '', details: [], input },
+    })
+    const turn: ChatItem[] = [
+      items[0],
+      { id: 'h', role: 'system', kind: 'handoff', text: '', createdAt: at + 500, status: 'done', handoff: { from: 'gpt', to: 'claude' } },
+      { id: 'n1', role: 'assistant', kind: 'message', text: 'Looking at the relay first.', createdAt: at + 1000, status: 'done' },
+      tool('r1', 'Read', { file_path: 'a.ts' }, at + 2000),
+      tool('r2', 'Read', { file_path: 'b.ts' }, at + 3000),
+      { id: 'ans', role: 'assistant', kind: 'message', text: 'All fixed.', createdAt: at + 4000, status: 'done' },
+      tool('r3', 'Read', { file_path: 'a.ts' }, at + 5000),
+    ]
+    const { container } = render(<Timeline items={turn} display={idle} active={false} />)
+    // The model switch marker and the answer stay; the narration and reads fold.
+    expect(screen.getByText('gpt')).toBeInTheDocument()
+    expect(screen.queryByText('Looking at the relay first.')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Worked for/ }))
+    expect(screen.getByText('Looking at the relay first.')).toBeInTheDocument()
+    // Work written after the answer moves above it, and reading a file twice counts once.
+    const texts = [...container.querySelectorAll('.m-tl-answer > *')].map((node) => node.textContent)
+    expect(texts[texts.length - 1]).toContain('All fixed.')
+    expect(screen.getByRole('button', { name: /Read 2 files/ })).toBeInTheDocument()
   })
 })
