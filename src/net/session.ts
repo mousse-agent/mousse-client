@@ -108,6 +108,7 @@ type PendingSnapshot = {
   timer: ReturnType<typeof setTimeout>
 }
 
+/** How long a snapshot may go without a chunk arriving. A large one over a slow link takes longer in total. */
 export const SNAPSHOT_DEADLINE_MS = 60_000
 const SNAPSHOT_MAX_RECORDS = 4096
 
@@ -293,10 +294,7 @@ export class LeafSession {
       resolve = res
       reject = rej
     })
-    const timer = setTimeout(() => {
-      this.settleSnapshot(stream, undefined, new NetError('deadline_exceeded', 'The computer did not send the thread in time.'))
-    }, SNAPSHOT_DEADLINE_MS)
-    this.snapshots.set(stream, { promise, resolve, reject, records: [], timer })
+    this.snapshots.set(stream, { promise, resolve, reject, records: [], timer: this.snapshotTimer(stream) })
     void this.send({ t: 'snapshot.get', stream }).catch((error) => this.settleSnapshot(stream, undefined, error))
     return promise
   }
@@ -452,7 +450,16 @@ export class LeafSession {
       throw new NetError('bad_request', 'Snapshot chunks are not contiguous.')
     pending.records.push(...records)
     if (pending.records.length > SNAPSHOT_MAX_RECORDS) throw new NetError('too_large', 'Snapshot is too large.')
-    if (h.done) this.settleSnapshot(h.stream, { target, records: pending.records })
+    if (h.done) return this.settleSnapshot(h.stream, { target, records: pending.records })
+    // A transfer that is still moving is never cut off: the deadline counts from the latest chunk.
+    clearTimeout(pending.timer)
+    pending.timer = this.snapshotTimer(h.stream)
+  }
+
+  private snapshotTimer(stream: string): ReturnType<typeof setTimeout> {
+    return setTimeout(() => {
+      this.settleSnapshot(stream, undefined, new NetError('deadline_exceeded', 'The computer did not send the thread in time.'))
+    }, SNAPSHOT_DEADLINE_MS)
   }
 
   private settleSnapshot(stream: string, value?: StreamSnapshot, error?: Error): void {

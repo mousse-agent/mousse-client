@@ -199,6 +199,12 @@ const atOrBefore = (record: { epoch: number; seq: number }, head: StreamHead) =>
 /** Live records held past a gap while the replay catches up; more than this reads the thread again. */
 const EARLY_MAX_RECORDS = 1_000
 
+/** An error's message as a clause inside a sentence: without its own closing full stop. */
+function reason(error: unknown): string {
+  const text = error instanceof Error ? error.message.trim() : ''
+  return text.replace(/[.!?]+$/, '') || 'unknown error'
+}
+
 /** One thread's display stream, shared by every open view of that thread. */
 class ThreadWatch {
   readonly projection: ThreadProjection
@@ -283,6 +289,16 @@ class ThreadWatch {
     const items = this.projection.items()
     const state = this.projection.state()
     for (const listener of this.listeners) listener(items, state)
+  }
+
+  /**
+   * The thread can no longer be followed: what was saved stays as it was, and the copy on screen stops
+   * showing a running turn it cannot confirm, then says why.
+   */
+  giveUp(text: string): void {
+    this.save()
+    this.projection.stopRun()
+    this.report(text)
   }
 
   /** Shows a phone-only error line, for example when the thread could not be read. */
@@ -390,7 +406,7 @@ class ThreadWatch {
       .catch((error: unknown) => {
         if (this.closed) return
         this.markReady()
-        this.report(`This thread stopped updating: ${error instanceof Error ? error.message : 'unknown error'}. Open it again to reload.`)
+        this.giveUp(`This thread stopped updating: ${reason(error)}. Open it again to reload.`)
       })
       .finally(() => {
         this.resyncing = undefined
@@ -566,7 +582,7 @@ export class RealComputerSession implements ComputerSession {
     const fail = (error: unknown) => {
       if (this.watches.get(threadId) === entry) this.watches.delete(threadId)
       // A saved copy stays on screen with a note; without one the open itself fails.
-      if (entry.restored && watch.size) watch.report(`Could not update this thread: ${error instanceof Error ? error.message : 'unknown error'}. Open it again to retry.`)
+      if (entry.restored && watch.size) watch.giveUp(`Could not update this thread: ${reason(error)}. Open it again to retry.`)
       watch.close()
     }
     const restore = (saved: CachedThread | undefined): boolean => {
