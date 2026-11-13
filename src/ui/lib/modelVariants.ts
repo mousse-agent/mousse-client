@@ -567,3 +567,11 @@ export function getModelFastToggle(
       : target.id
   }
 }
+
+/**
+ * A name where the maker's logo already shows beside it, as the desktop's composer button names it
+ * (mousse/src/shared/modelNames.ts): "Claude Opus 5.5" → "Opus 5.5". "GPT-6.1 Sol" stays whole.
+ */
+export function shortModelName(name: string): string {
+  return name.replace(/^Claude\s+(?=(?:opus|sonnet|haiku|fable)\b)/i, '')
+}

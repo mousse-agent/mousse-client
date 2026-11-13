@@ -1,8 +1,9 @@
-// Phone versions of the desktop composer's menus (ModelFamilyMenu, ComposerEffortPicker, the mode
-// menu, the /skills picker and the context-usage popover), as bottom sheets.
+// Phone versions of the desktop composer's menus (ModelFamilyMenu with its run settings from
+// ComposerEffortPicker, the /skills picker and the context-usage popover), as bottom sheets.
 import { useMemo, useState, type ReactNode } from 'react'
-import type { ComposerSkill, ContextUsage, LlmProviderOption, QueuedMessage } from '../../connection/types'
+import type { ComposerSkill, ContextUsage, LlmProviderOption, PermissionMode, QueuedMessage } from '../../connection/types'
 import {
+  extractFamilyLabel,
   findModelFamily,
   formatEffortLabel,
   getCurrentEffort,
@@ -12,19 +13,14 @@ import {
   parseModelVariant,
   parseThinkingSuffixFromModelId,
   resolveModelVariant,
+  shortModelName,
   applyEffortToModelId,
   type ModelFamily
 } from '../lib/modelVariants'
-import { ArrowDown, ArrowUp, Check, ClipboardList, Copy, Hammer, InfinityIcon, LayoutGrid, Pencil, Sparkles, Star, Steer, Trash2 } from './icons'
+import { ArrowDown, ArrowUp, Check, Copy, LayoutGrid, Pencil, ShieldCheck, ShieldOff, Sparkles, Star, Steer, Trash2, Wand2, Zap } from './icons'
 import { ProviderIcon } from './providerIcons'
 import { SearchField } from './primitives'
 import { Sheet } from './Sheet'
-
-export const MODE_META: Record<string, { label: string; icon: ReactNode; detail: string }> = {
-  plan: { label: 'Plan', icon: <ClipboardList size={16} />, detail: 'Investigate and propose a plan without changing files' },
-  agent: { label: 'Agent', icon: <InfinityIcon size={16} />, detail: 'Work on the task end to end' },
-  build: { label: 'Build', icon: <Hammer size={16} />, detail: 'Implement directly' }
-}
 
 /** Providers that cannot plan (the desktop hides Plan for them). */
 export const isPlanless = (providerId: string | undefined) => !!providerId && providerId.toLowerCase().includes('antigravity')
@@ -51,33 +47,6 @@ function SheetOption({ selected, onClick, leading, title, detail, trailing, labe
   )
 }
 
-export function ModeSheet({ open, onClose, modes, mode, providerId, onSelect }: {
-  open: boolean
-  onClose(): void
-  modes: string[]
-  mode: string
-  providerId?: string
-  onSelect(mode: string): void
-}) {
-  const shown = modes.filter((entry) => MODE_META[entry] && !(entry === 'plan' && isPlanless(providerId)))
-  return (
-    <Sheet open={open} title="Agent" onClose={onClose}>
-      <div className="m-options" role="menu" aria-label="Mode">
-        {shown.map((entry) => (
-          <SheetOption
-            key={entry}
-            selected={entry === mode}
-            leading={MODE_META[entry].icon}
-            title={<>{MODE_META[entry].label}{entry === 'agent' && <span className="m-tag">Default</span>}</>}
-            detail={MODE_META[entry].detail}
-            onClick={() => { onSelect(entry); onClose() }}
-          />
-        ))}
-      </div>
-    </Sheet>
-  )
-}
-
 interface FlatEntry {
   providerId: string
   providerLabel: string
@@ -94,7 +63,7 @@ function initialVariantOptions(family: ModelFamily, selectedModelId: string, pre
   return { context: selected?.context ?? family.contexts[0], effort, speed: selected?.speed ?? family.speeds[0] }
 }
 
-export function ModelSheet({ open, onClose, providers, providerId, modelId, favorites, onToggleFavorite, onSelect }: {
+export function ModelSheet({ open, onClose, providers, providerId, modelId, favorites, onToggleFavorite, onSelect, permission }: {
   open: boolean
   onClose(): void
   providers: LlmProviderOption[]
@@ -103,6 +72,7 @@ export function ModelSheet({ open, onClose, providers, providerId, modelId, favo
   favorites: Set<string>
   onToggleFavorite(key: string): void
   onSelect(providerId: string, modelId: string): void
+  permission?: PermissionView
 }) {
   const [query, setQuery] = useState('')
   const [favoritesOnly, setFavoritesOnly] = useState(false)
@@ -151,7 +121,12 @@ export function ModelSheet({ open, onClose, providers, providerId, modelId, favo
   }
 
   return (
-    <Sheet open={open} title="Model" onClose={onClose}>
+    <Sheet
+      open={open}
+      title="Model"
+      onClose={onClose}
+      footer={<RunSettings providers={providers} providerId={providerId} modelId={modelId} permission={permission} onSelect={onSelect} onClose={onClose} />}
+    >
       {grouped.length === 0 ? (
         <p className="m-sheet__lead">No providers connected. Connect one in Mousse on the computer.</p>
       ) : (
@@ -230,67 +205,137 @@ export function ModelSheet({ open, onClose, providers, providerId, modelId, favo
   )
 }
 
-/** The effort pill's label, or undefined when the model has no efforts and no Fast toggle. */
-export function effortSummary(providers: LlmProviderOption[], providerId?: string, modelId?: string): string | undefined {
-  if (!providerId || !modelId) return undefined
-  const models = providers.find((provider) => provider.id === providerId)?.models ?? []
-  const efforts = getEffortsForModel(providerId, modelId, models)
-  const fast = getModelFastToggle(providerId, modelId, models)
-  if (!efforts.length && !fast) return undefined
-  const effort = getCurrentEffort(modelId, models, providerId)
-  return `${effort ? formatEffortLabel(effort) : 'Effort'}${fast?.active ? ' · Fast' : ''}`
+/** A level as the desktop names it ("Extra high"). */
+export function reasoningLevelLabel(level: string): string {
+  return level === 'xhigh' ? 'Extra high' : formatEffortLabel(level)
 }
 
-export function EffortSheet({ open, onClose, providers, providerId, modelId, onSelect }: {
-  open: boolean
-  onClose(): void
-  providers: LlmProviderOption[]
-  providerId: string
-  modelId: string
-  onSelect(providerId: string, modelId: string): void
-}) {
+/** How the desktop names a permission mode. */
+export const PERMISSION_META: Record<PermissionMode, { label: string; icon: ReactNode }> = {
+  ask: { label: 'Ask before acting', icon: <ShieldCheck size={14} /> },
+  accept_edits: { label: 'Auto-accept edits', icon: <Pencil size={14} /> },
+  auto: { label: 'Auto', icon: <Wand2 size={14} /> },
+  full: { label: 'Full access', icon: <ShieldOff size={14} /> },
+}
+
+/** The thread's permission mode as the composer shows it; the computer that runs the thread sets it. */
+export interface PermissionView {
+  mode: PermissionMode
+  /** The computer's name, where the mode can be changed. */
+  computer?: string
+}
+
+const PERMISSION_ORDER: readonly PermissionMode[] = ['ask', 'accept_edits', 'auto', 'full']
+
+/**
+ * The mode a turn from this phone runs in: the thread's own, else the computer's default, never more
+ * than the computer lets this phone have. Undefined when the computer does not say (an older Mousse).
+ */
+export function shownPermission(
+  options: { defaultMode: PermissionMode; limit?: PermissionMode } | undefined,
+  threadMode: PermissionMode | undefined,
+  computer?: string,
+): PermissionView | undefined {
+  if (!options) return undefined
+  const wanted = threadMode ?? options.defaultMode
+  const mode = options.limit && PERMISSION_ORDER.indexOf(options.limit) < PERMISSION_ORDER.indexOf(wanted) ? options.limit : wanted
+  return { mode, ...(computer ? { computer } : {}) }
+}
+
+/** The model button's run settings: the reasoning level, and whether a faster speed is on (desktop runLevelText, runFasterSpeed). */
+export function runSettingsOf(providers: LlmProviderOption[], providerId?: string, modelId?: string): { level?: string; fast: boolean } {
+  if (!providerId || !modelId) return { fast: false }
   const models = providers.find((provider) => provider.id === providerId)?.models ?? []
   const efforts = getEffortsForModel(providerId, modelId, models)
-  const effort = getCurrentEffort(modelId, models, providerId)
   const fast = getModelFastToggle(providerId, modelId, models)
-  const select = (id: string) => { onSelect(providerId, id); onClose() }
+  const effort = efforts.length || fast ? getCurrentEffort(modelId, models, providerId) : undefined
+  return { ...(effort ? { level: reasoningLevelLabel(effort) } : {}), fast: !!fast?.active }
+}
+
+/**
+ * The desktop model picker's run settings at phone size, under the model list: the selected model's
+ * reasoning levels, then its speed toggle on the left and the thread's permission mode on the right.
+ * Picking a level or a speed picks that model and closes the sheet, as on the desktop.
+ */
+function RunSettings({ providers, providerId, modelId, permission, onSelect, onClose }: {
+  providers: LlmProviderOption[]
+  providerId?: string
+  modelId?: string
+  permission?: PermissionView
+  onSelect(providerId: string, modelId: string): void
+  onClose(): void
+}) {
+  const models = providers.find((provider) => provider.id === providerId)?.models ?? []
+  const efforts = providerId && modelId ? getEffortsForModel(providerId, modelId, models) : []
+  const effort = providerId && modelId ? getCurrentEffort(modelId, models, providerId) : undefined
+  const fast = providerId && modelId ? getModelFastToggle(providerId, modelId, models) : undefined
+  const model = models.find((entry) => entry.id === modelId) ?? models.find((entry) => entry.id === parseThinkingSuffixFromModelId(modelId ?? '').baseId)
+  const name = model ? shortModelName(extractFamilyLabel(model.label)) : undefined
+  if (!efforts.length && !fast && !permission) return null
+  const select = (id: string) => { onClose(); if (providerId) onSelect(providerId, id) }
   const selectEffort = (value: string) => {
+    if (!providerId || !modelId || value === effort) { onClose(); return }
     const family = findModelFamily(providerId, models, modelId)
-    const baseId = parseThinkingSuffixFromModelId(modelId).baseId
-    const current = models.find((model) => model.id === modelId || model.id === baseId)
-    const variant = current ? parseModelVariant(current) : undefined
+    const variant = model ? parseModelVariant(model) : undefined
     const resolved = family && resolveModelVariant(family, { context: variant?.context, speed: variant?.speed, effort: value })
     select(value === 'off'
       ? `${parseThinkingSuffixFromModelId(resolved?.id ?? modelId).baseId}:off`
       : resolved?.id ?? applyEffortToModelId(modelId, value))
   }
+  const permissionMeta = permission ? PERMISSION_META[permission.mode] : undefined
   return (
-    <Sheet open={open} title="Reasoning effort and speed" onClose={onClose}>
+    <div className="m-run-settings">
       {efforts.length > 0 && (
-        <div className="m-options" role="group" aria-label="Reasoning">
-          <h3 className="m-options__heading">Reasoning</h3>
-          {['off', ...efforts.filter((value) => value !== 'off')].map((value) => (
-            <SheetOption key={value} selected={effort === value} title={value === 'xhigh' ? 'Extra high' : formatEffortLabel(value)} onClick={() => selectEffort(value)} />
-          ))}
+        <div className="m-run-settings__reasoning" role="radiogroup" aria-label={name ? `Reasoning for ${name}` : 'Reasoning'}>
+          <div className="m-run-settings__head">
+            <span>Reasoning</span>
+            {name && <span className="m-run-settings__model">{name}</span>}
+          </div>
+          <div className="m-run-levels">
+            {['off', ...efforts.filter((value) => value !== 'off')].map((value) => (
+              <button key={value} type="button" role="radio" aria-checked={effort === value} className="m-run-level" onClick={() => selectEffort(value)}>
+                {reasoningLevelLabel(value)}
+              </button>
+            ))}
+          </div>
         </div>
       )}
-      {fast && (
-        <div className="m-options" role="group" aria-label="Speed">
-          <h3 className="m-options__heading">Speed</h3>
-          {[false, true].map((enabled) => (
-            <SheetOption
-              key={String(enabled)}
-              selected={fast.active === enabled}
-              title={enabled ? 'Fast' : 'Standard'}
-              onClick={() => {
-                if (fast.active === enabled) { onClose(); return }
-                select(effort === 'off' ? `${parseThinkingSuffixFromModelId(fast.targetModelId).baseId}:off` : fast.targetModelId)
-              }}
-            />
-          ))}
+      {(fast || permissionMeta) && (
+        <div className="m-run-settings__foot">
+          {fast ? (
+            <div className="m-speed" role="radiogroup" aria-label="Speed">
+              {[false, true].map((enabled) => (
+                <button
+                  key={String(enabled)}
+                  type="button"
+                  role="radio"
+                  aria-checked={fast.active === enabled}
+                  className="m-speed__option"
+                  onClick={() => {
+                    if (fast.active === enabled) { onClose(); return }
+                    select(effort === 'off' ? `${parseThinkingSuffixFromModelId(fast.targetModelId).baseId}:off` : fast.targetModelId)
+                  }}
+                >
+                  {enabled && <Zap size={13} />}
+                  <span>{enabled ? 'Fast' : 'Standard'}</span>
+                </button>
+              ))}
+            </div>
+          ) : <span />}
+          {permission && permissionMeta && (
+            <span
+              className="m-run-permission"
+              role="note"
+              aria-label={`Permission mode: ${permissionMeta.label}`}
+              title={permission.computer ? `Change it in Mousse on ${permission.computer}` : undefined}
+            >
+              {permissionMeta.icon}
+              <span>{permissionMeta.label}</span>
+            </span>
+          )}
         </div>
       )}
-    </Sheet>
+    </div>
   )
 }
 

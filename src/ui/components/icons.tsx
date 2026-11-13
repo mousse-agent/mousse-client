@@ -55,6 +55,10 @@ import Mic01Icon from '@hugeicons/core-free-icons/Mic01Icon'
 import VolumeHighIcon from '@hugeicons/core-free-icons/VolumeHighIcon'
 import Download04Icon from '@hugeicons/core-free-icons/Download04Icon'
 import SquareIcon from '@hugeicons/core-free-icons/SquareIcon'
+import FlashIcon from '@hugeicons/core-free-icons/FlashIcon'
+import MagicWand01Icon from '@hugeicons/core-free-icons/MagicWand01Icon'
+import ShieldCheckIcon from '@hugeicons/core-free-icons/ShieldCheckIcon'
+import ShieldOffIcon from '@hugeicons/core-free-icons/ShieldOffIcon'
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'stroke'> {
   size?: number | string
@@ -136,3 +140,8 @@ export const Mic = /* @__PURE__ */ createIcon('Mic', Mic01Icon)
 export const VolumeHigh = /* @__PURE__ */ createIcon('VolumeHigh', VolumeHighIcon)
 export const Download = /* @__PURE__ */ createIcon('Download', Download04Icon)
 export const Square = /* @__PURE__ */ createIcon('Square', SquareIcon)
+// Composer run settings (mousse/src/renderer/lib/icons.tsx names).
+export const Zap = /* @__PURE__ */ createIcon('Zap', FlashIcon)
+export const Wand2 = /* @__PURE__ */ createIcon('Wand2', MagicWand01Icon)
+export const ShieldCheck = /* @__PURE__ */ createIcon('ShieldCheck', ShieldCheckIcon)
+export const ShieldOff = /* @__PURE__ */ createIcon('ShieldOff', ShieldOffIcon)

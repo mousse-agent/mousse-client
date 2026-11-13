@@ -1,17 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react'
 import type { ChatMode, ComposerCommand, ComposerSkill, ContextUsage, ImageAttachment, LlmProviderOption } from '../../connection/types'
-import { ArrowUp, ChevronDown, Loader2, Mic, Paperclip, Sparkles, Square, Stop, X } from './icons'
+import { ArrowUp, Loader2, Mic, Paperclip, Sparkles, Square, Stop, X, Zap } from './icons'
 import type { ComputerSpeech } from '../../connection/speech'
 import { formatDuration, useDictation } from '../speech/useDictation'
 import { insertTranscript } from '../speech/insertTranscript'
 import { SpeechWave } from '../speech/SpeechWave'
 import { SpeechModelSheet } from '../speech/SpeechModelSheet'
 import { useFinePointer } from '../hooks/useMediaQuery'
-import { extractFamilyLabel, parseModelVariant, parseThinkingSuffixFromModelId } from '../lib/modelVariants'
+import { extractFamilyLabel, parseModelVariant, parseThinkingSuffixFromModelId, shortModelName } from '../lib/modelVariants'
 import { loadDraft, saveDraft } from '../lib/composerPrefs'
 import { MAX_IMAGES, readImage, type PendingImage } from '../lib/images'
 import { ProviderIcon } from './providerIcons'
-import { ContextRing, ContextSheet, EffortSheet, MODE_META, ModeSheet, ModelSheet, SkillSheet, effortSummary, isPlanless } from './ComposerSheets'
+import { ContextRing, ContextSheet, ModelSheet, SkillSheet, isPlanless, runSettingsOf, type PermissionView } from './ComposerSheets'
 
 /** What the computer's composer offers; without it the composer is a plain text box. */
 export interface ComposerControls {
@@ -20,9 +20,8 @@ export interface ComposerControls {
   providerId?: string
   modelId?: string
   onSelectModel(providerId: string, modelId: string): void
-  modes: string[]
-  mode: string
-  onSelectMode(mode: string): void
+  /** The thread's permission mode, shown in the model sheet; it is changed on the computer. */
+  permission?: PermissionView
   skills: ComposerSkill[]
   commands: ComposerCommand[]
   usage?: ContextUsage
@@ -69,6 +68,7 @@ function parseCommand(text: string, commands: ComposerCommand[]): ParsedCommand 
   return command ? { name: command.name, args: (match[2] ?? '').trim() } : undefined
 }
 
+/** The model button's name and variant ("Opus 4.8", "1M"), as the desktop's grouped button parts. */
 function modelLabel(controls: ComposerControls): { title: string; context?: string } | undefined {
   const { providerId, modelId, providers } = controls
   if (!providerId || !modelId) return undefined
@@ -76,13 +76,14 @@ function modelLabel(controls: ComposerControls): { title: string; context?: stri
   const base = parseThinkingSuffixFromModelId(modelId).baseId
   const model = models.find((entry) => entry.id === modelId) ?? models.find((entry) => entry.id === base)
   if (!model) return { title: base }
-  return { title: extractFamilyLabel(model.label), context: parseModelVariant(model).context }
+  return { title: shortModelName(extractFamilyLabel(model.label)), context: parseModelVariant(model).context }
 }
 
 /**
- * The desktop composer at phone size: the raised text box, then a footer with the mode pill, the
- * model button, the effort pill, the context ring, attach, and send / queue / stop. Menus open as
- * bottom sheets. On touch screens Return inserts a new line and the button sends; with a hardware
+ * The desktop composer at phone size: the raised text box, then a footer with the model button
+ * (model, speed and reasoning level, as the desktop's ComposerFooter), the context ring, attach, and
+ * send / queue / stop. The model sheet holds the reasoning levels, speed and permission mode, like
+ * the desktop's model picker. Menus open as bottom sheets. On touch screens Return inserts a new line and the button sends; with a hardware
  * keyboard and fine pointer, Enter sends and Shift+Enter breaks.
  */
 export function Composer({ active, disabled = false, placeholder, draftKey, prefill, controls, speech, onSend, onStop, onSteer, onNewThread }: ComposerProps) {
@@ -90,7 +91,7 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
   const [images, setImages] = useState<PendingImage[]>([])
   const [skill, setSkill] = useState<ComposerSkill>()
   const [error, setError] = useState<string>()
-  const [sheet, setSheet] = useState<'model' | 'effort' | 'mode' | 'skills' | 'context'>()
+  const [sheet, setSheet] = useState<'model' | 'skills' | 'context'>()
   const [skillQuery, setSkillQuery] = useState('')
   const [sheetKey, setSheetKey] = useState(0)
   const [highlight, setHighlight] = useState(0)
@@ -177,7 +178,8 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
   }
 
   function extras(): SendExtras {
-    const mode: ChatMode | undefined = skill ? { type: 'skill', skillId: skill.id } : controls && controls.mode !== 'agent' ? controls.mode : undefined
+    // The desktop composer sends no chat mode: a skill picked for this message is the only one.
+    const mode: ChatMode | undefined = skill ? { type: 'skill', skillId: skill.id } : undefined
     return {
       ...(mode !== undefined ? { mode } : {}),
       ...(images.length ? { images: images.map(({ name, mimeType, data }) => ({ name, mimeType, data })) } : {})
@@ -272,9 +274,8 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
   }
 
   const label = controls ? modelLabel(controls) : undefined
-  const effort = controls ? effortSummary(controls.providers, controls.providerId, controls.modelId) : undefined
-  const mode = controls?.mode ?? 'agent'
-  const modeMeta = skill ? { label: skill.name, icon: <Sparkles size={15} /> } : MODE_META[mode] ?? MODE_META.agent
+  const run = controls ? runSettingsOf(controls.providers, controls.providerId, controls.modelId) : undefined
+  const modelText = [label ? [label.title, label.context].filter(Boolean).join(' · ') : 'Select model', run?.fast ? 'Fast' : '', run?.level].filter(Boolean).join(' ')
   const actionLabel = hasContent ? (active ? 'Queue message' : 'Send') : active ? 'Stop' : 'Send'
   const shownPlaceholder = placeholder ?? (active ? 'Running… send queues next' : 'Message')
 
@@ -360,20 +361,13 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
         {controls && (
           <div className="m-composer__footer">
             <div className="m-composer__pills">
-              <button type="button" className="m-pill" aria-label={`Mode: ${modeMeta.label}`} aria-haspopup="dialog" onClick={() => skill ? setSkill(undefined) : setSheet('mode')}>
-                {modeMeta.icon}<span className="m-pill__label">{modeMeta.label}</span>
-              </button>
-              <button type="button" className="m-pill m-pill--model" aria-label={`Model: ${label?.title ?? 'Select model'}`} aria-haspopup="dialog" onClick={() => setSheet('model')}>
+              <button type="button" className="m-pill m-pill--model" aria-label={`Model: ${modelText}`} aria-haspopup="dialog" onClick={() => setSheet('model')}>
                 {controls.providerId && <ProviderIcon providerId={controls.providerId} size={14} />}
                 <span className="m-pill__model">{label?.title ?? 'Select model'}</span>
                 {label?.context && <span className="m-pill__context">· {label.context}</span>}
-                <ChevronDown size={12} />
+                {run?.fast && <Zap size={12} className="m-pill__speed" aria-hidden="true" />}
+                {run?.level && <span className="m-pill__level">{run.level}</span>}
               </button>
-              {effort && (
-                <button type="button" className="m-pill" aria-label={`Reasoning effort: ${effort}`} aria-haspopup="dialog" onClick={() => setSheet('effort')}>
-                  <span>{effort}</span><ChevronDown size={12} />
-                </button>
-              )}
             </div>
             <div className="m-composer__tools">
               {controls.usage && !isPlanless(controls.providerId) && <ContextRing usage={controls.usage} onClick={() => setSheet('context')} />}
@@ -421,18 +415,8 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
             favorites={controls.favorites}
             onToggleFavorite={controls.onToggleFavorite}
             onSelect={controls.onSelectModel}
+            permission={controls.permission}
           />
-          {controls.providerId && controls.modelId && (
-            <EffortSheet
-              open={sheet === 'effort'}
-              onClose={() => setSheet(undefined)}
-              providers={controls.providers}
-              providerId={controls.providerId}
-              modelId={controls.modelId}
-              onSelect={controls.onSelectModel}
-            />
-          )}
-          <ModeSheet open={sheet === 'mode'} onClose={() => setSheet(undefined)} modes={controls.modes} mode={mode} providerId={controls.providerId} onSelect={controls.onSelectMode} />
           <SkillSheet key={sheetKey} open={sheet === 'skills'} onClose={() => setSheet(undefined)} skills={controls.skills} initialQuery={skillQuery} onSelect={(picked) => { setSkill(picked); field.current?.focus() }} />
           <ContextSheet open={sheet === 'context'} onClose={() => setSheet(undefined)} usage={controls.usage} />
         </>
