@@ -17,6 +17,7 @@ import { threadComputers } from '../lib/newThread'
 import { ThreadView } from './ThreadView'
 import { BotAboutSheet, BotChat } from '../bots/BotChat'
 import { NewBotSheet } from '../bots/NewBotSheet'
+import { BotHeader } from '../bots/BotHeader'
 import { BotBoundary } from '../bots/BotBoundary'
 
 /** How often the home screen reads the account's computers again, to notice one coming online. */
@@ -394,10 +395,12 @@ function BotPane({ nodeId, botId, name, labelled, wide }: { nodeId: string; botI
   // The header shows only the name, as on the desktop (what it does is in About); with several computers, whose it is.
   const title = bot?.name ?? 'Bot'
   const subtitle = !bot || labelled ? name : undefined
-  if (wide) return <><TopBar title={title} subtitle={subtitle} trailing={info} />{body}</>
+  // The bot's face in a glass circle, its name in a pill under it.
+  const header = <BotHeader bot={bot} name={title} {...(subtitle ? { computer: subtitle } : {})} leading={back} trailing={info} />
+  if (wide) return <div className="bot-screen">{header}{body}</div>
   return (
-    <main className="m-screen">
-      <TopBar leading={back} title={title} subtitle={subtitle} trailing={info} />
+    <main className="m-screen bot-screen">
+      {header}
       {body}
     </main>
   )
