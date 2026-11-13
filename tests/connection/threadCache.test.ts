@@ -291,6 +291,29 @@ describe('opening threads from the cache', () => {
     expect(scope.peek('t1')).toBeUndefined()
     session.close()
   })
+
+  it('stops showing a run it cannot confirm, says why in one sentence, and keeps the saved copy as it was', async () => {
+    const cache = new ThreadCache(memoryThreadCacheBackend())
+    const scope = cache.scope('acct', 'studio')
+    const saved = entry(['Hi', 'Working on it'])
+    saved.state = { ...saved.state, active: true, phase: 'streaming', messages: saved.state.messages.map((m, i) => (i === 1 ? { ...m, streaming: true } : m)) }
+    scope.write('t1', saved)
+    const { session, remote } = await connect(scope)
+    const seen: Seen = []
+    await session.openThread('t1', (items, state) => seen.push({ items, state }))
+    // Shown at once from the saved copy, as running.
+    expect(seen[0]?.state?.phase).toBe('streaming')
+    const request = await remote.next('rpc.request')
+    await remote.send({ t: 'rpc.result', id: request.id, error: { code: 'outcome_uncertain', message: 'The operation may have partly happened; check before retrying.', retryable: false } })
+    await until(() => seen.at(-1)?.items.length === 3)
+    const last = seen.at(-1)!
+    expect(last.state?.phase).toBeUndefined()
+    expect(last.items.some((item) => item.status === 'streaming')).toBe(false)
+    expect(last.items[2]?.text).toBe('Could not update this thread: The operation may have partly happened; check before retrying. Open it again to retry.')
+    // The saved copy is not rewritten: the next open still starts from what the computer last said.
+    expect(scope.peek('t1')?.state).toMatchObject({ active: true, phase: 'streaming' })
+    session.close()
+  })
 })
 
 /** A computer link with no wire: lists from the old polling methods, and one snapshot per thread. */

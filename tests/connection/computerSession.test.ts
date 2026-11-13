@@ -1,11 +1,11 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { RealComputerSession } from '../../src/connection/computerSession'
 import type { ChatItem, ThreadDisplayState } from '../../src/connection/types'
 import { newId } from '../../src/net/canonical'
 import { NetError } from '../../src/net/errors'
 import { generateNodeKeys } from '../../src/net/keys'
-import { LeafSession } from '../../src/net/session'
+import { LeafSession, SNAPSHOT_DEADLINE_MS } from '../../src/net/session'
 import { streamPair } from '../../src/net/stream'
 import { delegate, roster, testComputer, testUser } from '../net/fixtures'
 import { appletReply, channelOf, fakeComputer, message, snapshotBodies, until } from './helpers'
@@ -30,6 +30,32 @@ async function setup() {
 }
 
 describe('leaf session snapshots', () => {
+  it('lets a slow snapshot finish while chunks keep arriving, and fails one that stalls', async () => {
+    const { leaf, remote } = await setup()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const slow = leaf.snapshot('str_slow')
+      await remote.next('snapshot.get')
+      const records = [remote.record('str_slow', 'thread.event', { n: 1 }), remote.record('str_slow', 'thread.event', { n: 2 })]
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_DEADLINE_MS - 10_000)
+      await remote.snapshotChunk('str_slow', records.slice(0, 1), false)
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_DEADLINE_MS - 10_000)
+      // Longer than the deadline in total, but never that long without a chunk.
+      await remote.snapshotChunk('str_slow', records.slice(1))
+      expect((await slow).records).toHaveLength(2)
+
+      const stalled = leaf.snapshot('str_stall')
+      const failed = expect(stalled).rejects.toMatchObject({ code: 'deadline_exceeded' })
+      await remote.next('snapshot.get')
+      await remote.snapshotChunk('str_stall', [remote.record('str_stall', 'thread.event', { n: 3 })], false)
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_DEADLINE_MS + 1)
+      await failed
+    } finally {
+      vi.useRealTimers()
+      leaf.close()
+    }
+  })
+
   it('collects a verified snapshot and shares one transfer between callers', async () => {
     const { leaf, remote } = await setup()
     const first = leaf.snapshot('str_a')

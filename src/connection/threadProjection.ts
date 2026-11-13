@@ -48,6 +48,8 @@ export interface SettledThreadState {
   turnStartedAt?: number
   turnError?: string
   connectionFailed?: string
+  /** Older messages of a long thread that the snapshot left on the computer. */
+  earlier?: number
 }
 
 interface PendingSnapshot {
@@ -99,6 +101,8 @@ export class ThreadProjection {
   turnError?: string
   questions: PendingQuestions[] = []
   connectionFailed?: string
+  /** Older messages of a long thread that the computer's snapshot left out (it sends the newest 8 MiB). */
+  earlier = 0
 
   constructor(readonly threadId: string) {}
 
@@ -130,6 +134,7 @@ export class ThreadProjection {
       ...(this.turnStartedAt !== undefined ? { turnStartedAt: this.turnStartedAt } : {}),
       ...(this.turnError ? { turnError: this.turnError } : {}),
       ...(this.connectionFailed ? { connectionFailed: this.connectionFailed } : {}),
+      ...(this.earlier ? { earlier: this.earlier } : {}),
     }
   }
 
@@ -148,7 +153,20 @@ export class ThreadProjection {
     this.turnStartedAt = typeof value.turnStartedAt === 'number' && Number.isFinite(value.turnStartedAt) ? value.turnStartedAt : undefined
     this.turnError = typeof value.turnError === 'string' && value.turnError ? value.turnError : undefined
     this.connectionFailed = typeof value.connectionFailed === 'string' && value.connectionFailed ? value.connectionFailed : undefined
+    this.earlier = earlierCount(value.earlier)
     return true
+  }
+
+  /**
+   * The computer can no longer say whether a turn runs here (the thread could not be read again), so the
+   * phone stops showing one: no "Running…", no Stop, no reply still being written. What was saved is kept.
+   */
+  stopRun(): void {
+    this.messages = this.settled().messages.map((message) => (message.streaming ? { ...message, streaming: false } : message))
+    this.overlaid.clear()
+    this.active = false
+    if (this.phase && (ACTIVE_PHASES.has(this.phase) || this.phase === 'awaiting_input')) this.phase = undefined
+    this.turnStartedAt = undefined
   }
 
   /** Adds an item that exists only on this phone, such as a send that failed after it was dispatched. */
@@ -167,8 +185,16 @@ export class ThreadProjection {
       if (item) items.push(item)
     }
     const folded = foldItems(items)
-    if (!this.localItems.length) return folded
-    return [...folded, ...this.localItems].sort((a, b) => a.createdAt - b.createdAt)
+    const shown = this.localItems.length ? [...folded, ...this.localItems].sort((a, b) => a.createdAt - b.createdAt) : folded
+    if (!this.earlier) return shown
+    const count = this.earlier
+    const note: ChatItem = {
+      id: 'local-earlier',
+      role: 'system',
+      text: `${count} earlier ${count === 1 ? 'message is' : 'messages are'} on the computer.`,
+      createdAt: (shown[0]?.createdAt ?? 1) - 1,
+    }
+    return [note, ...shown]
   }
 
   state(): ThreadDisplayState {
@@ -300,6 +326,7 @@ export class ThreadProjection {
     this.localItems = []
     if (isObject(value.activeTurn)) this.active = value.activeTurn.active === true
     this.questions = pendingQuestionsOf(value.pendingQuestions, this.threadId) ?? []
+    this.earlier = earlierCount(isObject(value.earlier) ? value.earlier.count : undefined)
     if (!this.active && this.phase && ACTIVE_PHASES.has(this.phase)) this.phase = undefined
     return true
   }
@@ -376,4 +403,8 @@ export class ThreadProjection {
     const tail = this.messages.slice(lastKnown + 1).filter((message) => !ids.has(message.id))
     return [...messages, ...tail]
   }
+}
+
+function earlierCount(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0
 }
