@@ -85,7 +85,7 @@ describe('computer session', () => {
 
     const created = session.createThread({ projectId: 'p1', title: '' })
     const createCall = await remote.answer('threads.create', { thread: { id: 't3', name: 'New thread', projectId: 'p1', updatedAt: '2026-03-01T00:00:00Z' }, threads: [] })
-    expect(createCall.params).toEqual({ name: 'New thread', projectId: 'p1' })
+    expect(createCall.params).toEqual({ name: 'New Thread', projectId: 'p1' })
     expect(createCall.idem).toBeTruthy()
     expect(await created).toMatchObject({ id: 't3', title: 'New thread', projectId: 'p1' })
     session.close()

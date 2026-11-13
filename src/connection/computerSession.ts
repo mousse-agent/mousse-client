@@ -450,6 +450,9 @@ export interface RealSessionOptions {
   threadCache?: ThreadCacheScope
 }
 
+/** The desktop's default name for a new thread (mousse/src/shared/threadTitle.ts). */
+export const DEFAULT_THREAD_NAME = 'New Thread'
+
 export class RealComputerSession implements ComputerSession {
   readonly nodeId: string
   readonly speech: ComputerSpeech
@@ -542,7 +545,9 @@ export class RealComputerSession implements ComputerSession {
   }
 
   async createThread(input: { projectId: string; title?: string; worktreeEnabled?: boolean }): Promise<ThreadSummary> {
-    const name = input.title?.trim() || 'New thread'
+    // The computer names a thread from its first message only while it has its default name, which is
+    // exactly "New Thread": any other name counts as one the person chose and is kept.
+    const name = input.title?.trim() || DEFAULT_THREAD_NAME
     const value = await this.leaf.rpc(
       'threads.create',
       { name, ...(input.projectId ? { projectId: input.projectId, ...(input.worktreeEnabled ? { worktreeEnabled: true } : {}) } : {}) },
