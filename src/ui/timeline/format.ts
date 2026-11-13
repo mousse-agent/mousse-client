@@ -32,9 +32,38 @@ export function thoughtHeading(content: string | undefined): string {
   return plain.length <= 64 ? plain : `${plain.slice(0, 61).trimEnd()}...`
 }
 
-export function commandSummary(command: string): string {
-  const collapsed = command.replace(/\s+/g, ' ').trim()
-  return collapsed.length <= 64 ? collapsed : `${collapsed.slice(0, 61).trimEnd()}...`
+const SHELL_WRAPPER = /^(?:\S*[\\/])?(?:bash|sh|zsh|dash|fish|ksh)(?:\.exe)?\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c\s+([\s\S]+)$/
+const CMD_WRAPPER = /^(?:\S*[\\/])?cmd(?:\.exe)?\s+(?:\/[a-zA-Z]\s+)*\/[ck]\s+([\s\S]+)$/i
+const POWERSHELL_WRAPPER =
+  /^(?:\S*[\\/])?(?:powershell|pwsh)(?:\.exe)?\s+(?:-(?:NoProfile|NoLogo|NonInteractive|NoExit|Login)\s+|-(?:ExecutionPolicy|ep|WindowStyle)\s+\S+\s+)*-(?:Command|c)\s+([\s\S]+)$/i
+const ENV_WRAPPER = /^env\s+(?:(?:-\S+|[A-Za-z_][A-Za-z0-9_]*=\S*)\s+)*([\s\S]+)$/
+const SUDO_WRAPPER = /^sudo\s+(?:-\S+\s+)*([\s\S]+)$/
+
+function unquote(text: string): string {
+  const trimmed = text.trim()
+  const quote = trimmed[0]
+  if ((quote === '"' || quote === "'") && trimmed.length >= 2 && trimmed.endsWith(quote)) {
+    const inner = trimmed.slice(1, -1)
+    return quote === '"' ? inner.replace(/\\(["\\$`])/g, '$1') : inner
+  }
+  return trimmed
+}
+
+/**
+ * The command a shell invocation runs, for a one-line label (shared/agentActivity.ts commandLabel): `bash -lc '…'`,
+ * `sh -c`, `env FOO=1 …`, `sudo …`, `cmd /c …` and `powershell -Command …` are unwrapped and spacing collapses.
+ */
+export function commandLabel(command: string): string {
+  let current = command.trim()
+  for (let depth = 0; depth < 5; depth += 1) {
+    const match =
+      SHELL_WRAPPER.exec(current) ?? POWERSHELL_WRAPPER.exec(current) ?? CMD_WRAPPER.exec(current) ?? ENV_WRAPPER.exec(current) ?? SUDO_WRAPPER.exec(current)
+    if (!match) break
+    const inner = unquote(match[1]!)
+    if (!inner || inner === current) break
+    current = inner
+  }
+  return current.replace(/\s+/g, ' ').trim()
 }
 
 /** Strips sandbox prefixes and starts at the first apps|packages|src|lib|components folder. */
@@ -85,17 +114,123 @@ export function bashCommand(tool: ChatToolCall): string {
   return str(tool.input?.command)
 }
 
-/** stdout and stderr, or the plain result text, and whether the exit code says it worked. */
-export function bashOutput(tool: ChatToolCall): { text: string; ok: boolean } {
+/** The line some runtimes (Claude Code) put before a failed command's output: `Exit code 1`. */
+const EXIT_CODE_LINE = /^Exit code (-?\d+)(?:\r?\n|$)/
+
+/** A command's result text split into its exit code and its output, when it starts with `Exit code N`. */
+export function splitExitCode(result: string): { exitCode?: number; output: string } {
+  const match = EXIT_CODE_LINE.exec(result)
+  if (!match) return { output: result }
+  return { exitCode: Number(match[1]), output: result.slice(match[0].length) }
+}
+
+export interface BashResult {
+  text: string
+  /** False when the exit code says it failed. */
+  ok: boolean
+  exitCode?: number
+  durationMs?: number
+  /** Earlier output was cut; `bytes` is how much there was. */
+  truncated?: boolean
+  bytes?: number
+  cwd?: string
+}
+
+/** stdout and stderr, or the plain result text, with the exit code, time and folder when the result says. */
+export function bashOutput(tool: ChatToolCall): BashResult {
   const output = tool.output
-  if (typeof output === 'string') return { text: output, ok: true }
+  const cwd = str(tool.input?.cwd) || undefined
+  if (typeof output === 'string') {
+    const { exitCode, output: text } = splitExitCode(output)
+    return { text, ok: exitCode === undefined || exitCode === 0, ...(exitCode !== undefined ? { exitCode } : {}), ...(cwd ? { cwd } : {}) }
+  }
   if (isObject(output)) {
     const stdout = str(output.stdout) || str(output.output)
     const stderr = str(output.stderr)
-    const exit = output.exitCode ?? output.exit_code
-    return { text: [stdout, stderr].filter(Boolean).join('\n'), ok: exit === undefined || exit === 0 }
+    let text = [stdout, stderr].filter(Boolean).join('\n')
+    let exit = typeof output.exitCode === 'number' ? output.exitCode : typeof output.exit_code === 'number' ? output.exit_code : undefined
+    if (exit === undefined) {
+      const split = splitExitCode(text)
+      if (split.exitCode !== undefined) ({ exitCode: exit, output: text } = split)
+    }
+    const durationMs = typeof output.durationMs === 'number' ? output.durationMs : undefined
+    const bytes = typeof output.bytes === 'number' ? output.bytes : undefined
+    return {
+      text,
+      ok: exit === undefined || exit === 0,
+      ...(exit !== undefined ? { exitCode: exit } : {}),
+      ...(durationMs !== undefined ? { durationMs } : {}),
+      ...(output.truncated === true ? { truncated: true } : {}),
+      ...(bytes !== undefined ? { bytes } : {}),
+      ...(cwd || str(output.cwd) ? { cwd: cwd || str(output.cwd) } : {}),
+    }
   }
-  return { text: output === undefined ? '' : JSON.stringify(output, null, 2), ok: true }
+  return { text: output === undefined ? '' : JSON.stringify(output, null, 2), ok: true, ...(cwd ? { cwd } : {}) }
+}
+
+/** Terminal escape sequences (colours, cursor moves, titles): plain text shows them as noise. */
+// eslint-disable-next-line no-control-regex
+const ESCAPE_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\)|[@-Z\\-_])/g
+/** A line a test runner or compiler marks as a failure: `× adds`, `FAIL a.test.ts`, `Error: …`, `npm ERR! …`. */
+const FAILURE_LINE = /^\s*(?:[×✗✘✕]\s|(?:FAIL|FAILED)\b|ERR!|npm ERR!|[A-Za-z]*Error:|error(?:\[[A-Z0-9]+\])?:)/
+
+/** The output as lines, escape sequences removed, with failure lines marked for the danger colour. */
+export function bashOutputLines(output: string): Array<{ text: string; failed: boolean }> {
+  return output
+    .replace(ESCAPE_PATTERN, '')
+    .split('\n')
+    .map((text) => ({ text, failed: FAILURE_LINE.test(text) }))
+}
+
+/** "850ms", "2.4s", "1m 5s", for a command's exit line. */
+export function formatCommandDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  const seconds = ms / 1000
+  if (seconds < 60) return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s`
+  return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** Whether a call failed, finished or not. */
+export function toolFailed(item: ChatItem): boolean {
+  if (item.status === 'error') return true
+  const tool = item.tool
+  if (!tool) return false
+  if (isObject(tool.output) && tool.output.success === false) return true
+  return tool.name === 'Bash' && item.status === 'done' && !bashOutput(tool).ok
+}
+
+/**
+ * The failed calls of a turn the agent got past (mousseToUI.ts markRecoveredFailures): a later call succeeded, a
+ * reply followed, or the turn ended normally. Their rows stay quiet. A failure is loud only when nothing came after
+ * it and the turn ended on an error or was cut off (`endedBadly`).
+ */
+export function recoveredFailures(replies: ChatItem[], endedBadly: boolean): Set<string> {
+  const recovered = new Set<string>()
+  let pending: string[] = []
+  const settle = (failed: boolean) => {
+    if (!failed) for (const id of pending) recovered.add(id)
+    pending = []
+  }
+  for (const item of replies) {
+    if (item.error) {
+      settle(true)
+      continue
+    }
+    if (item.kind === 'tool' && item.tool) {
+      if (toolFailed(item)) pending.push(item.id)
+      else if (item.status === 'done') settle(false)
+      continue
+    }
+    if (item.role === 'assistant' && item.kind === 'message' && item.text.trim()) settle(false)
+  }
+  settle(endedBadly)
+  return recovered
 }
 
 // ---- Diffs ----
@@ -378,6 +513,19 @@ export function genericTitle(tool: ChatToolCall, state: ToolState): { title: str
       return { title: pending ? 'Stopping shell' : 'Shell stopped', subtitle: typeof input.pid === 'number' ? `pid ${input.pid}` : '' }
     case 'cloning':
       return { title: pending ? 'Cloning repo' : 'Repo cloned', subtitle: str(input.repo) }
+    case 'ToolSearch': {
+      // Claude Code's tool search: `select:A,B` loads those tools by name; anything else is a search.
+      const query = str(input.query).trim()
+      const subtitle = query.startsWith('select:')
+        ? query
+            .slice('select:'.length)
+            .split(',')
+            .map((name) => name.trim().split('__').pop() ?? '')
+            .filter(Boolean)
+            .join(', ')
+        : query
+      return { title: pending ? 'Loading tools' : state === 'error' ? "Couldn't load tools" : 'Loaded tools', subtitle }
+    }
     default: {
       const name = tool.rawName || tool.title || 'Tool'
       const subtitle = tool.title && tool.title !== name ? tool.title : truncate(tool.summary, 50)
@@ -405,26 +553,51 @@ export function groupTurns(items: ChatItem[]): Turn[] {
   return turns
 }
 
-/** Thoughts and tool calls group together; questions stand alone, like the desktop. */
+/** Calls drawn on their own surface, never inside a group or folded behind a finished turn's line. */
+const STANDALONE_TOOLS = new Set(['Question', 'QuestionAnswers', 'QuickAction', 'ExitPlanMode', 'PlanWrite'])
+/** A runtime's own subagent: a card of its own, outside any group. */
+export const isSubagentItem = (item: ChatItem): boolean => item.kind === 'tool' && (item.tool?.name === 'Task' || item.tool?.name === 'Agent')
+
+/** Thoughts and tool calls group together; questions, plans, quick actions and subagents stand alone. */
 export function isActivity(item: ChatItem): boolean {
   if (item.kind === 'thinking') return true
-  return item.kind === 'tool' && item.tool?.name !== 'Question'
+  // Items from older code paths name a tool but carry no call: they are work too.
+  if (item.role === 'tool' && !item.tool) return true
+  return item.kind === 'tool' && !!item.tool && !STANDALONE_TOOLS.has(item.tool.name) && !isSubagentItem(item)
 }
 
-export type Segment = { kind: 'item'; item: ChatItem } | { kind: 'group'; items: ChatItem[] }
+/** A call (not a thought) that has not finished. */
+export const isRunningCall = (item: ChatItem): boolean => (item.kind === 'tool' || item.role === 'tool') && item.status === 'streaming'
+/** A thought still being written. */
+export const isLiveThought = (item: ChatItem | undefined): boolean => item?.kind === 'thinking' && item.status === 'streaming'
 
-/** Runs of two or more activity rows collapse into one group. */
-export function segmentReplies(replies: ChatItem[]): Segment[] {
+export type Segment = { kind: 'item'; item: ChatItem } | { kind: 'group'; items: ChatItem[] } | { kind: 'cards'; items: ChatItem[] }
+
+/**
+ * Runs of activity rows with two or more calls fold into one group; narration between them splits them. While the
+ * turn runs (`live`), a call still running folds into a group even alone: the live line under the work says what
+ * runs now, so it does not show twice.
+ */
+export function segmentReplies(replies: ChatItem[], live = false): Segment[] {
   const segments: Segment[] = []
   let run: ChatItem[] = []
+  let cards: ChatItem[] = []
   const flush = () => {
-    if (run.length >= 2) segments.push({ kind: 'group', items: run })
+    if (run.length >= 2 || (live && run.some(isRunningCall))) segments.push({ kind: 'group', items: run })
     else for (const item of run) segments.push({ kind: 'item', item })
     run = []
+    // Consecutive subagents form one list, outside any group.
+    if (cards.length) segments.push({ kind: 'cards', items: cards })
+    cards = []
   }
   for (const item of replies) {
-    if (isActivity(item)) run.push(item)
-    else {
+    if (isSubagentItem(item)) {
+      if (run.length) flush()
+      cards.push(item)
+    } else if (isActivity(item)) {
+      if (cards.length) flush()
+      run.push(item)
+    } else {
       flush()
       segments.push({ kind: 'item', item })
     }
@@ -433,7 +606,7 @@ export function segmentReplies(replies: ChatItem[]): Segment[] {
   return segments
 }
 
-/** The latest thought heading in a group, or "" to fall back to "Tool calls". */
+/** The latest thought heading in a group, or "". */
 export function groupLabel(items: ChatItem[]): string {
   for (let index = items.length - 1; index >= 0; index--) {
     const item = items[index]
@@ -443,6 +616,261 @@ export function groupLabel(items: ChatItem[]): string {
     }
   }
   return ''
+}
+
+// ---- Work groups (assistant-blocks.ts workGroupTitle) ----
+
+type WorkKind = 'edit' | 'command' | 'read' | 'search' | 'web' | 'fetch' | 'agent' | 'other' | 'thought'
+
+function workKindOf(item: ChatItem): WorkKind {
+  if (item.kind === 'thinking') return 'thought'
+  switch (item.tool?.name) {
+    case 'Read':
+      return 'read'
+    case 'Edit':
+    case 'Write':
+    case 'NotebookEdit':
+      return 'edit'
+    case 'Bash':
+      return 'command'
+    case 'Grep':
+    case 'Glob':
+      return 'search'
+    case 'WebSearch':
+      return 'web'
+    case 'WebFetch':
+      return 'fetch'
+    case 'Task':
+    case 'Agent':
+      return 'agent'
+    default:
+      return 'other'
+  }
+}
+
+/** Which kinds a title names first when a group did more than three kinds of thing: changes before reads. */
+const KIND_PRIORITY: WorkKind[] = ['edit', 'command', 'read', 'search', 'web', 'fetch', 'agent', 'other']
+const times = (count: number) => (count === 1 ? 'once' : count === 2 ? 'twice' : `${count} times`)
+
+function kindPhrase(kind: WorkKind, count: number): string {
+  switch (kind) {
+    case 'edit':
+      return `Edited ${plural(count, 'file')}`
+    case 'command':
+      return `Ran ${plural(count, 'command')}`
+    case 'read':
+      return `Read ${plural(count, 'file')}`
+    case 'search':
+      return `Searched code ${times(count)}`
+    case 'web':
+      return `Searched the web ${times(count)}`
+    case 'fetch':
+      return `Fetched ${plural(count, 'page')}`
+    case 'agent':
+      return `Ran ${plural(count, 'subagent')}`
+    default:
+      return `Used ${plural(count, 'tool')}`
+  }
+}
+
+type KindTally = { kind: WorkKind; calls: number; files: Set<string>; first: number; item: ChatItem }
+
+function tallyKinds(items: ChatItem[]): KindTally[] {
+  const tallies = new Map<WorkKind, KindTally>()
+  items.forEach((item, index) => {
+    const kind = workKindOf(item)
+    let tally = tallies.get(kind)
+    if (!tally) tallies.set(kind, (tally = { kind, calls: 0, files: new Set(), first: index, item }))
+    // Reading one file twice counts once.
+    const file = kind === 'read' || kind === 'edit' ? filePathOf(item.tool?.input).trim() : ''
+    if (file) {
+      if (!tally.files.has(file)) tally.calls += 1
+      tally.files.add(file)
+    } else tally.calls += 1
+  })
+  return [...tallies.values()]
+}
+
+/**
+ * What a group of calls did, by kind: "Read 3 files and ran 2 commands". Up to three kinds are named in the order
+ * they first ran; with more, the two that changed most are named and the rest counted as other actions. Thoughts
+ * are left out; a group of thoughts alone takes its latest thought's line.
+ */
+export function workGroupTitle(items: ChatItem[]): string {
+  const tallies = tallyKinds(items)
+  const work = tallies.filter((tally) => tally.kind !== 'thought')
+  if (work.length === 0) return groupLabel(items) || (tallies.length ? 'Thought' : '')
+  const named = [...work]
+    .sort((a, b) => KIND_PRIORITY.indexOf(a.kind) - KIND_PRIORITY.indexOf(b.kind))
+    .slice(0, work.length === 3 ? 3 : 2)
+    .sort((a, b) => a.first - b.first)
+  const rest = work.filter((tally) => !named.includes(tally)).reduce((sum, tally) => sum + tally.calls, 0)
+  const phrases = named.map((tally, index) => {
+    const phrase = kindPhrase(tally.kind, tally.calls)
+    return index === 0 ? phrase : phrase[0].toLowerCase() + phrase.slice(1)
+  })
+  if (rest > 0) phrases.push(plural(rest, 'other action'))
+  return phrases.length > 1 ? `${phrases.slice(0, -1).join(', ')} and ${phrases[phrases.length - 1]}` : phrases[0]
+}
+
+/** The tool whose icon stands for a group: its calls' tool when all are one kind, 'Thinking' for thoughts alone. */
+export function workGroupIcon(items: ChatItem[]): string | undefined {
+  const tallies = tallyKinds(items)
+  const work = tallies.filter((tally) => tally.kind !== 'thought')
+  if (work.length === 0) return tallies.length ? 'Thinking' : undefined
+  return work.length === 1 ? work[0].item.tool?.name : undefined
+}
+
+// ---- Settling and folding a finished turn (assistant-blocks.ts) ----
+
+const isReplyText = (item: ChatItem): boolean => item.role === 'assistant' && item.kind === 'message' && !!item.text.trim() && !item.error
+
+/**
+ * A finished turn as it reads once the work is done: its answer, the last reply with text, comes last, and work
+ * after it moves above it. A turn cut off by a Stop or a restart (`cutOff`) has no answer: when work followed its
+ * last text, that text was written before the work and the turn keeps the order it ran in.
+ */
+export function settleFinishedTurn(replies: ChatItem[], cutOff = false): ChatItem[] {
+  let answer = -1
+  for (let index = replies.length - 1; index >= 0; index--) {
+    if (isReplyText(replies[index])) {
+      answer = index
+      break
+    }
+  }
+  if (answer === -1) return replies
+  const after = replies.slice(answer + 1)
+  if (!after.some(isActivity)) return replies
+  if (cutOff) return replies
+  return [...replies.slice(0, answer), ...after.filter(isActivity), replies[answer], ...after.filter((item) => !isActivity(item))]
+}
+
+/** What `foldTurnWork` knows of one segment of a finished turn. */
+export type FoldRow = {
+  kind: 'message' | 'tools' | 'cards'
+  /** Tool calls and thoughts only. */
+  toolsOnly?: boolean
+  /** A reply with text (narration, or the answer). */
+  text?: boolean
+  /** Stays in view whatever the fold: an error, a question, a plan, a notice, a marker, an unrecovered failure. */
+  keep?: boolean
+  /** A subagent still working. */
+  running?: boolean
+}
+
+/**
+ * Which segments of a finished turn fold behind its "Worked for" line: the work (thoughts, groups, narration,
+ * finished subagents), not the answer. The answer is the last reply with text and no work after it; a turn cut off
+ * before it wrote one folds all of its work. What needs the person stays in view.
+ */
+export function foldTurnWork(rows: FoldRow[]): boolean[] {
+  let answer = -1
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]
+    if (row.kind === 'tools') break
+    if (row.kind === 'cards') continue
+    if (row.toolsOnly) break
+    if (row.keep) continue
+    if (row.text) answer = index
+    break
+  }
+  return rows.map((row, index) => {
+    if (row.kind === 'tools') return !row.keep
+    if (row.kind === 'cards') return !row.running
+    if (row.keep || index === answer) return false
+    return !!row.toolsOnly || !!row.text
+  })
+}
+
+// ---- A thought as it is written (format-tool.ts) ----
+
+const LIVE_THOUGHT_CHARS = 160
+
+/** The latest paragraph of a thought, as plain text on one line. */
+export function liveThoughtText(content: string | undefined): string {
+  if (!content?.trim()) return ''
+  const paragraphs = content.split(/\n\s*\n/).filter((block) => block.trim())
+  const latest = paragraphs[paragraphs.length - 1]
+    .split('\n')
+    .map((line) => line.trim().replace(/^#{1,6}\s+/, '').replace(/^>\s?/, ''))
+    .filter(Boolean)
+    .join(' ')
+  return stripInlineMarkdown(latest).replace(/(\*\*|__)/g, '').replace(/\s+/g, ' ').trim()
+}
+
+/** The newest words of a thought being written, starting at a word. */
+export function liveThoughtLine(content: string | undefined): string {
+  const plain = liveThoughtText(content)
+  if (plain.length <= LIVE_THOUGHT_CHARS) return plain
+  const tail = plain.slice(plain.length - LIVE_THOUGHT_CHARS)
+  const space = tail.indexOf(' ')
+  return `…${space > 0 && space < 24 ? tail.slice(space + 1) : tail}`
+}
+
+// ---- The live line under Working (turn-progress.tsx) ----
+
+export interface TurnProgress {
+  kind: 'starting' | 'thinking' | 'writing' | 'preparing-tool' | 'running-tool' | 'finishing'
+  label: string
+  /** What the running call works on, shown dim after the label. */
+  detail?: string
+  /** The running tool: the line shows its icon, pulsing. */
+  tool?: string
+}
+
+function inputDetail(input: unknown): string | undefined {
+  if (!isObject(input)) return undefined
+  for (const key of ['command', 'file_path', 'pattern', 'query', 'url', 'description', 'prompt']) {
+    const value = input[key]
+    if (typeof value === 'string' && value.trim()) {
+      const line = value.trim().split('\n')[0]
+      return line.length > 120 ? `${line.slice(0, 117)}…` : line
+    }
+  }
+  return undefined
+}
+
+/** Fields a call's row has before its arguments arrive; they say nothing about what it will do. */
+const PLACEHOLDER_INPUT_KEYS = new Set(['label', 'cwd'])
+
+function toolProgress(item: ChatItem): TurnProgress {
+  const tool = item.tool
+  if (!tool) return { kind: 'running-tool', label: 'Running tools…' }
+  const detail = inputDetail(tool.input)
+  if (isSubagentItem(item)) return { kind: 'running-tool', label: 'Running subagent…', detail }
+  // A tool search loads tools for the model: the line says what its row says.
+  if (tool.name === 'ToolSearch') return { kind: 'running-tool', label: 'Loading tools…', detail, tool: tool.name }
+  const name = tool.name === 'Mcp' ? mcpDisplayName(tool) : tool.name === 'Generic' ? tool.rawName || 'tool' : tool.name
+  const noInput = !tool.input || Object.entries(tool.input).every(([key, value]) => PLACEHOLDER_INPUT_KEYS.has(key) || value === undefined || value === null || value === '')
+  if (noInput) return { kind: 'preparing-tool', label: `Preparing ${name}…`, tool: tool.name }
+  return { kind: 'running-tool', label: `Running ${name}…`, detail, tool: tool.name }
+}
+
+/**
+ * What a running turn does now, in a few words, for the line under its work. Null where something else already
+ * says it: a question waiting, a compaction running, or a thought being written (its row is the live line).
+ */
+export function describeTurnProgress(replies: ChatItem[], phase: string | undefined, waiting: boolean): TurnProgress | null {
+  if (waiting || phase === 'awaiting_input') return null
+  const last = replies[replies.length - 1]
+  if (last?.kind === 'compaction' && last.status === 'streaming') return null
+  // Subagents still starting have no row yet: the line stands for them until each has a name.
+  const spawning = replies.filter((item) => isSubagentItem(item) && !subagentStarted(item)).length
+  if (spawning) return { kind: 'preparing-tool', label: spawning === 1 ? 'Starting subagent…' : `Starting ${spawning} subagents…` }
+  if (last && isRunningCall(last)) return toolProgress(last)
+  if (isLiveThought(last)) return null
+  for (let index = replies.length - 1; index >= 0; index--) if (isRunningCall(replies[index])) return toolProgress(replies[index])
+  switch (phase) {
+    case 'streaming':
+      return { kind: 'writing', label: 'Writing…' }
+    case 'tool_running':
+      return { kind: 'running-tool', label: 'Running tools…' }
+    case 'finalizing':
+      return { kind: 'finishing', label: 'Thinking…' }
+    case 'queued':
+      return { kind: 'starting', label: 'Thinking…' }
+  }
+  return replies.length ? { kind: 'thinking', label: 'Thinking…' } : { kind: 'starting', label: 'Thinking…' }
 }
 
 export interface FileEdit {
@@ -504,6 +932,76 @@ export function formatElapsed(ms: number): string {
   return minutes ? `${minutes}m ${seconds}s` : `${seconds}s`
 }
 
+export type SubagentState = 'starting' | 'working' | 'done' | 'failed' | 'interrupted'
+
+/**
+ * A runtime's own subagent call (Claude Code's Task / Agent) in its state. A call still open after its turn ended was
+ * cut off, unless it runs in the background: then it still works, and never flashes done.
+ */
+export function subagentState(item: ChatItem, turnLive: boolean): SubagentState {
+  const state = toolState(item, turnLive)
+  if (state === 'error') return 'failed'
+  if (state === 'done') return 'done'
+  const input = item.tool?.input ?? {}
+  if (state === 'interrupted') return input.run_in_background === true ? 'working' : 'interrupted'
+  return str(input.description).trim() ? 'working' : 'starting'
+}
+
+/** Whether a subagent call has a name to show: until then the turn's live line says "Starting subagent…". */
+export const subagentStarted = (item: ChatItem): boolean => !!str(item.tool?.input?.description).trim() || item.status !== 'streaming'
+
+/** How long a finished subagent ran, when its result says. */
+export function subagentDuration(tool: ChatToolCall): number | undefined {
+  const output = isObject(tool.output) ? tool.output : undefined
+  const ms = output?.totalDurationMs ?? output?.durationMs ?? output?.duration_ms
+  return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? ms : undefined
+}
+
+/** A subagent's report as Markdown with its line breaks: text blocks join by lines, not run together. */
+export function subagentReport(tool: ChatToolCall): string {
+  // Claude Code ends a report with the id to resume the agent by; it is not part of what the agent said.
+  return rawSubagentReport(tool).replace(/\n*^agentId: \S+ \(for resuming[^)]*\)\s*$/m, '').trim()
+}
+
+function rawSubagentReport(tool: ChatToolCall): string {
+  const output = tool.output
+  if (typeof output === 'string') return output.trim()
+  const blocks = Array.isArray(output) ? output : isObject(output) && Array.isArray(output.content) ? output.content : undefined
+  if (blocks) {
+    const text = blocks
+      .filter((block) => isObject(block) && block.type === 'text' && typeof block.text === 'string')
+      .map((block) => (block as { text: string }).text.trim())
+      .filter(Boolean)
+      .join('\n\n')
+    if (text) return text
+  }
+  if (isObject(output)) return (str(output.summary) || str(output.result) || str(output.text)).trim()
+  return ''
+}
+
+/** A report as one line of plain text: no fences, rules, table dividers, list marks, headings or inline marks. */
+export function plainResultText(markdown: string): string {
+  const words: string[] = []
+  for (const raw of markdown.replace(/\r\n?/g, '\n').split('\n')) {
+    let line = raw.trim()
+    if (/^(`{3,}|~{3,})/.test(line) || /^([-*_]\s*){3,}$/.test(line) || /^\|?(\s*:?-+:?\s*\|)+\s*(:?-+:?\s*)?$/.test(line)) continue
+    line = line
+      .replace(/^(>\s?)+/, '')
+      .replace(/^#{1,6}\s+/, '')
+      .replace(/^([-*+]|\d+[.)])\s+(\[[ xX]\]\s+)?/, '')
+    if (line.startsWith('|'))
+      line = line
+        .replace(/^\||\|$/g, '')
+        .split('|')
+        .map((cell) => cell.trim())
+        .filter(Boolean)
+        .join(' · ')
+    line = stripInlineMarkdown(line).replace(/(\*\*|__)/g, '').trim()
+    if (line) words.push(line)
+  }
+  return words.join(' ').replace(/\s+/g, ' ').trim()
+}
+
 /** "3:04 PM" today, otherwise "Oct 3". */
 export function formatTimestamp(at: number, now = Date.now()): string {
   if (!at) return ''
@@ -530,4 +1028,26 @@ export function formatTokens(tokens?: number): string {
 export function formatTokensPerSecond(rate?: number): string {
   if (typeof rate !== 'number' || !Number.isFinite(rate) || rate < 0) return 'Unavailable'
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(rate)
+}
+
+/** Every image the thread shows, in order: prompt attachments, then images in replies (image-sources.ts). */
+export function threadImages(items: ChatItem[], safe: (href: string) => string | undefined): Array<{ src: string; name: string }> {
+  const out: Array<{ src: string; name: string }> = []
+  const seen = new Set<string>()
+  const add = (src: string | undefined, name: string) => {
+    if (!src || seen.has(src)) return
+    seen.add(src)
+    out.push({ src, name })
+  }
+  for (const item of items) {
+    for (const image of item.images ?? []) if (image.data) add(`data:${image.mimeType};base64,${image.data}`, image.name)
+    if (item.role !== 'assistant' || item.kind !== 'message') continue
+    const texts = item.parts ? item.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])) : [item.text]
+    for (const text of texts)
+      for (const match of text.matchAll(/!\[([^\]]*)\]\(\s*<?([^\s)>]+)>?(?:\s+"[^"]*")?\s*\)/g)) {
+        const src = safe(match[2])
+        if (src && !src.startsWith('mailto:')) add(src, match[1].trim() || 'Image')
+      }
+  }
+  return out
 }

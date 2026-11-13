@@ -6,6 +6,7 @@ import { equalBytes, fromB64url, fromUtf8 } from '../net/bytes'
 import { sha256 } from '../net/crypto'
 import { NetError } from '../net/errors'
 import type { SessionLink, StreamHead, StreamRecord } from '../net/session'
+import { parseBots } from './bots'
 import type { ComputerLists, ListChat, ListProject, ListThread, ListsState, RunState, ThreadStatus } from './types'
 
 /** The desktop's reserved id for the lists stream's snapshot records. */
@@ -108,6 +109,7 @@ export function parseLists(value: unknown, receivedAt = Date.now()): ComputerLis
     projects: listOf(value.projects, project),
     threads: listOf(value.threads, listThread),
     chats: listOf(value.chats, chat),
+    bots: parseBots(value.bots),
     status: statuses,
     receivedAt,
   }
@@ -321,6 +323,7 @@ export class ListsWatch {
       projects: listOf(projects.projects, project),
       threads: listOf(threads.threads, listThread),
       chats: [],
+      bots: [],
       status: {},
       receivedAt: Date.now(),
     })

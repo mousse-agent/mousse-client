@@ -2,31 +2,44 @@
 // of a user message and its replies, consecutive tool activity collapsed into groups, a
 // "Working for…" line, per-message actions, the turn's file changes, and the end-of-thread
 // states (interrupted, failed, provider unreachable, questions waiting).
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import type { ChatItem, QuestionAnswers, ThreadDisplayState } from '../../connection/types'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import type { ChatItem, QuestionAnswers, ThreadDisplayState, TurnEnd } from '../../connection/types'
 import { normalizeToolName } from '../../connection/timelineItems'
-import { copyText } from './actions'
-import { PLAN_APPROVAL_PREFIX, TimelineActionsContext, type TimelineActions } from './context'
+import { copyText, safeHref } from './actions'
+import { PLAN_APPROVAL_PREFIX, RecoveredFailuresContext, TimelineActionsContext, type TimelineActions } from './context'
 import {
+  describeTurnProgress,
+  foldTurnWork,
   formatResponseTime,
   formatTimestamp,
   formatTokens,
   formatTokensPerSecond,
   formatWorkedFor,
   formatWorkingFor,
-  groupLabel,
   groupTurns,
+  isActivity,
+  isLiveThought,
+  isRunningCall,
+  recoveredFailures,
   segmentReplies,
+  settleFinishedTurn,
   shortPath,
+  threadImages,
+  toolFailed,
   turnEdits,
+  workGroupIcon,
+  workGroupTitle,
+  type FoldRow,
+  type Segment,
   type Turn,
 } from './format'
-import { Bot, Check, ChevronRight, CircleX, Copy, FileText, Folder, Globe, Image as ImageIcon, Info, Link, Monitor, MessageSquare, Paperclip, VolumeHigh, X } from './icons'
+import { Bot, Check, ChevronRight, CircleX, ThinkingIcon, Copy, FileText, Folder, Globe, Image as ImageIcon, Info, Link, Monitor, MessageSquare, Paperclip, VolumeHigh, X } from './icons'
 import { Markdown } from './Markdown'
+import { ImageGalleryContext, ImageLightbox } from './ImageLightbox'
 import { AppletCard, AppletPending } from './AppletCard'
 import { ReadAloudButton as ComputerReadAloudButton, useComputerSpeech } from '../speech/readAloud'
 import { QuestionPrompt } from './QuestionPrompt'
-import { DiffStat, PlanCard, Shimmer, Spinner, ToolGroup, ToolItem } from './ToolCards'
+import { DiffStat, PlanCard, Shimmer, Spinner, SubagentGroup, ToolGroup, ToolIcon, ToolItem } from './ToolCards'
 
 // ---- Message actions ----
 
@@ -141,26 +154,33 @@ function MetadataButton({ item }: { item: ChatItem }) {
 
 // ---- User messages ----
 
-function Lightbox({ src, name, onClose }: { src: string; name: string; onClose: () => void }) {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => event.key === 'Escape' && onClose()
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-  return (
-    <div className="m-tl-lightbox" role="dialog" aria-label={name} onClick={onClose}>
-      <img src={src} alt={name} />
-      <button type="button" className="m-tl-lightbox__close" aria-label="Close image" onClick={onClose}>
-        <X size={20} />
-      </button>
-    </div>
-  )
-}
-
 const REFERENCE_ICONS = { file: FileText, project: Folder, thread: MessageSquare, terminal: Monitor, browser: Globe, agent: Bot } as const
+
+/** A long prompt shows this much (px) until "Show full message" is tapped (user-message.tsx). */
+export const PROMPT_FOLD_HEIGHT = 176
+
+/** True when the text is at least twice the fold height, so folding it hides enough to matter. */
+function useTallEnoughToFold(ref: RefObject<HTMLElement | null>, text: string): boolean {
+  const [tall, setTall] = useState(false)
+  useLayoutEffect(() => {
+    const element = ref.current
+    if (!element) return
+    const measure = () => setTall(element.scrollHeight >= PROMPT_FOLD_HEIGHT * 2)
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [ref, text])
+  return tall
+}
 
 const UserMessage = memo(function UserMessage({ item }: { item: ChatItem }) {
   const [viewing, setViewing] = useState<{ src: string; name: string }>()
+  const [expanded, setExpanded] = useState(false)
+  const textRef = useRef<HTMLDivElement>(null)
+  const foldable = useTallEnoughToFold(textRef, item.text)
+  const folded = foldable && !expanded
   const images = item.images ?? []
   return (
     <div className="m-tl-user" data-testid="chat-item" data-role="user">
@@ -196,25 +216,55 @@ const UserMessage = memo(function UserMessage({ item }: { item: ChatItem }) {
           ))}
         </div>
       )}
-      {item.text.trim() && <div className="m-tl-user__bubble">{item.text}</div>}
+      {item.text.trim() && (
+        <div className="m-tl-user__bubble">
+          <div ref={textRef} className={`m-tl-user__text${folded ? ' m-tl-user__text--folded' : ''}`}>
+            {item.text}
+          </div>
+          {foldable && (
+            <button type="button" className="m-tl-user__fold" aria-expanded={expanded} onClick={() => setExpanded((open) => !open)}>
+              {expanded ? 'Show less' : 'Show full message'}
+            </button>
+          )}
+        </div>
+      )}
       <div className="m-tl-toolbar m-tl-toolbar--user">
         {item.createdAt > 0 && <time className="m-tl-toolbar__time" dateTime={new Date(item.createdAt).toISOString()}>{formatTimestamp(item.createdAt)}</time>}
         {item.text.trim() && <CopyButton text={item.text} />}
       </div>
-      {viewing && <Lightbox src={viewing.src} name={viewing.name} onClose={() => setViewing(undefined)} />}
+      {viewing && <ImageLightbox src={viewing.src} name={viewing.name} onClose={() => setViewing(undefined)} />}
     </div>
   )
 })
 
 // ---- Assistant and system rows ----
 
+/** The title of a failed request: the provider's own refusal, or Mousse's (mousseToUI.ts errorTitle). */
+export function errorTitle(code: string | undefined): string {
+  if (code === 'provider_usage_limit') return 'Usage limit reached'
+  return code?.startsWith('provider_') ? 'Provider error' : 'Request failed'
+}
+
+/** A message and the reference it was logged under at its end (`… Reference: 1ecec6b5-…`), apart. */
+export function splitErrorReference(message: string): { text: string; reference?: string } {
+  const match = /\s*Reference:\s*(\S+)\s*$/.exec(message)
+  if (!match) return { text: message.trim() }
+  return { text: message.slice(0, match.index).trim(), reference: match[1] }
+}
+
+/**
+ * A failed request (error-message.tsx): the title in the danger colour, then the message as the provider or Mousse
+ * gave it, and the reference it was logged under on a quiet line.
+ */
 function ErrorBox({ title = 'Request failed', message }: { title?: string; message: string }) {
+  const { text, reference } = splitErrorReference(message)
   return (
     <div className="m-tl-error" role="alert">
       <CircleX size={16} className="m-tl-error__icon" />
       <div>
         <div className="m-tl-error__title">{title}</div>
-        <div className="m-tl-error__message">{message}</div>
+        <div className="m-tl-error__message">{text}</div>
+        {reference && <div className="m-tl-error__meta">Reference {reference}</div>}
       </div>
     </div>
   )
@@ -232,17 +282,17 @@ const AssistantMessage = memo(function AssistantMessage({ item, live }: { item: 
           ) : part.type === 'applet-pending' ? (
             <AppletPending key={`p${index}`} />
           ) : part.text.trim() ? (
-            <div key={`t${index}`} className={`m-tl-assistant__text${streaming ? ' m-tl-assistant__text--streaming' : ''}`}>
-              <Markdown text={part.text} />
+            <div key={`t${index}`} className="m-tl-assistant__text">
+              <Markdown text={part.text} streaming={streaming} />
             </div>
           ) : null,
         )
       ) : item.text.trim() && (
-        <div className={`m-tl-assistant__text${streaming ? ' m-tl-assistant__text--streaming' : ''}`}>
-          <Markdown text={item.text} />
+        <div className="m-tl-assistant__text">
+          <Markdown text={item.text} streaming={streaming} />
         </div>
       )}
-      {item.error && <ErrorBox message={item.error.message} />}
+      {item.error && <ErrorBox title={errorTitle(item.error.code)} message={item.error.message} />}
       {item.incomplete && !streaming && <div className="m-tl-note">This reply stopped before it finished.</div>}
       {showActions && (
         <div className="m-tl-toolbar">
@@ -325,7 +375,21 @@ function ReplyItem({ item: raw, live, nested }: { item: ChatItem; live: boolean;
 
 // ---- Turn decorations ----
 
-function WorkStatus({ live, startedAt, durationMs }: { live: boolean; startedAt?: number; durationMs?: number }) {
+function WorkStatus({
+  live,
+  startedAt,
+  durationMs,
+  fold,
+  end,
+}: {
+  live: boolean
+  startedAt?: number
+  durationMs?: number
+  /** A finished turn whose work folds behind this line: the line opens it in place ("Worked for 32s ›"). */
+  fold?: { open: boolean; onToggle: () => void }
+  /** A finished turn that a Stop, a restart or a crash cut off: " · Stopped" after its time. */
+  end?: TurnEnd
+}) {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (!live) return
@@ -334,11 +398,70 @@ function WorkStatus({ live, startedAt, durationMs }: { live: boolean; startedAt?
     return () => clearInterval(timer)
   }, [live])
   const elapsed = live && startedAt ? Math.max(0, now - startedAt) : durationMs
-  if (elapsed === undefined) return null
+  // A turn with work to open always has its line, even with no time to show.
+  const label = elapsed !== undefined ? (live ? formatWorkingFor(elapsed) : formatWorkedFor(elapsed)) : fold && !live ? 'Worked' : undefined
+  const mark = !live && end ? <TurnEndLabel end={end} separate={label !== undefined} /> : null
+  if (label === undefined && !mark) return null
   return (
     <div className="m-tl-work" data-testid="work-status" data-live={live || undefined}>
-      <Shimmer active={live} className="m-tl-work__label">{live ? formatWorkingFor(elapsed) : formatWorkedFor(elapsed)}</Shimmer>
+      {fold && !live ? (
+        <button type="button" className="m-tl-work__label m-tl-work__toggle" aria-expanded={fold.open} onClick={fold.onToggle}>
+          {label}
+          {mark}
+          <ChevronRight size={14} className={`m-tl-work__chevron${fold.open ? ' m-tl-work__chevron--open' : ''}`} />
+        </button>
+      ) : (
+        <Shimmer active={live} className="m-tl-work__label">
+          {label}
+          {mark}
+        </Shimmer>
+      )}
       <div className="m-tl-work__rule" aria-hidden />
+    </div>
+  )
+}
+
+const TURN_END_WORDS: Record<TurnEnd['cause'], { word: string; detail: string }> = {
+  user: { word: 'Stopped', detail: 'You stopped this turn before it finished.' },
+  agent: { word: 'Stopped', detail: 'An agent in another thread stopped this turn.' },
+  daemon_restart: { word: 'Interrupted', detail: 'Mousse restarted during this turn.' },
+  crash: { word: 'Interrupted', detail: 'Mousse quit during this turn.' },
+}
+
+/** " · Stopped" after a cut-off turn's time: one muted word; why goes to its tooltip and to screen readers. */
+function TurnEndLabel({ end, separate }: { end: TurnEnd; separate: boolean }) {
+  const { word, detail } = TURN_END_WORDS[end.cause] ?? TURN_END_WORDS.user
+  const title = end.tools?.length ? `${detail} May have run: ${end.tools.join(', ')}` : detail
+  return (
+    <>
+      {separate ? ' · ' : null}
+      <span className="m-tl-work__end" data-turn-end={end.cause} title={title}>
+        {word}
+        <span className="m-sr-only">: {title}</span>
+      </span>
+    </>
+  )
+}
+
+/**
+ * The live line at the end of a running turn (turn-progress.tsx): what it does now, in a few words. Thinking shows
+ * the turning atom; a running tool its own icon, pulsing; anything else three small dots.
+ */
+function TurnProgressRow({ replies, phase, waiting }: { replies: ChatItem[]; phase?: string; waiting: boolean }) {
+  const progress = describeTurnProgress(replies, phase, waiting)
+  if (!progress) return null
+  const thinking = progress.kind === 'thinking' || progress.kind === 'starting' || progress.kind === 'finishing'
+  return (
+    <div className="m-tl-progress-line" role="status" data-testid="turn-progress" data-kind={progress.kind}>
+      {thinking ? (
+        <span className="m-tl-icon"><ThinkingIcon size={18} active /></span>
+      ) : progress.tool ? (
+        <ToolIcon name={progress.tool} state="running" />
+      ) : (
+        <span className="m-tl-dots" aria-hidden><span /><span /><span /></span>
+      )}
+      <span className="m-tl-progress-line__label">{progress.label}</span>
+      {progress.detail && <span className="m-tl-progress-line__detail">{progress.detail}</span>}
     </div>
   )
 }
@@ -390,36 +513,121 @@ function nestUnderTasks(replies: ChatItem[]): { flow: ChatItem[]; nested: Map<st
   return { flow, nested }
 }
 
-const TurnView = memo(function TurnView({ turn, live, startedAt }: { turn: Turn; live: boolean; startedAt?: number }) {
-  const { flow, nested } = useMemo(() => nestUnderTasks(turn.replies), [turn.replies])
-  const segments = useMemo(() => segmentReplies(flow), [flow])
+/** What folding needs to know of one segment of a finished turn. */
+function foldRowOf(segment: Segment, recovered: ReadonlySet<string>): FoldRow {
+  const unrecovered = (item: ChatItem) => toolFailed(item) && !recovered.has(item.id)
+  if (segment.kind === 'group') return { kind: 'tools', keep: segment.items.some(unrecovered) }
+  // Subagents still working stay in view.
+  if (segment.kind === 'cards') return { kind: 'cards', running: segment.items.some((item) => item.status === 'streaming') }
+  const item = segment.item
+  if (isActivity(item)) return { kind: 'message', toolsOnly: true, keep: unrecovered(item) }
+  // Errors, questions, plans, quick actions, notices, Mousse's own markers and applets stay in view.
+  if (item.role !== 'assistant' || item.kind !== 'message' || item.error || item.parts) return { kind: 'message', keep: true }
+  return { kind: 'message', text: !!item.text.trim() }
+}
+
+const TurnView = memo(function TurnView({
+  turn,
+  live,
+  startedAt,
+  endedBadly = false,
+  phase,
+  waiting = false,
+  hideEnd = false,
+}: {
+  turn: Turn
+  live: boolean
+  startedAt?: number
+  endedBadly?: boolean
+  /** The running turn's phase, for its live line. */
+  phase?: string
+  waiting?: boolean
+  /** The last turn's Stopped mark gives way while the "Run interrupted" notice shows for it. */
+  hideEnd?: boolean
+}) {
+  // Mousse's line that a Stop or a restart cut the turn off shows nothing itself: the Worked line reads it.
+  const end = useMemo(() => [...turn.replies].reverse().find((item) => item.turnEnd)?.turnEnd, [turn.replies])
+  const replies = useMemo(() => (end ? turn.replies.filter((item) => !item.turnEnd) : turn.replies).map(withTool), [turn.replies, end])
+  const { flow, nested } = useMemo(() => nestUnderTasks(replies), [replies])
+  const cutOff = endedBadly || !!end
+  // A finished turn ends on its answer: the work that led to it comes above it. A cut-off one keeps its order.
+  const ordered = useMemo(() => (live ? flow : settleFinishedTurn(flow, cutOff)), [flow, live, cutOff])
+  const segments = useMemo(() => segmentReplies(ordered, live), [ordered, live])
+  // A failure is loud only when nothing came after it and the turn failed or was cut off.
+  const recovered = useMemo(() => recoveredFailures(replies, !live && cutOff), [replies, live, cutOff])
+  // Only a turn with a prompt has a Worked line to open its work from.
+  const folded = useMemo(
+    () => (live || !turn.user ? segments.map(() => false) : foldTurnWork(segments.map((segment) => foldRowOf(segment, recovered)))),
+    [segments, live, recovered, turn.user],
+  )
+  const hasFold = folded.some(Boolean)
+  const [workOpen, setWorkOpen] = useState(false)
   const lastReplyAt = turn.replies.reduce((latest, item) => Math.max(latest, item.createdAt), 0)
   const durationMs = turn.user && lastReplyAt > turn.user.createdAt && turn.user.createdAt > 0 ? lastReplyAt - turn.user.createdAt : undefined
+  const renderGroup = (items: ChatItem[]) => {
+    // A thought still being written stays out of the group: its own row is the turn's live line.
+    const liveThought = live && isLiveThought(items[items.length - 1]) ? items[items.length - 1] : undefined
+    const grouped = liveThought ? items.slice(0, -1) : items
+    const unrecovered = grouped.filter((item) => toolFailed(item) && !recovered.has(item.id)).length
+    // One finished call left beside the live thought is its own row: it says more than "Read 1 file".
+    const single = grouped.length === 1 && !isRunningCall(grouped[0]) ? grouped[0] : undefined
+    const icon = workGroupIcon(grouped)
+    return (
+      <>
+        {single ? (
+          <ToolItem item={single} live={live} nested={nested.get(single.id)} />
+        ) : grouped.length ? (
+          <ToolGroup
+            title={workGroupTitle(grouped)}
+            icon={icon === 'Thinking' ? <ThinkingIcon size={18} /> : <ToolIcon name={icon} state="done" />}
+            count={grouped.length}
+            failed={unrecovered}
+            live={live}
+          >
+            {grouped.map((item) => (
+              <ToolItem key={item.id} item={item} live={live} nested={nested.get(item.id)} />
+            ))}
+          </ToolGroup>
+        ) : null}
+        {liveThought && <ToolItem item={liveThought} live={live} />}
+      </>
+    )
+  }
   return (
-    <div className="m-tl-turn">
-      {turn.user && <UserMessage item={turn.user} />}
-      {turn.user && <WorkStatus live={live} startedAt={startedAt ?? turn.user.createdAt} durationMs={durationMs} />}
-      <div className="m-tl-answer">
-        {segments.map((segment) =>
-          segment.kind === 'item' ? (
-            <ReplyItem key={segment.item.id} item={segment.item} live={live} nested={nested.get(segment.item.id)} />
-          ) : (
-            <div key={`${segment.items[0].id}-group`} data-testid="chat-item" data-role="tool">
-              <ToolGroup
-                label={groupLabel(segment.items)}
-                count={segment.items.length}
-                running={live && segment.items.some((item) => item.status === 'streaming')}
-              >
-                {segment.items.map((item) => (
-                  <ToolItem key={item.id} item={item} live={live} nested={nested.get(item.id)} />
-                ))}
-              </ToolGroup>
-            </div>
-          ),
+    <RecoveredFailuresContext.Provider value={recovered}>
+      <div className="m-tl-turn">
+        {turn.user && <UserMessage item={turn.user} />}
+        {turn.user && (
+          <WorkStatus
+            live={live}
+            startedAt={startedAt ?? turn.user.createdAt}
+            durationMs={durationMs}
+            fold={hasFold ? { open: workOpen, onToggle: () => setWorkOpen((open) => !open) } : undefined}
+            end={hideEnd ? undefined : end}
+          />
         )}
+        <div className="m-tl-answer">
+          {segments.map((segment, index) => {
+            if (folded[index] && !workOpen) return null
+            if (segment.kind === 'cards')
+              return (
+                <div key={`${segment.items[0].id}-subagents`} data-testid="chat-item" data-role="tool">
+                  <SubagentGroup items={segment.items} live={live} nested={nested} />
+                </div>
+              )
+            return segment.kind === 'item' ? (
+              <ReplyItem key={segment.item.id} item={segment.item} live={live} nested={nested.get(segment.item.id)} />
+            ) : (
+              <div key={`${segment.items[0].id}-group`} data-testid="chat-item" data-role="tool">
+                {renderGroup(segment.items)}
+              </div>
+            )
+          })}
+          {live && <TurnProgressRow replies={flow} phase={phase} waiting={waiting} />}
+        </div>
+        {!live && <EditSummary replies={turn.replies} />}
       </div>
-      {!live && <EditSummary replies={turn.replies} />}
-    </div>
+    </RecoveredFailuresContext.Provider>
   )
 })
 
@@ -453,6 +661,7 @@ export function Timeline({ items, display, active, onApprovePlan, onAddToDraft, 
     () => ({ approvePlan: onApprovePlan, busy: active, approvedPlans, addToDraft: onAddToDraft }),
     [onApprovePlan, active, approvedPlans, onAddToDraft],
   )
+  const images = useMemo(() => threadImages(items, safeHref), [items])
   const lastTurn = turns[turns.length - 1]
   const lastHasError = !!lastTurn?.replies.some((item) => item.error || item.status === 'error')
   const stoppedAfterLast = display.phase === 'stopped' && !active
@@ -461,10 +670,22 @@ export function Timeline({ items, display, active, onApprovePlan, onAddToDraft, 
 
   return (
     <TimelineActionsContext.Provider value={actions}>
+      <ImageGalleryContext.Provider value={images}>
       <div className="m-tl" data-testid="timeline">
         {turns.map((turn, index) => {
           const last = index === turns.length - 1
-          return <TurnView key={turn.key} turn={turn} live={last && active} startedAt={last && active ? display.turnStartedAt : undefined} />
+          return (
+            <TurnView
+              key={turn.key}
+              turn={turn}
+              live={last && active}
+              startedAt={last && active ? display.turnStartedAt : undefined}
+              endedBadly={last && (display.phase === 'failed' || display.phase === 'stopped')}
+              phase={last && active ? display.phase : undefined}
+              waiting={last && active && waiting}
+              hideEnd={last && stoppedAfterLast}
+            />
+          )
         })}
         {stoppedAfterLast && (
           <div className="m-tl-interrupted" data-testid="run-interrupted">
@@ -487,17 +708,34 @@ export function Timeline({ items, display, active, onApprovePlan, onAddToDraft, 
           <QuestionPrompt key={pending.requestId} pending={pending} onAnswer={onAnswer} onDismiss={onDismiss} />
         ))}
       </div>
+      </ImageGalleryContext.Provider>
     </TimelineActionsContext.Provider>
   )
 }
 
-/** The round "jump to latest" button, with a live dot while a reply streams. */
-export function JumpToLatest({ live, onClick }: { live: boolean; onClick: () => void }) {
+/**
+ * Go to latest, as the desktop's quiet pill: chevron and label on a subtle fill, with a live dot while a
+ * reply streams. Mounted while the thread has messages so it fades both ways; hidden and inert while the
+ * view follows the end of the thread.
+ */
+export function JumpToLatest({ live, shown, onClick }: { live: boolean; shown: boolean; onClick: () => void }) {
   const ref = useRef<HTMLButtonElement>(null)
+  // React 18 has no `inert` prop; set the attribute so a hidden pill takes no taps or focus.
+  useEffect(() => {
+    ref.current?.toggleAttribute('inert', !shown)
+  }, [shown])
   return (
-    <button ref={ref} type="button" className="m-tl-jump" aria-label="Jump to latest" onClick={onClick}>
-      <ChevronRight size={18} className="m-tl-jump__icon" />
+    <button
+      ref={ref}
+      type="button"
+      className="m-tl-jump"
+      data-hidden={shown ? undefined : true}
+      aria-hidden={!shown || undefined}
+      onClick={onClick}
+    >
       {live && <span className="m-tl-jump__live" aria-hidden />}
+      <ChevronRight size={14} className="m-tl-jump__icon" aria-hidden />
+      <span>Go to latest</span>
     </button>
   )
 }

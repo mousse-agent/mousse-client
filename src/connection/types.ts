@@ -1,3 +1,4 @@
+import type { ComputerBots, ListBot } from './bots'
 // The boundary between the phone UI and the connection layer. The UI only
 // talks to MousseConnection; the Net and Mousse ID implementation lives in src/net and
 // src/mousseId. Keep this file small and stable: both sides depend on it.
@@ -127,6 +128,8 @@ export interface ComputerLists {
   projects: ListProject[]
   threads: ListThread[]
   chats: ListChat[]
+  /** The owner's personal bots; empty on a computer that does not list them. */
+  bots: ListBot[]
   /** Run status of the threads that are not idle, by thread id. */
   status: Record<string, ThreadStatus>
   receivedAt: number
@@ -238,6 +241,17 @@ export interface ChatItem {
   incomplete?: boolean
   /** A reply with applets, in order; `text` then holds only its text parts. */
   parts?: ChatPart[]
+  /** Mousse's line that a Stop, a restart or a crash cut the turn off: it shows nothing itself. */
+  turnEnd?: TurnEnd
+}
+
+/**
+ * Why a turn was cut off before it finished (desktop shared/types.ts). `user`: a person's Stop; `agent`: an agent in
+ * another thread stopped it; `daemon_restart`: Mousse restarted; `crash`: Mousse quit. `tools`: what may have run.
+ */
+export interface TurnEnd {
+  cause: 'user' | 'agent' | 'daemon_restart' | 'crash'
+  tools?: string[]
 }
 
 /** The desktop's turn phase (shared/types.ts TurnPhase). */
@@ -367,6 +381,15 @@ export interface QueuedMessage {
   state: string
 }
 
+/**
+ * What an edit of a queued message answers: the saved message, or, with `changed`, the message as it is
+ * now when its text changed after the edit started; then nothing was saved.
+ */
+export interface QueueEditResult {
+  item: QueuedMessage
+  changed?: true
+}
+
 /** The thread fields the composer needs. */
 export interface ThreadDetails {
   id: string
@@ -448,11 +471,18 @@ export interface ComputerSession {
   listQueue(threadId: string): Promise<QueuedMessage[]>
   removeQueued(threadId: string, itemId: string): Promise<void>
   reorderQueue(threadId: string, orderedIds: string[]): Promise<void>
+  /**
+   * Replaces a queued message's text; it keeps its place in the queue. With `expectedContent` (the text the
+   * edit started from) it saves only if the message still has it, and otherwise answers it as it is now.
+   */
+  editQueued(threadId: string, itemId: string, content: string, expectedContent?: string): Promise<QueueEditResult>
   /** Moves a queued message into the running turn. */
   steerQueued(threadId: string, itemId: string): Promise<void>
   contextUsage(threadId: string): Promise<ContextUsage | undefined>
   /** Dictation and read aloud with the computer's speech models; absent when unavailable. */
   readonly speech?: ComputerSpeech
+  /** The owner's personal bots on this computer. */
+  readonly bots?: ComputerBots
   close(): void
 }
 

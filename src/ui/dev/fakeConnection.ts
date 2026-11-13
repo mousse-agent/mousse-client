@@ -1,6 +1,7 @@
 // A deterministic, in-memory MousseConnection for development, screenshots and
 // UI tests. It simulates sign-in, enrollment stages and streamed replies; it
 // never touches the network. Replace it with the real connection in main.tsx.
+import { FakeBots } from './fakeBots'
 import type {
   AccountState,
   ChatItem,
@@ -11,6 +12,7 @@ import type {
   ContextUsage,
   ModelSelection,
   QueuedMessage,
+  QueueEditResult,
   SendOptions,
   ThreadDetails,
   EnrollmentProgress,
@@ -27,7 +29,7 @@ import type {
   ThreadDisplayState,
   ThreadSummary
 } from '../../connection/types'
-import { SHOWCASE_THREAD_ID, showcaseItems, showcaseQuestions } from './timelineShowcase'
+import { SHOWCASE_LIVE_THREAD_ID, SHOWCASE_THREAD_ID, showcaseItems, showcaseLiveItems, showcaseQuestions } from './timelineShowcase'
 import { FakeComputerSpeech } from './fakeSpeech'
 
 export interface FakeConnectionOptions {
@@ -84,7 +86,16 @@ function initialThreads(): ThreadSummary[] {
     { id: 't-voices', projectId: 'p-mousse', title: 'Fetch extra Kokoro voices on first use', updatedAt: BASE_TIME - 3 * 3_600_000 },
     { id: 't-landing', projectId: 'p-site', title: 'Landing page copy', updatedAt: BASE_TIME - 26 * 3_600_000 },
     { id: 't-icons', projectId: 'p-client', title: 'Swap lucide for Hugeicons', updatedAt: BASE_TIME - 50 * 3_600_000, settled: true },
-    { id: SHOWCASE_THREAD_ID, projectId: 'p-mousse', title: 'Timeline showcase', updatedAt: BASE_TIME - 80 * 3_600_000 }
+    { id: SHOWCASE_THREAD_ID, projectId: 'p-mousse', title: 'Timeline showcase', updatedAt: BASE_TIME - 80 * 3_600_000 },
+    { id: SHOWCASE_LIVE_THREAD_ID, projectId: 'p-mousse', title: 'Live turn showcase', updatedAt: BASE_TIME - 81 * 3_600_000 }
+  ]
+}
+
+/** Messages waiting in the showcase thread's queue, for screenshots of the queue at the end of the conversation. */
+function showcaseQueue(): QueuedMessage[] {
+  return [
+    { id: 'q-show-1', content: 'Then move the reconnecting pill above the composer, as we discussed.', imageCount: 0, enqueuedAt: BASE_TIME - 60_000, intent: 'normal', state: 'pending' },
+    { id: 'q-show-2', content: 'And add a test for the retry backoff:\n- first retry after 1 s\n- then double up to 30 s', imageCount: 0, enqueuedAt: BASE_TIME - 30_000, intent: 'normal', state: 'pending' }
   ]
 }
 
@@ -98,6 +109,7 @@ function initialChats(): ListChat[] {
 
 function initialItems(threadId: string, title: string): ChatItem[] {
   if (threadId === SHOWCASE_THREAD_ID) return showcaseItems(BASE_TIME)
+  if (threadId === SHOWCASE_LIVE_THREAD_ID) return showcaseLiveItems(Date.now())
   if (threadId === 't-redesign') {
     return [
       { id: 'i1', role: 'user', text: 'Make the phone app look like the desktop: same tokens, Geist, Hugeicons.', createdAt: BASE_TIME - 9 * 60_000, status: 'done' },
@@ -177,9 +189,11 @@ export class FakeSession implements ComputerSession {
   private done = new Set<string>(['t-relay'])
   private waiting = new Set<string>(['t-voices'])
   private models = new Map<string, ModelSelection>()
-  private queues = new Map<string, QueuedMessage[]>()
+  private queues = new Map<string, QueuedMessage[]>([[SHOWCASE_THREAD_ID, showcaseQueue()]])
   /** The computer's speech models (dictation and read aloud). */
   readonly speech = new FakeComputerSpeech()
+  /** The owner's bots on this computer. */
+  readonly bots = new FakeBots(() => this.emitLists())
   /** Every send, queued message and steer, with its options, for tests. */
   readonly sent: Array<{ kind: 'send' | 'queue' | 'steer'; threadId: string; text: string; options?: SendOptions }> = []
   /** What each new thread was created with, for tests. */
@@ -222,6 +236,7 @@ export class FakeSession implements ComputerSession {
         started: true
       })),
       chats,
+      bots: this.bots.list(),
       status,
       receivedAt: Date.now()
     }
@@ -283,7 +298,7 @@ export class FakeSession implements ComputerSession {
     onItems(list.map((item) => ({ ...item })), this.displayFor(threadId))
     // The demo thread is mid-turn when first opened.
     const last = list[list.length - 1]
-    if (last?.status === 'streaming' && !this.streams.has(threadId)) {
+    if (last?.status === 'streaming' && !this.streams.has(threadId) && threadId !== SHOWCASE_LIVE_THREAD_ID) {
       this.stream(threadId, last.id, `${last.text}. The thread list moves to the left at 768px and wider, and the open thread fills the rest.`)
     }
     return () => { set?.delete(onItems) }
@@ -377,9 +392,25 @@ export class FakeSession implements ComputerSession {
     this.queues.set(threadId, orderedIds.map((id) => queue.find((item) => item.id === id)).filter((item): item is QueuedMessage => !!item))
   }
 
-  async steerQueued(threadId: string, itemId: string): Promise<void> {
+  async editQueued(threadId: string, itemId: string, content: string, expectedContent?: string): Promise<QueueEditResult> {
+    await sleep(this.opts.latencyMs)
     const item = (this.queues.get(threadId) ?? []).find((entry) => entry.id === itemId)
     if (!item) throw new Error('This message already started or is no longer queued.')
+    if (expectedContent !== undefined && item.content !== expectedContent) return { item: { ...item }, changed: true }
+    item.content = content.trim()
+    return { item: { ...item } }
+  }
+
+  async steerQueued(threadId: string, itemId: string): Promise<void> {
+    const queue = this.queues.get(threadId) ?? []
+    const item = queue.find((entry) => entry.id === itemId)
+    if (!item) throw new Error('This message already started or is no longer queued.')
+    if (!this.isActive(threadId)) {
+      // Like the computer: Send now with nothing running puts the message first and starts its turn.
+      this.queues.set(threadId, [item, ...queue.filter((entry) => entry !== item)])
+      this.drain(threadId)
+      return
+    }
     await this.steer(threadId, item.content)
     await this.removeQueued(threadId, itemId)
   }

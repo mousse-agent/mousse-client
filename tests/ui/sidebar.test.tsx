@@ -83,6 +83,7 @@ describe('sidebar model', () => {
       { id: 'loose', title: 'Loose', createdAt: 0, updatedAt: 0, order: 3, pinned: false, settled: false, started: true },
     ],
     chats: [{ id: 'c', kind: 'direct', name: 'Reviewer', threadId: 'chat', network: false, agents: ['Reviewer'], updatedAt: 0 }],
+    bots: [],
     status: {},
     receivedAt: 0,
   }
@@ -115,6 +116,7 @@ describe('sidebar model', () => {
         { id: 'a', title: 'Newest', projectId: 'p', createdAt: 0, updatedAt: 50, order: 9, pinned: false, settled: false, started: true },
       ],
       chats: [],
+      bots: [],
       status: { a: { state: 'processing' } },
       receivedAt: 7,
     }

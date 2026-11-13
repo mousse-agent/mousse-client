@@ -1,15 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ComposerOptions, ComputerSession, ContextUsage, ModelSelection, PermissionMode, QueuedMessage, SendOptions } from '../../connection/types'
+import type { ComposerOptions, ComputerSession, ContextUsage, ModelSelection, PermissionMode, SendOptions } from '../../connection/types'
 import type { ThreadState } from '../hooks/useThread'
+import type { ThreadQueue } from '../hooks/useThreadQueue'
 import { errorMessage } from '../hooks/useAsync'
 import { useRouter } from '../state/router'
-import { loadFavorites, saveFavorites } from '../lib/composerPrefs'
+import { loadFavorites, loadSendMode, saveFavorites, saveSendMode, type SendMode } from '../lib/composerPrefs'
 import { Composer, type ComposerControls } from './Composer'
-import { QueuedMessages } from './QueuedMessages'
 import { shownPermission } from './ComposerSheets'
 import { Notice } from './primitives'
 
-const QUEUE_POLL_MS = 4_000
 const USAGE_POLL_MS = 5_000
 
 /** Options are per computer; reuse them across threads of one session. */
@@ -28,19 +27,22 @@ function composerOptions(session: ComputerSession, threadId: string): Promise<Co
 /**
  * The thread's composer with the computer's controls: model and effort (stored on the thread, so
  * every device sees the same choice), mode, skills, slash commands, images, the queue and context.
- * A computer without these controls (an older Mousse) still gets a working text composer.
+ * A computer without these controls (an older Mousse) still gets a working text composer. The queued
+ * messages themselves show at the end of the conversation (QueuedMessages).
  */
-export function ThreadComposer({ session, threadId, thread, addition, computerName }: { session: ComputerSession; threadId: string; thread: ThreadState; addition?: { text: string; key: number }; computerName?: string }) {
+export function ThreadComposer({ session, threadId, thread, queue, addition, computerName, folded }: { session: ComputerSession; threadId: string; thread: ThreadState; queue: ThreadQueue; addition?: { text: string; key: number }; computerName?: string; folded?: boolean }) {
   const router = useRouter()
   const [options, setOptions] = useState<ComposerOptions>()
   const [model, setModel] = useState<ModelSelection>()
   const [projectId, setProjectId] = useState<string>()
   const [permissionMode, setPermissionMode] = useState<PermissionMode>()
   const [favorites, setFavorites] = useState(() => loadFavorites(session.nodeId))
-  const [queue, setQueue] = useState<QueuedMessage[]>([])
   const [usage, setUsage] = useState<ContextUsage>()
   const [error, setError] = useState<string>()
   const [prefill, setPrefill] = useState<{ text: string; key: number; append?: boolean }>()
+  const sendModeKey = `${session.nodeId}.${threadId}`
+  const [sendMode, setSendMode] = useState<SendMode>(() => loadSendMode(sendModeKey))
+  useEffect(() => setSendMode(loadSendMode(sendModeKey)), [sendModeKey])
   useEffect(() => {
     if (addition) setPrefill({ ...addition, append: true })
   }, [addition])
@@ -52,7 +54,6 @@ export function ThreadComposer({ session, threadId, thread, addition, computerNa
     let cancelled = false
     setModel(undefined)
     setPermissionMode(undefined)
-    setQueue([])
     setUsage(undefined)
     setError(undefined)
     composerOptions(session, threadId).then((value) => { if (!cancelled) setOptions(value) }, () => undefined)
@@ -65,26 +66,19 @@ export function ThreadComposer({ session, threadId, thread, addition, computerNa
     return () => { cancelled = true; alive.current = false }
   }, [session, threadId])
 
-  const refreshQueue = useCallback(() => {
-    session.listQueue(threadId).then((items) => { if (alive.current) setQueue(items) }, () => undefined)
-  }, [session, threadId])
-
   const refreshUsage = useCallback(() => {
     session.contextUsage(threadId).then((value) => { if (alive.current && value) setUsage(value) }, () => undefined)
   }, [session, threadId])
 
-  // The queue drains and the context grows as turns run: read both on open, when a turn starts or
-  // ends, and regularly while one runs (as the desktop polls its context ring).
+  // The context grows as turns run: read it on open, when a turn starts or ends, and regularly while
+  // one runs (as the desktop polls its context ring).
   useEffect(() => {
     if (!options) return undefined
-    refreshQueue()
     refreshUsage()
-    if (!active && queue.length === 0) return undefined
-    const queueTimer = setInterval(refreshQueue, QUEUE_POLL_MS)
-    const usageTimer = active ? setInterval(refreshUsage, USAGE_POLL_MS) : undefined
-    return () => { clearInterval(queueTimer); clearInterval(usageTimer) }
-    // queue.length: keep polling while messages wait, stop once it is empty.
-  }, [options, active, queue.length > 0, refreshQueue, refreshUsage]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (!active) return undefined
+    const usageTimer = setInterval(refreshUsage, USAGE_POLL_MS)
+    return () => clearInterval(usageTimer)
+  }, [options, active, refreshUsage])
 
   const selection = model ?? options?.defaultModel
   const providerId = useMemo(() => {
@@ -133,13 +127,17 @@ export function ThreadComposer({ session, threadId, thread, addition, computerNa
       if (alive.current) setError(errorMessage(cause))
       return false
     } finally {
-      refreshQueue()
+      queue.refresh()
     }
   }
 
   const send = async (text: string, extras: SendOptions): Promise<boolean> => {
-    // Like the desktop, a message written while a turn runs waits in the thread's queue.
-    if (active && options) return attempt(() => session.enqueue(threadId, text, extras))
+    // Like the desktop, a message written while a turn runs, or while messages already wait, goes to the
+    // thread's queue (and shows there at once), so it never runs ahead of them.
+    if ((active || queue.items.length > 0) && options) {
+      setError(undefined)
+      return queue.enqueue(text, () => session.enqueue(threadId, text, extras))
+    }
     return thread.send(text, extras)
   }
 
@@ -153,27 +151,6 @@ export function ThreadComposer({ session, threadId, thread, addition, computerNa
   return (
     <>
       {error && <Notice>{error}</Notice>}
-      {queue.length > 0 && (
-        <QueuedMessages
-          items={queue}
-          canSteer={active}
-          onSteer={(item) => void attempt(() => session.steerQueued(threadId, item.id))}
-          onRemove={(item) => void attempt(() => session.removeQueued(threadId, item.id))}
-          onEdit={(item) => void attempt(async () => {
-            await session.removeQueued(threadId, item.id)
-            setPrefill({ text: item.content, key: Date.now() })
-          })}
-          onMove={(item, delta) => {
-            const ids = queue.map((entry) => entry.id)
-            const from = ids.indexOf(item.id)
-            const to = from + delta
-            if (from < 0 || to < 0 || to >= ids.length) return
-            ids.splice(to, 0, ...ids.splice(from, 1))
-            setQueue(ids.map((id) => queue.find((entry) => entry.id === id)!))
-            void attempt(() => session.reorderQueue(threadId, ids))
-          }}
-        />
-      )}
       <Composer
         active={active}
         draftKey={`${session.nodeId}.${threadId}`}
@@ -183,6 +160,8 @@ export function ThreadComposer({ session, threadId, thread, addition, computerNa
         onSend={send}
         onStop={() => void thread.stop()}
         onSteer={(text) => attempt(() => session.steer(threadId, text))}
+        sendMode={options ? { mode: sendMode, onSwitch: () => { const next = sendMode === 'steer' ? 'queue' : 'steer'; setSendMode(next); saveSendMode(sendModeKey, next) } } : undefined}
+        folded={folded}
         onNewThread={newThread}
       />
     </>

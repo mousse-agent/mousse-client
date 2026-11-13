@@ -5,6 +5,8 @@ import type { FakeMousseConnection } from '../../src/ui/dev/fakeConnection'
 
 beforeEach(() => installMatchMedia())
 
+const SHOWCASE = 't-showcase'
+
 const thread = (threadId: string) => [
   { name: 'home' as const },
   { name: 'thread' as const, nodeId: 'node-studio', threadId }
@@ -116,6 +118,95 @@ describe('composer controls', () => {
     const queue = await screen.findByRole('region', { name: 'Queued messages' })
     expect(within(queue).getByText('Second')).toBeInTheDocument()
     await waitFor(() => expect(session().sent.map((entry) => [entry.kind, entry.text])).toEqual([['send', 'First'], ['queue', 'Second'], ['send', 'Second']]), { timeout: 8000 })
+  })
+
+  it('shows queued messages at the end of the conversation, edits one in place and moves it', async () => {
+    const { session } = await open(SHOWCASE)
+    const queue = await screen.findByRole('region', { name: 'Queued messages' })
+    // The full text of each, with one Queued label for the group.
+    expect(within(queue).getByText(/first retry after 1 s/)).toBeInTheDocument()
+    expect(within(queue).getAllByText('Queued')).toHaveLength(1)
+
+    fireEvent.click(within(queue).getAllByRole('button', { name: 'Edit queued message' })[0])
+    const editor = within(queue).getByRole('textbox', { name: 'Edit queued message' })
+    fireEvent.change(editor, { target: { value: 'Move the pill first.' } })
+    fireEvent.click(within(queue).getByRole('button', { name: 'Save' }))
+    // (A controlled textarea's text is its value too: look for the bubble.)
+    expect(await within(queue).findByText('Move the pill first.', { selector: '.m-queued__bubble' })).toBeInTheDocument()
+    // Saved in place: same message, same place, nothing sent.
+    const listed = await session().listQueue(SHOWCASE)
+    expect(listed.map((item) => [item.id, item.content])).toEqual([['q-show-1', 'Move the pill first.'], ['q-show-2', expect.stringMatching(/^And add a test/)]])
+    expect(session().sent).toEqual([])
+
+    fireEvent.click(within(queue).getAllByRole('button', { name: 'Move down' })[0])
+    await waitFor(async () => expect((await session().listQueue(SHOWCASE)).map((item) => item.id)).toEqual(['q-show-2', 'q-show-1']))
+
+    fireEvent.click(within(queue).getAllByRole('button', { name: 'Remove queued message' })[0])
+    await waitFor(async () => expect((await session().listQueue(SHOWCASE)).map((item) => item.id)).toEqual(['q-show-1']))
+    expect(within(queue).queryByText(/first retry/)).not.toBeInTheDocument()
+  })
+
+  it('keeps an edit whose message changed elsewhere until the draft is kept or dropped', async () => {
+    const { session } = await open(SHOWCASE)
+    const queue = await screen.findByRole('region', { name: 'Queued messages' })
+    fireEvent.click(within(queue).getAllByRole('button', { name: 'Edit queued message' })[0])
+    fireEvent.change(within(queue).getByRole('textbox', { name: 'Edit queued message' }), { target: { value: 'Mine' } })
+    await session().editQueued(SHOWCASE, 'q-show-1', 'Theirs')
+    fireEvent.click(within(queue).getByRole('button', { name: 'Save' }))
+    expect(await within(queue).findByRole('alert')).toHaveTextContent('Changed elsewhere')
+    expect(within(queue).getByRole('button', { name: 'Save' })).toBeDisabled()
+    fireEvent.click(within(queue).getByRole('button', { name: 'Keep mine' }))
+    fireEvent.click(within(queue).getByRole('button', { name: 'Save' }))
+    await waitFor(async () => expect((await session().listQueue(SHOWCASE))[0].content).toBe('Mine'))
+  })
+
+  it('steers by default in a thread switched to Steer, and Send now steers a queued message', async () => {
+    const { session } = await open('t-voices', { tickMs: 200 })
+    type('Long job')
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await screen.findByRole('button', { name: 'Stop' })
+    type('Later')
+    fireEvent.click(screen.getByRole('button', { name: 'Queue message' }))
+    const queue = await screen.findByRole('region', { name: 'Queued messages' })
+    await within(queue).findByRole('button', { name: 'Send now' })
+
+    // Switching the mode never sends; the send button then steers.
+    fireEvent.click(screen.getByRole('button', { name: 'Send mode: Queue' }))
+    expect(screen.getByRole('button', { name: 'Send mode: Steer' })).toBeInTheDocument()
+    type('Use the cached icons')
+    fireEvent.click(screen.getByRole('button', { name: 'Steer message' }))
+    await waitFor(() => expect(session().sent.map((entry) => [entry.kind, entry.text])).toContainEqual(['steer', 'Use the cached icons']))
+
+    fireEvent.click(within(queue).getByRole('button', { name: 'Send now' }))
+    // It leaves the list at the tap.
+    expect(within(queue).queryByText('Later')).not.toBeInTheDocument()
+    await waitFor(() => expect(session().sent.map((entry) => [entry.kind, entry.text])).toContainEqual(['steer', 'Later']))
+  })
+
+  it('folds the empty composer to one line when the reader scrolls up, and unfolds it at the end', async () => {
+    await open()
+    const scroller = document.querySelector<HTMLElement>('.m-thread__scroll')!
+    const form = screen.getByLabelText('Message').closest('form')!
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 2000 })
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 500 })
+    const scrollTo = (top: number) => { scroller.scrollTop = top; fireEvent.scroll(scroller) }
+
+    // Within the fold distance of the end it stays open.
+    scrollTo(1400)
+    expect(form).not.toHaveAttribute('data-folded')
+    scrollTo(600)
+    expect(form).toHaveAttribute('data-folded')
+    // Folded, it keeps its input line and the send button; the footer is out of reach.
+    expect(screen.getByRole('button', { name: 'Voice input' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Model: / })).not.toBeInTheDocument()
+
+    // Focus (or text) opens it at once.
+    fireEvent.focus(screen.getByLabelText('Message'))
+    expect(form).not.toHaveAttribute('data-folded')
+    fireEvent.blur(screen.getByLabelText('Message'))
+    expect(form).toHaveAttribute('data-folded')
+    scrollTo(1480)
+    expect(form).not.toHaveAttribute('data-folded')
   })
 
   it('stops a turn with /stop', async () => {

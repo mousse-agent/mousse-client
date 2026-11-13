@@ -1,11 +1,11 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { RealComputerSession } from '../../src/connection/computerSession'
 import type { ChatItem, ThreadDisplayState } from '../../src/connection/types'
 import { newId } from '../../src/net/canonical'
 import { NetError } from '../../src/net/errors'
 import { generateNodeKeys } from '../../src/net/keys'
-import { LeafSession } from '../../src/net/session'
+import { LeafSession, SNAPSHOT_DEADLINE_MS } from '../../src/net/session'
 import { streamPair } from '../../src/net/stream'
 import { delegate, roster, testComputer, testUser } from '../net/fixtures'
 import { appletReply, channelOf, fakeComputer, message, snapshotBodies, until } from './helpers'
@@ -30,6 +30,32 @@ async function setup() {
 }
 
 describe('leaf session snapshots', () => {
+  it('lets a slow snapshot finish while chunks keep arriving, and fails one that stalls', async () => {
+    const { leaf, remote } = await setup()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const slow = leaf.snapshot('str_slow')
+      await remote.next('snapshot.get')
+      const records = [remote.record('str_slow', 'thread.event', { n: 1 }), remote.record('str_slow', 'thread.event', { n: 2 })]
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_DEADLINE_MS - 10_000)
+      await remote.snapshotChunk('str_slow', records.slice(0, 1), false)
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_DEADLINE_MS - 10_000)
+      // Longer than the deadline in total, but never that long without a chunk.
+      await remote.snapshotChunk('str_slow', records.slice(1))
+      expect((await slow).records).toHaveLength(2)
+
+      const stalled = leaf.snapshot('str_stall')
+      const failed = expect(stalled).rejects.toMatchObject({ code: 'deadline_exceeded' })
+      await remote.next('snapshot.get')
+      await remote.snapshotChunk('str_stall', [remote.record('str_stall', 'thread.event', { n: 3 })], false)
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_DEADLINE_MS + 1)
+      await failed
+    } finally {
+      vi.useRealTimers()
+      leaf.close()
+    }
+  })
+
   it('collects a verified snapshot and shares one transfer between callers', async () => {
     const { leaf, remote } = await setup()
     const first = leaf.snapshot('str_a')
@@ -85,7 +111,7 @@ describe('computer session', () => {
 
     const created = session.createThread({ projectId: 'p1', title: '' })
     const createCall = await remote.answer('threads.create', { thread: { id: 't3', name: 'New thread', projectId: 'p1', updatedAt: '2026-03-01T00:00:00Z' }, threads: [] })
-    expect(createCall.params).toEqual({ name: 'New thread', projectId: 'p1' })
+    expect(createCall.params).toEqual({ name: 'New Thread', projectId: 'p1' })
     expect(createCall.idem).toBeTruthy()
     expect(await created).toMatchObject({ id: 't3', title: 'New thread', projectId: 'p1' })
     session.close()
@@ -355,6 +381,46 @@ describe('composer controls', () => {
     expect(steerQueue.params).toEqual({ threadId: 't1', content: 'Use the other API' })
     expect((await remote.answer('queue.promoteToSteer', { ok: true, items: [] })).params).toEqual({ threadId: 't1', itemId: 'q9' })
     await steering
+    session.close()
+  })
+
+  it('edits a queued message in place and keeps newer text', async () => {
+    const { session, remote } = await setup()
+    const pending = (id: string, content: string) => ({ id, content, enqueuedAt: '2026-01-01T00:00:00Z', intent: 'normal', state: 'pending' })
+    const editing = session.editQueued('t1', 'q1', ' Better ', 'Old')
+    await remote.answer('queue.list', { items: [pending('q1', 'Old')], revision: 'r7' })
+    const edit = await remote.answer('queue.edit', { item: pending('q1', 'Better'), items: [] })
+    expect(edit.params).toEqual({ threadId: 't1', itemId: 'q1', content: 'Better', expectedRevision: 'r7' })
+    expect((await editing).item.content).toBe('Better')
+
+    // Changed elsewhere since the edit started: nothing is saved.
+    const stale = session.editQueued('t1', 'q1', 'Mine', 'Old')
+    await remote.answer('queue.list', { items: [pending('q1', 'Theirs')] })
+    expect(await stale).toEqual({ item: expect.objectContaining({ content: 'Theirs' }), changed: true })
+    session.close()
+  })
+
+  it('edits by replacing the message where the computer refuses queue.edit', async () => {
+    const { session, remote } = await setup()
+    const pending = (id: string, content: string) => ({ id, content, enqueuedAt: '2026-01-01T00:00:00Z', intent: 'normal', state: 'pending' })
+    const editing = session.editQueued('t1', 'q1', 'New', 'Old')
+    await remote.answer('queue.list', { items: [pending('q1', 'Old'), pending('q2', 'Later')] })
+    const refused = await remote.next('rpc.request')
+    expect(refused.method).toBe('queue.edit')
+    await remote.send({ t: 'rpc.result', id: refused.id, error: { code: 'forbidden', message: 'forbidden', retryable: false } })
+    expect((await remote.answer('queue.enqueue', { ok: true, item: { id: 'q3' } })).params).toEqual({ threadId: 't1', content: 'New' })
+    expect((await remote.answer('queue.remove', { outcome: 'removed' })).params).toEqual({ threadId: 't1', itemId: 'q1' })
+    await remote.answer('queue.list', { items: [pending('q2', 'Later'), pending('q3', 'New')] })
+    expect((await remote.answer('queue.reorder', { items: [] })).params).toEqual({ threadId: 't1', orderedIds: ['q3', 'q2'] })
+    expect(await editing).toEqual({ item: expect.objectContaining({ id: 'q3', content: 'New' }) })
+
+    // The refusal is remembered: the next edit replaces at once, and a failed removal takes the copy back.
+    const again = session.editQueued('t1', 'q2', 'Sooner')
+    await remote.answer('queue.list', { items: [pending('q3', 'New'), pending('q2', 'Later')] })
+    await remote.answer('queue.enqueue', { ok: true, item: { id: 'q4' } })
+    await remote.answer('queue.remove', { ok: false, error: 'Queued message already started.' })
+    expect((await remote.answer('queue.remove', { outcome: 'removed' })).params).toEqual({ threadId: 't1', itemId: 'q4' })
+    await expect(again).rejects.toThrow(/already started/)
     session.close()
   })
 

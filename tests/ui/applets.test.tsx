@@ -41,7 +41,7 @@ describe('in-response applets', () => {
     expect(screen.getByText('Here is a budget tool.')).toBeInTheDocument()
     expect(screen.getByText('Move the slider.')).toBeInTheDocument()
     expect(screen.queryByText(/schemaVersion/)).not.toBeInTheDocument()
-    const card = screen.getByRole('region', { name: 'Interactive applet: Budget' })
+    const card = screen.getByRole('region', { name: 'Applet: Budget' })
     expect(card.querySelector('iframe')).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'Run' }))
@@ -78,11 +78,34 @@ describe('in-response applets', () => {
   it('restores the state an applet saved when it runs again', () => {
     render(<Timeline items={[reply('a2')]} display={idle} active={false} />)
     fireEvent.click(screen.getByRole('button', { name: 'Run' }))
-    const card = screen.getByRole('region', { name: 'Interactive applet: Budget' })
+    const card = screen.getByRole('region', { name: 'Applet: Budget' })
     post(card.querySelector('iframe')!, 'state', { income: '7000' })
+    // The name opens it large; the inline copy waits so only one frame runs.
+    fireEvent.click(screen.getByRole('button', { name: 'Budget' }))
+    const view = screen.getByRole('dialog', { name: 'Budget' })
+    expect(card.querySelector('iframe')).toBeNull()
+    expect(view.querySelector('iframe')!.getAttribute('srcdoc')).toContain('"income":"7000"')
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(view.querySelector('iframe')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Close applet' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Run' }))
     expect(card.querySelector('iframe')!.getAttribute('srcdoc')).toContain('"income":"7000"')
+  })
+
+  it('sits inline without a card and opens large from its name, running it', () => {
+    render(<Timeline items={[reply('a5')]} display={idle} active={false} />)
+    const card = screen.getByRole('region', { name: 'Applet: Budget' })
+    expect(card.querySelector('header, footer')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Budget' }))
+    const view = screen.getByRole('dialog', { name: 'Budget' })
+    expect(view.querySelector('iframe')).not.toBeNull()
+    expect(view).toHaveTextContent('Offline applet · interactions stay on this phone')
+    expect(screen.getByRole('button', { name: 'Close applet' })).toHaveFocus()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    // It keeps running inline after closing.
+    expect(card.querySelector('iframe')).not.toBeNull()
   })
 
   it('says when an applet cannot run on the phone, and shows a placeholder while one is written', () => {

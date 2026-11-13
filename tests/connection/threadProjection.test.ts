@@ -76,6 +76,31 @@ describe('ThreadProjection', () => {
     expect(projection.items()).toEqual([])
   })
 
+  it('says how many older messages of a long thread the snapshot left on the computer, and keeps it in the saved state', () => {
+    const projection = new ThreadProjection('t1')
+    projection.apply(snapshot('t1', { messages: [message('m9', 'assistant', 'Newest', 9_000)], earlier: { before: 'c', count: 412 } }))
+    expect(projection.items().map((item) => item.text)).toEqual(['412 earlier messages are on the computer.', 'Newest'])
+    expect(projection.settled().earlier).toBe(412)
+    const restored = new ThreadProjection('t1')
+    restored.restore(projection.settled())
+    expect(restored.items()[0]?.text).toBe('412 earlier messages are on the computer.')
+    // A snapshot of the whole thread clears it.
+    projection.apply(snapshot('t1', { messages: [message('m1', 'user', 'Hi', 1_000)] }))
+    expect(projection.items().map((item) => item.text)).toEqual(['Hi'])
+  })
+
+  it('stops showing a run and a reply still being written', () => {
+    const projection = new ThreadProjection('t1')
+    projection.apply(snapshot('t1', { messages: [message('m1', 'assistant', 'Half', 1_000, { streaming: true })], activeTurn: { active: true, running: true } }))
+    projection.apply([event('t1', 'turn.state', { threadId: 't1', phase: 'streaming' })])
+    expect(projection.active).toBe(true)
+    projection.stopRun()
+    expect(projection.active).toBe(false)
+    expect(projection.state().phase).toBeUndefined()
+    expect(projection.items().some((item) => item.status === 'streaming')).toBe(false)
+    expect(projection.items()[0]?.text).toBe('Half')
+  })
+
   it('keeps local items until the next snapshot', () => {
     const projection = new ThreadProjection('t1')
     projection.apply(snapshot('t1', { messages: [message('m1', 'user', 'Hi', 1_000)] }))

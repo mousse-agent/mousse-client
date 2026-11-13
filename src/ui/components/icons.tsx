@@ -2,6 +2,20 @@
 // stroke 1.5, exported under the desktop's names so screens read the same.
 import { forwardRef, type ForwardRefExoticComponent, type RefAttributes, type SVGProps } from 'react'
 import { HugeiconsIcon, type IconSvgElement } from '@hugeicons/react'
+import Alert02Icon from '@hugeicons/core-free-icons/Alert02Icon'
+import Robot01Icon from '@hugeicons/core-free-icons/Robot01Icon'
+import Clock01Icon from '@hugeicons/core-free-icons/Clock01Icon'
+import File02Icon from '@hugeicons/core-free-icons/File02Icon'
+import Globe02Icon from '@hugeicons/core-free-icons/Globe02Icon'
+import PauseIcon from '@hugeicons/core-free-icons/PauseIcon'
+import PlayIcon from '@hugeicons/core-free-icons/PlayIcon'
+import Shield01Icon from '@hugeicons/core-free-icons/Shield01Icon'
+import Brain01Icon from '@hugeicons/core-free-icons/Brain01Icon'
+import Notification03Icon from '@hugeicons/core-free-icons/Notification03Icon'
+import ArrowTurnBackwardIcon from '@hugeicons/core-free-icons/ArrowTurnBackwardIcon'
+import ArrowTurnForwardIcon from '@hugeicons/core-free-icons/ArrowTurnForwardIcon'
+import Layers01Icon from '@hugeicons/core-free-icons/Layers01Icon'
+import ShuffleIcon from '@hugeicons/core-free-icons/ShuffleIcon'
 import ArrowDown02Icon from '@hugeicons/core-free-icons/ArrowDown02Icon'
 import ArrowUp01Icon from '@hugeicons/core-free-icons/ArrowUp01Icon'
 import Attachment01Icon from '@hugeicons/core-free-icons/Attachment01Icon'
@@ -27,6 +41,7 @@ import BubbleChatIcon from '@hugeicons/core-free-icons/BubbleChatIcon'
 import Cancel01Icon from '@hugeicons/core-free-icons/Cancel01Icon'
 import CheckmarkCircle02Icon from '@hugeicons/core-free-icons/CheckmarkCircle02Icon'
 import ComputerIcon from '@hugeicons/core-free-icons/ComputerIcon'
+import PaletteIcon from '@hugeicons/core-free-icons/PaletteIcon'
 import CrownIcon from '@hugeicons/core-free-icons/CrownIcon'
 import Folder01Icon from '@hugeicons/core-free-icons/Folder01Icon'
 import InformationCircleIcon from '@hugeicons/core-free-icons/InformationCircleIcon'
@@ -99,6 +114,10 @@ export const Pencil = /* @__PURE__ */ createIcon('Pencil', Edit02Icon)
 export const Sparkles = /* @__PURE__ */ createIcon('Sparkles', SparklesIcon)
 export const Star = /* @__PURE__ */ createIcon('Star', StarIcon)
 export const Steer = /* @__PURE__ */ createIcon('Steer', Navigation03Icon)
+/** Send now / Steer: the arrow into the running reply. */
+export const ArrowTurnForward = /* @__PURE__ */ createIcon('ArrowTurnForward', ArrowTurnForwardIcon)
+/** The Queue send mode. */
+export const Layers = /* @__PURE__ */ createIcon('Layers', Layers01Icon)
 export const Trash2 = /* @__PURE__ */ createIcon('Trash2', Delete02Icon)
 export const ArrowUp = /* @__PURE__ */ createIcon('ArrowUp', ArrowUp02Icon)
 export const Check = /* @__PURE__ */ createIcon('Check', Tick02Icon)
@@ -117,6 +136,7 @@ export const LogOut = /* @__PURE__ */ createIcon('LogOut', Logout01Icon)
 export const Mail = /* @__PURE__ */ createIcon('Mail', Mail01Icon)
 export const MessageSquare = /* @__PURE__ */ createIcon('MessageSquare', BubbleChatIcon)
 export const Monitor = /* @__PURE__ */ createIcon('Monitor', ComputerIcon)
+export const Palette = /* @__PURE__ */ createIcon('Palette', PaletteIcon)
 export const Pin = /* @__PURE__ */ createIcon('Pin', PinIcon)
 export const Plus = /* @__PURE__ */ createIcon('Plus', Add01Icon)
 export const QrCode = /* @__PURE__ */ createIcon('QrCode', QrCodeIcon)
@@ -145,3 +165,17 @@ export const Zap = /* @__PURE__ */ createIcon('Zap', FlashIcon)
 export const Wand2 = /* @__PURE__ */ createIcon('Wand2', MagicWand01Icon)
 export const ShieldCheck = /* @__PURE__ */ createIcon('ShieldCheck', ShieldCheckIcon)
 export const ShieldOff = /* @__PURE__ */ createIcon('ShieldOff', ShieldOffIcon)
+
+// Bots (the desktop names, from mousse/src/renderer/lib/icons.tsx).
+export const AlertTriangle = /* @__PURE__ */ createIcon('AlertTriangle', Alert02Icon)
+export const Bot = /* @__PURE__ */ createIcon('Bot', Robot01Icon)
+export const Clock = /* @__PURE__ */ createIcon('Clock', Clock01Icon)
+export const FileText = /* @__PURE__ */ createIcon('FileText', File02Icon)
+export const Globe = /* @__PURE__ */ createIcon('Globe', Globe02Icon)
+export const Pause = /* @__PURE__ */ createIcon('Pause', PauseIcon)
+export const Play = /* @__PURE__ */ createIcon('Play', PlayIcon)
+export const Shield = /* @__PURE__ */ createIcon('Shield', Shield01Icon)
+export const Brain = /* @__PURE__ */ createIcon('Brain', Brain01Icon)
+export const Bell = /* @__PURE__ */ createIcon('Bell', Notification03Icon)
+export const Reply = /* @__PURE__ */ createIcon('Reply', ArrowTurnBackwardIcon)
+export const Shuffle = /* @__PURE__ */ createIcon('Shuffle', ShuffleIcon)

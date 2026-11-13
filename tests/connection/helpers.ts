@@ -109,9 +109,9 @@ export function fakeComputer(stream: StreamEndpoint, user: TestUser, computer: T
       await send({ t: 'rpc.result', id: request.id, result })
       return request
     },
-    async snapshotChunk(streamId: string, records: Record[]) {
+    async snapshotChunk(streamId: string, records: Record[], done = true) {
       const { headers, parts, lengths } = batch(records)
-      await send({ t: 'snapshot.chunk', stream: streamId, epoch, throughSeq: seq, records: headers, done: true, parts: lengths }, parts)
+      await send({ t: 'snapshot.chunk', stream: streamId, epoch, throughSeq: seq, records: headers, done, parts: lengths }, parts)
     },
     async delta(streamId: string, data: unknown) {
       await send({ t: 'ephemeral', stream: streamId, kind: 'delta', data })

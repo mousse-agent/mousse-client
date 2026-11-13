@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { ComputerView } from '../../connection/computerStore'
 import { deviceNetworkSignals } from '../../connection/networkSignals'
+import type { ListBot } from '../../connection/bots'
 import type { Computer, ListChat, ListProject, ListThread } from '../../connection/types'
 import { useAutoJoin, useComputer, useComputers, useComputerViews } from '../hooks/connection'
 import { useIsWide } from '../hooks/useMediaQuery'
 import { useRouter } from '../state/router'
 import { EmptyState } from '../components/EmptyState'
-import { ChevronLeft, MessageSquarePlus, Settings } from '../components/icons'
+import { ErrorBoundary } from '../components/ErrorBoundary'
+import { ChevronLeft, Info, MessageSquarePlus, Settings } from '../components/icons'
 import { Button, IconButton, MousseLogo, Notice, Spinner, TopBar } from '../components/primitives'
 import { Sidebar, type RowComputer } from '../sidebar/Sidebar'
 import { mergedKey, mergeLists, savedTab, saveTab, splitKey, type SidebarTab } from '../sidebar/model'
-import { saveLastComputer } from '../lib/composerPrefs'
+import { loadLastComputer, saveLastComputer } from '../lib/composerPrefs'
 import { threadComputers } from '../lib/newThread'
 import { ThreadView } from './ThreadView'
+import { BotAboutSheet, BotChat } from '../bots/BotChat'
+import { NewBotSheet } from '../bots/NewBotSheet'
+import { BotBoundary } from '../bots/BotBoundary'
 
 /** How often the home screen reads the account's computers again, to notice one coming online. */
 export const COMPUTERS_REFRESH_MS = 30_000
@@ -49,13 +54,14 @@ function JoinLine() {
  * Each row names its computer; a computer that is offline keeps its threads listed from the lists
  * saved on this phone. Opening a thread shows it on its computer, side by side at 768px and wider.
  */
-export function HomeScreen({ selected }: { selected?: { nodeId: string; threadId: string } }) {
+export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: string; threadId: string }; selectedBot?: { nodeId: string; botId: string } }) {
   const router = useRouter()
   const wide = useIsWide()
   const computers = useComputers()
   const join = useAutoJoin()
   const [tab, setTab] = useState<SidebarTab>(savedTab)
   const [notice, setNotice] = useState<string>()
+  const [newBotOpen, setNewBotOpen] = useState(false)
 
   const enrolled = useMemo(() => threadComputers(computers.data ?? []), [computers.data])
   const byNode = useMemo(() => new Map(enrolled.map((computer) => [computer.nodeId, computer])), [enrolled])
@@ -103,12 +109,31 @@ export function HomeScreen({ selected }: { selected?: { nodeId: string; threadId
     setNotice(undefined)
   }, [])
 
+  const open = selected ?? selectedBot
   const show = useCallback((nodeId: string, threadId: string) => {
     saveLastComputer(nodeId)
     const route = { name: 'thread' as const, nodeId, threadId }
-    if (selected && wide) router.replace(route)
+    if (open && wide) router.replace(route)
     else router.push(route)
-  }, [selected, wide, router])
+  }, [open, wide, router])
+  const openBot = useCallback((bot: ListBot) => {
+    const key = splitKey(bot.id)
+    if (!key) return
+    const route = { name: 'bot' as const, nodeId: key.nodeId, botId: key.id }
+    if (open && wide) router.replace(route)
+    else router.push(route)
+  }, [open, wide, router])
+  // New bot is made on the computer last used, or the first one online.
+  const online = enrolled.filter((computer) => !isOffline(computer, views.get(computer.nodeId)))
+  const last = loadLastComputer()
+  const botComputer = online.find((computer) => computer.nodeId === last) ?? online[0]
+  const created = useCallback((bot: ListBot) => {
+    setNewBotOpen(false)
+    if (!botComputer) return
+    const route = { name: 'bot' as const, nodeId: botComputer.nodeId, botId: bot.id }
+    if (open && wide) router.replace(route)
+    else router.push(route)
+  }, [botComputer, open, wide, router])
 
   const openThread = useCallback((thread: ListThread) => {
     const key = splitKey(thread.id)
@@ -165,6 +190,7 @@ export function HomeScreen({ selected }: { selected?: { nodeId: string; threadId
   let list: ReactNode
   if (lists) {
     list = (
+      <ErrorBoundary what={tab === 'chats' ? 'the Chats tab' : tab === 'projects' ? 'the Projects tab' : 'the thread list'} resetKey={tab}>
       <Sidebar
         lists={lists}
         tab={tab}
@@ -173,10 +199,14 @@ export function HomeScreen({ selected }: { selected?: { nodeId: string; threadId
         onOpenThread={openThread}
         onOpenChat={openChat}
         onNewThread={newThreadIn}
+        onOpenBot={openBot}
+        {...(botComputer ? { onNewBot: () => setNewBotOpen(true) } : {})}
+        {...(selectedBot ? { selectedBotId: mergedKey(selectedBot.nodeId, selectedBot.botId) } : {})}
         banner={banner}
         order="recent"
         {...(labelled ? { computerOf } : {})}
       />
+      </ErrorBoundary>
     )
   } else if (!computers.data) {
     list = computers.error
@@ -219,7 +249,20 @@ export function HomeScreen({ selected }: { selected?: { nodeId: string; threadId
   }
 
   const selectedComputer = selected ? byNode.get(selected.nodeId) : undefined
-  const pane = selected ? <ThreadPane nodeId={selected.nodeId} threadId={selected.threadId} name={selectedComputer?.name ?? 'Computer'} wide={wide} /> : null
+  const botComputerName = selectedBot ? byNode.get(selectedBot.nodeId)?.name : undefined
+  const pane = selected
+    ? <ThreadPane nodeId={selected.nodeId} threadId={selected.threadId} name={selectedComputer?.name ?? 'Computer'} wide={wide} />
+    : selectedBot ? <ErrorBoundary what="this bot's chat" resetKey={selectedBot.botId}><BotPane nodeId={selectedBot.nodeId} botId={selectedBot.botId} name={botComputerName ?? 'Computer'} labelled={labelled} wide={wide} /></ErrorBoundary> : null
+  const newBot = botComputer && (
+    <NewBotHost
+      key={botComputer.nodeId}
+      open={newBotOpen}
+      nodeId={botComputer.nodeId}
+      computerName={labelled ? botComputer.name : undefined}
+      onClose={() => setNewBotOpen(false)}
+      onCreated={created}
+    />
+  )
 
   if (!wide) {
     if (pane) return pane
@@ -227,6 +270,7 @@ export function HomeScreen({ selected }: { selected?: { nodeId: string; threadId
       <main className="m-screen">
         <TopBar leading={<span className="m-topbar__brand"><MousseLogo size={24} /></span>} title="Threads" trailing={<>{compose}{settings}</>} />
         <div className="m-scroll"><div className="m-content">{list}</div></div>
+        {newBot}
       </main>
     )
   }
@@ -244,6 +288,7 @@ export function HomeScreen({ selected }: { selected?: { nodeId: string; threadId
           </div>
         )}
       </section>
+      {newBot}
     </main>
   )
 }
@@ -259,8 +304,11 @@ function ThreadPane({ nodeId, threadId, name, wide }: { nodeId: string; threadId
   const computer = useComputer(nodeId)
   const { link, lists, session, store } = computer
   const chat = lists?.chats.find((entry) => entry.threadId === threadId)
-  const title = chat?.name ?? lists?.threads.find((entry) => entry.id === threadId)?.title ?? 'Thread'
-  const subtitle = chat ? `Chat · ${name}` : name
+  const thread = lists?.threads.find((entry) => entry.id === threadId)
+  const title = chat?.name ?? thread?.title ?? 'Thread'
+  // Where the thread is, like the desktop title bar's path: its project, then the computer it runs on.
+  const projectName = thread?.projectId ? lists?.projects.find((entry) => entry.id === thread.projectId)?.name : undefined
+  const subtitle = chat ? `Chat · ${name}` : projectName ? `${projectName} · ${name}` : name
   const back = wide ? undefined : <IconButton label="Back" onClick={router.pop}><ChevronLeft size={22} /></IconButton>
 
   let body: ReactNode
@@ -293,6 +341,63 @@ function ThreadPane({ nodeId, threadId, name, wide }: { nodeId: string; threadId
   return (
     <main className="m-screen">
       <TopBar leading={back} title={title} subtitle={subtitle} />
+      {body}
+    </main>
+  )
+}
+
+function NewBotHost({ open, nodeId, computerName, onClose, onCreated }: { open: boolean; nodeId: string; computerName?: string; onClose(): void; onCreated(bot: ListBot): void }) {
+  const { session, lists } = useComputer(nodeId)
+  return <BotBoundary resetKey={open}><NewBotSheet open={open} computerName={computerName} bots={session?.bots} existing={lists?.bots ?? []} onClose={onClose} onCreated={onCreated} /></BotBoundary>
+}
+
+/** One bot's chat on its computer, or why it cannot open. */
+function BotPane({ nodeId, botId, name, labelled, wide }: { nodeId: string; botId: string; name: string; labelled: boolean; wide: boolean }) {
+  const router = useRouter()
+  const computer = useComputer(nodeId)
+  const { link, lists, session, store } = computer
+  const [about, setAbout] = useState(false)
+  const [error, setError] = useState<string>()
+  const bot = lists?.bots?.find((entry) => entry.id === botId)
+  const back = wide ? undefined : <IconButton label="Back" onClick={router.pop}><ChevronLeft size={22} /></IconButton>
+  const info = bot && session?.bots ? <IconButton label={`About ${bot.name}`} onClick={() => setAbout(true)}><Info /></IconButton> : undefined
+
+  let body: ReactNode
+  if (link === 'removed') {
+    body = <div className="m-scroll"><div className="m-content"><Notice>{`${name} removed this phone.`}</Notice><Button onClick={() => router.reset()}>Back to threads</Button></div></div>
+  } else if (session && lists && !bot) {
+    body = <div className="m-scroll"><div className="m-content"><EmptyState title="This bot is gone" body={`It was deleted on ${name}.`} /></div></div>
+  } else if (session && bot && !session.bots) {
+    body = <div className="m-scroll"><div className="m-content"><Notice tone="info">{`Update Mousse on ${name} to chat with ${bot.name} from this phone.`}</Notice></div></div>
+  } else if (session && bot && session.bots) {
+    body = <>
+      {error && <div className="m-content"><Notice>{error}</Notice></div>}
+      <BotBoundary resetKey={botId} fallback={(retry) => (
+        <div className="m-scroll"><div className="m-content"><Notice>{`Couldn't show ${bot.name}'s chat.`}</Notice><Button onClick={retry}>Try again</Button></div></div>
+      )}>
+        <BotChat bot={bot} bots={session.bots} />
+      </BotBoundary>
+      <BotBoundary resetKey={about}>
+        <BotAboutSheet open={about} bot={bot} bots={session.bots} onClose={() => setAbout(false)} onError={setError} />
+      </BotBoundary>
+    </>
+  } else {
+    const failed = link === 'error' || link === 'closed'
+    body = (
+      <div className="m-scroll"><div className="m-content">
+        {failed
+          ? <><Notice>{lostMessage(name, computer)}</Notice><Button onClick={() => store.retry()}>Try again</Button></>
+          : <div className="m-loading"><Spinner label={`Connecting to ${name}`} /><span>Connecting to {name}…</span></div>}
+      </div></div>
+    )
+  }
+  // The header shows only the name, as on the desktop (what it does is in About); with several computers, whose it is.
+  const title = bot?.name ?? 'Bot'
+  const subtitle = !bot || labelled ? name : undefined
+  if (wide) return <><TopBar title={title} subtitle={subtitle} trailing={info} />{body}</>
+  return (
+    <main className="m-screen">
+      <TopBar leading={back} title={title} subtitle={subtitle} trailing={info} />
       {body}
     </main>
   )

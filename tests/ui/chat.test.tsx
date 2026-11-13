@@ -24,6 +24,8 @@ describe('thread chat', () => {
     expect(await screen.findByText('Add a voice picker')).toBeInTheDocument()
     // While the reply streams, the send button turns into Stop.
     expect(await screen.findByRole('button', { name: 'Stop' })).toBeInTheDocument()
+    // A small fixed gap keeps the newest text just above the composer while the reply is in progress.
+    expect(document.querySelector('[data-reply-gap]')).toBeInTheDocument()
     // The tool call is collapsed until tapped.
     const tool = await screen.findByRole('button', { name: /search_files/ })
     expect(tool).toHaveAttribute('aria-expanded', 'false')
@@ -37,6 +39,8 @@ describe('thread chat', () => {
     }, { timeout: 3000 })
     // Back to idle: as on the desktop, an empty composer offers the microphone.
     expect(await screen.findByRole('button', { name: 'Voice input' })).toBeInTheDocument()
+    // The finished reply's toolbar takes the gap's place.
+    expect(document.querySelector('[data-reply-gap]')).not.toBeInTheDocument()
   })
 
   it('stops a running turn', async () => {

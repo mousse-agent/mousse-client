@@ -13,6 +13,7 @@ import type {
   ChatToolCall,
   PendingQuestion,
   PendingQuestions,
+  TurnEnd,
 } from './types'
 import type { DesktopMessage } from './threadProjection'
 
@@ -25,6 +26,16 @@ const TOOL_KINDS = new Set(['thinking', 'tool_call', 'mcp_tool_call', 'mcp_tool_
 
 /** Same mapping as the desktop's normalizeToolName. */
 export function normalizeToolName(rawName: string | undefined, kind?: string): string {
+  const known = knownToolName(rawName)
+  if (known) return known
+  if (!rawName) return kind === 'mcp_tool_call' || kind === 'mcp_tool_result' ? 'Mcp' : 'Generic'
+  // Already-PascalCase names (Bash, Grep, ...) stay; others start with a capital.
+  if (/^[A-Z][A-Za-z]*$/.test(rawName)) return rawName
+  return rawName.charAt(0).toUpperCase() + rawName.slice(1)
+}
+
+/** The card name a tool name maps to ("ls" is `Glob`, "read_file" is `Read`), or undefined for one it does not know. */
+export function knownToolName(rawName: string | undefined): string | undefined {
   const lower = (rawName ?? '').toLowerCase().replace(/[^a-z]/g, '')
   switch (lower) {
     case 'read':
@@ -76,21 +87,41 @@ export function normalizeToolName(rawName: string | undefined, kind?: string): s
     case 'cloning':
       return 'cloning'
     default:
-      if (!rawName) return kind === 'mcp_tool_call' || kind === 'mcp_tool_result' ? 'Mcp' : 'Generic'
-      if (/^[A-Z][A-Za-z]*$/.test(rawName)) return rawName
-      return rawName.charAt(0).toUpperCase() + rawName.slice(1)
+      return undefined
   }
 }
 
 const RICH_TOOLS = new Set([
   'Read', 'Edit', 'Write', 'Bash', 'Grep', 'Glob', 'TodoWrite', 'PlanWrite', 'ExitPlanMode',
-  'WebSearch', 'WebFetch', 'Skill', 'Task', 'Agent', 'Question', 'Thinking', 'cloning', 'QuickAction',
+  'WebSearch', 'WebFetch', 'Skill', 'Task', 'Agent', 'Question', 'Thinking', 'cloning', 'QuickAction', 'ToolSearch',
 ])
+
+/** Built-in tools a runtime names in camel case: on an MCP-kind row without a server they keep that name. */
+const BUILTIN_TOOL_NAMES = new Set(['TaskOutput', 'TaskStop', 'ListMcpResources', 'ListMcpResourcesTool', 'ReadMcpResource', 'ReadMcpResourceTool'])
+
+/**
+ * A title that is a tool's name rather than a sentence: a full MCP name (`mcp__mousse__thread_list`), a camel-case
+ * name (`ToolSearch`, `WebFetch`) or a name the cards know (`Read`, `Bash`). A single word such as "Terminal" or
+ * "Reading" is not one: it is guessed from its words.
+ */
+function titleIsToolName(title: string): boolean {
+  return /^mcp__\w+$/.test(title) || /^[A-Z][a-z]+(?:[A-Z][a-z]*)+$/.test(title) || (/^\w+$/.test(title) && knownToolName(title) !== undefined)
+}
+
+/** A runtime's full MCP tool name (`mcp__<server>__<tool>`), split. */
+function splitMcpName(rawName: string | undefined): { server: string; tool: string } | undefined {
+  const match = rawName?.match(/^mcp__([^_]+(?:_[^_]+)*)__(.+)$/)
+  return match ? { server: match[1], tool: match[2] } : undefined
+}
 
 function fallbackToolName(title: string, details: string[]): string | undefined {
   const named = details.find((line) => line.startsWith('Tool:'))?.replace('Tool:', '').trim().split(/\s+/)[0]
   if (named) return named
-  const lower = title.toLowerCase()
+  const trimmed = title.trim()
+  if (titleIsToolName(trimmed)) return trimmed
+  // Older rows named only by a sentence: a guess from its words. A search is not guessed (a web search, a tool search
+  // and a code search all say "search"): it stays a generic row rather than a wrong one.
+  const lower = trimmed.toLowerCase()
   if (lower.includes('read')) return 'Read'
   if (lower.includes('edit')) return 'Edit'
   if (lower.includes('write') && !lower.includes('plan')) return 'Write'
@@ -100,7 +131,7 @@ function fallbackToolName(title: string, details: string[]): string | undefined 
   if (lower.includes('todo')) return 'TodoWrite'
   if (lower.includes('quickaction') || lower.includes('quick action')) return 'QuickAction'
   if (lower.includes('plan')) return 'PlanWrite'
-  if (lower.includes('search') || lower.includes('webfetch') || lower.includes('fetch')) return 'WebSearch'
+  if (lower.includes('webfetch') || lower.includes('fetch')) return 'WebFetch'
   if (lower.includes('skill')) return 'Skill'
   if (lower.includes('agent') || lower.includes('spawning')) return 'Agent'
   if (lower.includes('task')) return 'Task'
@@ -134,11 +165,16 @@ function toolCall(message: DesktopMessage, kind: string): ChatToolCall | undefin
   const title = str(raw.title)
   const summary = str(raw.summary)
   const details = Array.isArray(raw.details) ? raw.details.filter((line): line is string => typeof line === 'string') : []
-  const rawName = str(raw.toolName) || fallbackToolName(title, details)
+  let rawName = str(raw.toolName) || fallbackToolName(title, details)
+  const mcpName = splitMcpName(rawName)
   let name = normalizeToolName(rawName, kind)
-  const server = details.find((line) => line.startsWith('Server:'))?.replace('Server:', '').trim().split(/\s+/)[0] || undefined
-  // MCP rows are MCP cards unless they carry a rich tool without a server (Pi/build tools).
-  if ((kind === 'mcp_tool_call' || kind === 'mcp_tool_result') && (server || !RICH_TOOLS.has(name))) name = 'Mcp'
+  const server = details.find((line) => line.startsWith('Server:'))?.replace('Server:', '').trim().split(/\s+/)[0] || mcpName?.server || undefined
+  // MCP rows are MCP rows unless they carry a rich or built-in tool without a server (Pi/build tools). The full
+  // `mcp__<server>__<tool>` name is an MCP tool whatever the row's kind.
+  if (mcpName) {
+    name = 'Mcp'
+    rawName = mcpName.tool
+  } else if ((kind === 'mcp_tool_call' || kind === 'mcp_tool_result') && (server || (!RICH_TOOLS.has(name) && !BUILTIN_TOOL_NAMES.has(rawName ?? '')))) name = 'Mcp'
   const response = str(raw.response)
   const structured = isObject(raw.input) ? raw.input : parseJsonObject(response)
   let input: Record<string, unknown> = structured ? { ...structured } : {}
@@ -147,7 +183,11 @@ function toolCall(message: DesktopMessage, kind: string): ChatToolCall | undefin
     if (name === 'Bash') input = { command: detail('Command:') ?? '' }
     else if (name === 'Read' || name === 'Edit' || name === 'Write')
       input = { file_path: detail('File:') ?? summary.match(/[^\s]+\.[a-z]{1,4}/i)?.[0] ?? '' }
-    else if (name === 'Grep' || name === 'Glob' || name === 'WebSearch') input = { pattern: summary, query: summary }
+    else if (name === 'Grep' || name === 'Glob' || name === 'WebSearch') {
+      // A runtime that sends no arguments puts the tool's own name in the summary: that is not what it searched for.
+      const query = summary === rawName ? '' : summary
+      input = { pattern: query, query }
+    }
   }
   // A running call's response is its arguments, never its output.
   const argsOnly = !!structured && raw.status === 'processing'
@@ -240,10 +280,30 @@ function errorOf(value: unknown): { message: string; code?: string } | undefined
   if (!value) return undefined
   if (typeof value === 'string') return { message: value }
   if (isObject(value)) {
-    const message = str(value.message) || 'The computer reported an error.'
+    let message = str(value.message).trim() || 'The computer reported an error.'
+    // The reference the error was logged under, when the message does not name it (mousseToUI.ts errorText).
+    const supportId = isObject(value.details) ? str(value.details.supportId) : ''
+    if (supportId && !message.includes(supportId)) message = `${message} Reference: ${supportId}`
     return { message, ...(str(value.code) ? { code: str(value.code) } : {}) }
   }
   return { message: 'The computer reported an error.' }
+}
+
+/** The transcript lines of a turn a Stop or a restart cut off; lines older than `turnEnd` are read by them. */
+const TURN_STOPPED_TEXT = 'Turn stopped.'
+const RESTART_INTERRUPTED_TEXT = 'Turn interrupted by a Mousse restart.'
+const TURN_END_CAUSES = new Set(['user', 'agent', 'daemon_restart', 'crash'])
+
+/** Why a Mousse line says its turn was cut off, or undefined when it says nothing of the kind. */
+function turnEndOf(message: DesktopMessage): TurnEnd | undefined {
+  const end = message.turnEnd
+  if (isObject(end) && TURN_END_CAUSES.has(str(end.cause))) {
+    const tools = Array.isArray(end.tools) ? end.tools.filter((tool): tool is string => typeof tool === 'string').slice(0, 20) : []
+    return { cause: str(end.cause) as TurnEnd['cause'], ...(tools.length ? { tools } : {}) }
+  }
+  if (message.content === TURN_STOPPED_TEXT) return { cause: 'user' }
+  if (message.content === RESTART_INTERRUPTED_TEXT) return { cause: 'daemon_restart' }
+  return undefined
 }
 
 const modelLabel = (value: unknown): string =>
@@ -317,6 +377,10 @@ export function toChatItem(message: DesktopMessage): ChatItem | undefined {
     if (!message.content.trim() && itemKind !== 'compaction') return undefined
     return { ...base, role: 'system', kind: itemKind, text: message.content, status: streaming ? 'streaming' : 'done' }
   }
+
+  // The line a Stop, a restart or a crash wrote as it cut the turn off: a marker the turn's Worked line reads.
+  const turnEnd = message.role === 'system' ? turnEndOf(message) : undefined
+  if (turnEnd) return { ...base, role: 'system', kind: 'message', text: message.content, status: 'done', turnEnd }
 
   // Plain user / assistant / system text.
   if (message.role === 'assistant' && streaming && !message.content.trim() && !error) return undefined

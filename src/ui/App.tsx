@@ -7,6 +7,7 @@ import { SignInScreen } from './screens/SignInScreen'
 import { HomeScreen } from './screens/HomeScreen'
 import { NewThreadScreen } from './screens/NewThreadScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import './theme/fonts.css'
 import './theme/tokens.css'
 import './theme/app.css'
@@ -17,6 +18,7 @@ function Screen() {
   switch (route.name) {
     case 'home': return <HomeScreen />
     case 'thread': return <HomeScreen selected={{ nodeId: route.nodeId, threadId: route.threadId }} />
+    case 'bot': return <HomeScreen selectedBot={{ nodeId: route.nodeId, botId: route.botId }} />
     case 'new': return <NewThreadScreen key={`${route.nodeId ?? ''}:${route.projectId ?? ''}`} nodeId={route.nodeId} projectId={route.projectId} />
     case 'settings': return <SettingsScreen />
   }
@@ -41,7 +43,7 @@ export function App({ connection, initialRoutes, joinOptions }: AppProps) {
   return (
     <AppearanceProvider>
       <ConnectionProvider connection={connection} joinOptions={joinOptions}>
-        <div className="m-app"><Gate initialRoutes={initialRoutes} /></div>
+        <div className="m-app"><ErrorBoundary what="Mousse"><Gate initialRoutes={initialRoutes} /></ErrorBoundary></div>
       </ConnectionProvider>
     </AppearanceProvider>
   )
