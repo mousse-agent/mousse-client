@@ -1,7 +1,8 @@
 import { act, createElement, type ReactElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BotFace, BotFaceStill, normalizeFaceProps } from '../../src/ui/bots/face/BotFace'
+import { BotFace, normalizeFaceProps } from '../../src/ui/bots/face/BotFace'
+import { faceShotKey, resetFaceShots, saveFaceShot } from '../../src/ui/bots/face/faceShots'
 import { FaceMotion, faceUniforms, hop, stillPose, type FaceUniforms } from '../../src/ui/bots/face/facePoses'
 import {
   createWebGlGpu,
@@ -45,6 +46,9 @@ function fake2d(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
 beforeEach(() => {
   webgl = 'none'
   reducedMotion = false
+  resetFaceShots()
+  // jsdom has no picture encoder: faces save no picture unless a test gives one.
+  vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('')
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function (this: HTMLCanvasElement, kind: string) {
     if (kind === '2d') return fake2d(this)
     if (webgl === 'throws') throw new Error('no GPU process')
@@ -188,24 +192,25 @@ const spec = (overrides: Partial<Parameters<FaceRenderer['register']>[1]> = {}) 
 })
 
 describe('BotFace fallback', () => {
-  it('draws the still face when there is no WebGL, without throwing', () => {
+  it('rests on the placeholder when there is no WebGL, without throwing', () => {
     render(createElement(BotFace, { look: { colour: 'blue', accessory: 'glasses' }, state: 'working', size: 40, view: 'head', label: 'Inbox helper' }))
-    const svg = host.querySelector('svg.bot-face-still')!
-    expect(svg).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')!.hasAttribute('data-loading')).toBe(false)
+    const svg = host.querySelector('.bot-face')!
     expect(svg.getAttribute('data-colour')).toBe('blue')
     expect(svg.getAttribute('data-accessory')).toBe('glasses')
     expect(svg.getAttribute('aria-label')).toBe('Inbox helper')
     expect(sharedFaceRendererStatus()).toBe('unavailable')
   })
 
-  it('draws the still face when context creation throws', () => {
+  it('rests on the placeholder when context creation throws', () => {
     webgl = 'throws'
     render(createElement(BotFace, { look: coral, state: 'idle', size: 34, view: 'head' }))
-    expect(host.querySelector('svg.bot-face-still')?.getAttribute('aria-hidden')).toBe('true')
+    expect(host.querySelector('.bot-face')?.getAttribute('aria-hidden')).toBe('true')
     expect(host.querySelector('canvas')).toBeNull()
   })
 
-  it('switches to the still face when the shader fails to compile', () => {
+  it('rests on the placeholder when the shader fails to compile', () => {
     let status: ReturnType<FaceGpu['status']> = 'pending'
     const fake = fakeEnv({ status: () => status })
     resetSharedFaceRenderer(() => fake.env)
@@ -214,10 +219,10 @@ describe('BotFace fallback', () => {
     status = 'failed'
     fake.tick()
     expect(host.querySelector('canvas')).toBeNull()
-    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
   })
 
-  it('is not ready while the context is lost, and switches to the still face when it does not come back', () => {
+  it('is not ready while the context is lost, and rests on the placeholder when it does not come back', () => {
     let status: ReturnType<FaceGpu['status']> = 'ready'
     const fake = fakeEnv({ status: () => status })
     resetSharedFaceRenderer(() => fake.env)
@@ -231,7 +236,7 @@ describe('BotFace fallback', () => {
     fake.tick(LOST_CONTEXT_TIMEOUT_MS)
     expect(sharedFaceRendererStatus()).toBe('failed')
     expect(host.querySelector('canvas')).toBeNull()
-    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
   })
 
   it('draws again when a lost context comes back in time', () => {
@@ -255,15 +260,15 @@ describe('BotFace fallback', () => {
     renderer.dispose()
   })
 
-  it('draws the still face when WebGL is refused as software', () => {
+  it('rests on the placeholder when WebGL is refused as software', () => {
     webgl = 'software'
     render(createElement(BotFace, { look: coral, state: 'idle', size: 40, view: 'head' }))
     expect(sharedFaceRendererStatus()).toBe('unavailable')
-    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
     expect(host.querySelector('canvas')).toBeNull()
   })
 
-  it('draws the still face when the shader is still compiling after the timeout, even with no tick, and the live face once it compiles', () => {
+  it('keeps the loader moving while a slow shader compiles, even with no tick, and the live face once it compiles', () => {
     let status: ReturnType<FaceGpu['status']> = 'pending'
     // Off screen as far as the observer knows, so no tick runs to look at the compile.
     const fake = fakeEnv({ observer: true, status: () => status })
@@ -272,35 +277,35 @@ describe('BotFace fallback', () => {
     expect(sharedFaceRendererStatus()).toBe('pending')
     expect(host.querySelector('canvas.bot-face-canvas')).not.toBeNull()
     fake.tick(PENDING_TIMEOUT_MS - 1)
-    expect(host.querySelector('svg.bot-face-still')).toBeNull()
+    expect(host.querySelector('.bot-face-placeholder[data-loading]')).not.toBeNull()
     fake.tick(1)
     expect(sharedFaceRendererStatus()).toBe('failed')
     expect(host.querySelector('canvas')).toBeNull()
-    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    // Slow, not failed: the loader keeps moving instead of resting.
+    expect(host.querySelector('.bot-face-placeholder[data-loading]')).not.toBeNull()
     expect(fake.pending()).toBe(0)
     // Still compiling: it stays still and looks again.
     fake.tick(PENDING_POLL_MS)
-    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
     status = 'ready'
     fake.tick(PENDING_POLL_MS)
     expect(sharedFaceRendererStatus()).toBe('ready')
-    expect(host.querySelector('svg.bot-face-still')).toBeNull()
     expect(host.querySelector('canvas.bot-face-canvas')).not.toBeNull()
     expect(fake.timers()).toBe(0)
   })
 
-  it('draws the still face when a compile that timed out then fails', () => {
+  it('rests on the placeholder when a compile that timed out then fails', () => {
     let status: ReturnType<FaceGpu['status']> = 'pending'
     const fake = fakeEnv({ status: () => status })
     resetSharedFaceRenderer(() => fake.env)
     render(createElement(BotFace, { look: coral, state: 'idle', size: 40, view: 'head' }))
     fake.tick(PENDING_TIMEOUT_MS)
-    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
     status = 'failed'
     fake.tick(PENDING_POLL_MS)
     expect(sharedFaceRendererStatus()).toBe('failed')
     expect(fake.timers()).toBe(0)
-    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
   })
 
   it('keeps the live face when the shader compiles in time', () => {
@@ -314,7 +319,7 @@ describe('BotFace fallback', () => {
     expect(host.querySelector('canvas.bot-face-canvas')).not.toBeNull()
   })
 
-  it('draws the still face when the first frame reads back empty', () => {
+  it('rests on the placeholder when the first frame reads back empty', () => {
     const fake = fakeEnv()
     resetSharedFaceRenderer(() => fake.env)
     const readBack = vi.fn((_x: number, _y: number, w: number, h: number) => ({ data: new Uint8ClampedArray(w * h * 4) }))
@@ -329,7 +334,7 @@ describe('BotFace fallback', () => {
     expect(fake.draws).toHaveLength(1)
     expect(readBack).toHaveBeenCalledTimes(1)
     expect(sharedFaceRendererStatus()).toBe('failed')
-    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
   })
 
   it('reads back only the first frame, and keeps a face that has pixels', () => {
@@ -347,12 +352,12 @@ describe('BotFace fallback', () => {
     renderer.dispose()
   })
 
-  it('draws the still face when a canvas has no 2D context', () => {
+  it('rests on the placeholder when a canvas has no 2D context', () => {
     const fake = fakeEnv()
     resetSharedFaceRenderer(() => fake.env)
     vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValue(null)
     render(createElement(BotFace, { look: coral, state: 'idle', size: 40, view: 'head' }))
-    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
   })
 })
 
@@ -404,19 +409,22 @@ describe('releasing the WebGL context while no face shows', () => {
     status = 'pending'
     render(face())
     expect(createGpu).toHaveBeenCalledTimes(2)
-    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
     expect(host.querySelector('canvas')).toBeNull()
     fake.tick(RESTART_POLL_MS)
-    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
 
     status = 'ready'
     fake.tick(PENDING_POLL_MS)
     expect(sharedFaceRendererStatus()).toBe('ready')
-    expect(host.querySelector('svg.bot-face-still')).toBeNull()
     expect(host.querySelector('canvas.bot-face-canvas')).not.toBeNull()
+    // The loader stays until the face's first frame is in its canvas.
+    expect(host.querySelector('.bot-face-placeholder[data-loading]')).not.toBeNull()
     const drawn = fake.draws.length
     fake.tick()
     expect(fake.draws.length).toBeGreaterThan(drawn)
+    expect(host.querySelector('.bot-face-placeholder')).toBeNull()
+    expect(host.querySelector('.bot-face[data-drawn]')).not.toBeNull()
     expect(fake.timers()).toBe(0)
   })
 
@@ -428,12 +436,12 @@ describe('releasing the WebGL context while no face shows', () => {
     render(null)
     fake.tick(IDLE_RELEASE_MS)
     render(face())
-    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
     fake.tick(RESTART_POLL_MS)
     expect(host.querySelector('canvas.bot-face-canvas')).not.toBeNull()
   })
 
-  it('draws the still face when the new context fails to compile', () => {
+  it('rests on the placeholder when the new context fails to compile', () => {
     let status: ReturnType<FaceGpu['status']> = 'ready'
     const fake = fakeEnv({ status: () => status })
     resetSharedFaceRenderer(() => fake.env)
@@ -446,7 +454,7 @@ describe('releasing the WebGL context while no face shows', () => {
     fake.tick(RESTART_POLL_MS)
     expect(sharedFaceRendererStatus()).toBe('failed')
     expect(fake.timers()).toBe(0)
-    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
   })
 
   it('has nothing to release without WebGL', () => {
@@ -475,16 +483,16 @@ describe('BotFace props', () => {
   })
 
   it('draws a Mousse in the fallback and passes its kind and eyes to the shader', () => {
-    render(createElement(BotFaceStill, { look: { colour: 'purple', accessory: 'none', kind: 'mousse', eyes: 'star' }, state: 'idle', size: 48, view: 'head' }))
-    expect(host.querySelector('svg')!.getAttribute('data-kind')).toBe('mousse')
+    render(createElement(BotFace, { look: { colour: 'purple', accessory: 'none', kind: 'mousse', eyes: 'star' }, state: 'idle', size: 48, view: 'head' }))
+    expect(host.querySelector('.bot-face')!.getAttribute('data-kind')).toBe('mousse')
     expect(faceUniforms({ colour: 'purple', accessory: 'none', kind: 'mousse', eyes: 'star' }, stillPose('idle'), { view: 'head', size: 40, samples: 1 }).uK).toEqual([1, 6, 1])
     expect(faceUniforms({ colour: 'purple', accessory: 'none' }, stillPose('idle'), { view: 'head', size: 40, samples: 1 }).uK).toEqual([0, 0, 1])
     expect(faceUniforms({ colour: 'yellow', accessory: 'none', kind: 'mousse' }, stillPose('idle'), { view: 'head', size: 40, samples: 1 }).uK).toEqual([1, 0, 0])
   })
 
   it('keeps unknown stored values drawable in the fallback', () => {
-    render(createElement(BotFaceStill, { look: { colour: 'mauve', accessory: 'monocle' }, state: 'dancing' as never, size: 48, view: 'head' }))
-    const svg = host.querySelector('svg')!
+    render(createElement(BotFace, { look: { colour: 'mauve', accessory: 'monocle' }, state: 'dancing' as never, size: 48, view: 'head' }))
+    const svg = host.querySelector('.bot-face')!
     expect(svg.getAttribute('data-colour')).toBe('coral')
     expect(svg.getAttribute('data-accessory')).toBe('none')
     expect(svg.getAttribute('data-state')).toBe('idle')
@@ -494,7 +502,7 @@ describe('BotFace props', () => {
     const fake = fakeEnv()
     resetSharedFaceRenderer(() => fake.env)
     render(createElement(BotFace, { look: { colour: 'green', accessory: 'cap' }, state: 'paused', size: 48, view: 'head' }))
-    const face = host.querySelector<HTMLElement>('.bot-face-live')!
+    const face = host.querySelector<HTMLElement>('.bot-face')!
     expect(face.style.width).toBe('48px')
     expect(face.getAttribute('aria-hidden')).toBe('true')
     expect(face.getAttribute('data-still')).toBeNull()
@@ -514,7 +522,7 @@ describe('reduced motion', () => {
       createElement(BotFace, { look, state: 'stuck', size: 40, view: 'head' }),
       createElement(BotFace, { look, state: 'happy', size: 40, view: 'head' })
     ))
-    expect(host.querySelectorAll('.bot-face-live[data-still="true"]')).toHaveLength(2 + 1)
+    expect(host.querySelectorAll('.bot-face[data-still="true"]')).toHaveLength(2 + 1)
     for (let i = 0; i < 5; i++) fake.tick()
     // The two alike faces share one cached frame.
     expect(fake.draws).toHaveLength(2)
@@ -794,5 +802,25 @@ describe('face poses', () => {
     motion.frame(0, 0)
     const heights = Array.from({ length: 40 }, (_, i) => motion.frame(i / 30, 1 / 30).hop)
     expect(Math.max(...heights)).toBeGreaterThan(0.25)
+  })
+})
+
+describe('saved face pictures', () => {
+  it('shows a face drawn on an earlier visit at once, and the resting placeholder for a pose with no picture', () => {
+    const look = normalizeFaceProps({ look: coral, state: 'idle', size: 40, view: 'head' }).look
+    const key = faceShotKey(look, 'idle', 'head', 40 * Math.min(2, window.devicePixelRatio || 1))
+    const canvas = document.createElement('canvas')
+    const picture = `data:image/webp;base64,${'A'.repeat(400)}`
+    canvas.toDataURL = () => picture
+    saveFaceShot(key, canvas)
+    // No WebGL here: the saved picture stands in for the 3D face, with no loader.
+    render(createElement(BotFace, { look: coral, state: 'idle', size: 40, view: 'head' }))
+    expect(host.querySelector<HTMLImageElement>('img.bot-face-shot')?.src).toBe(picture)
+    expect(host.querySelector('.bot-face-placeholder')).toBeNull()
+    // Another pose has no picture yet: the resting placeholder.
+    render(createElement(BotFace, { look: coral, state: 'working', size: 40, view: 'head' }))
+    expect(host.querySelector('img.bot-face-shot')).toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
+    resetFaceShots()
   })
 })

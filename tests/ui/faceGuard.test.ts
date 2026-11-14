@@ -82,3 +82,25 @@ describe('bot face guard', () => {
     expect(faceRendererAllowed()).toBe(true)
   })
 })
+
+describe('turning 3D faces off', () => {
+  it('stops faces that are already live', async () => {
+    const { createElement } = await import('react')
+    const { render, act } = await import('@testing-library/react')
+    const { BotFace } = await import('../../src/ui/bots/face/BotFace')
+    const { resetSharedFaceRenderer } = await import('../../src/ui/bots/face/faceRenderer')
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ clearRect() {}, drawImage() {} } as never)
+    const ready = { status: () => 'ready' as const, canvas: document.createElement('canvas'), ensureSize() {}, draw() {}, finish() {}, onRestored() {}, dispose() {} }
+    resetSharedFaceRenderer(() => ({ createGpu: () => ready, createCanvas: () => document.createElement('canvas'), requestFrame: () => 0, cancelFrame() {}, now: () => 0, pixelRatio: () => 1 }) as never)
+    const view = render(createElement(BotFace, { look: { colour: 'coral', accessory: 'none' }, state: 'idle', size: 40, view: 'head' }))
+    expect(view.container.querySelector('canvas.bot-face-canvas')).not.toBeNull()
+    await act(() => setFaceMode('still'))
+    expect(view.container.querySelector('canvas')).toBeNull()
+    expect(view.container.querySelector('.bot-face-placeholder:not([data-loading])')).not.toBeNull()
+    await act(() => setFaceMode('live'))
+    expect(view.container.querySelector('canvas.bot-face-canvas')).not.toBeNull()
+    view.unmount()
+    resetSharedFaceRenderer()
+    getContext.mockRestore()
+  })
+})
