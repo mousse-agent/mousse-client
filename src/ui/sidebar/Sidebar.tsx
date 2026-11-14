@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNod
 import '../bots/bots.css'
 import type { ListBot } from '../../connection/bots'
 import type { ComputerLists, ListChat, ListProject, ListThread, ThreadStatus } from '../../connection/types'
-import { BotFace } from '../bots/face/BotFace'
+import { LazyBotFace } from '../bots/face/LazyBotFace'
 import { BotBoundary } from '../bots/BotBoundary'
 import {
   ChevronDown,
@@ -274,11 +274,38 @@ function ChatRow({ chat, active, computer, onOpen }: { chat: ListChat; active: b
   )
 }
 
+/** Recent draws this many rows at first, and as many more each time the reader nears its end. */
+const RECENT_PAGE = 30
+
+/** Sits under a list's last drawn row and asks for more once it comes within a screen of view. */
+function MoreRows({ onNear }: { onNear(): void }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const onNearRef = useRef(onNear)
+  onNearRef.current = onNear
+  useEffect(() => {
+    const node = ref.current
+    if (!node) return
+    if (typeof IntersectionObserver === 'undefined') {
+      onNearRef.current()
+      return
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        observer.disconnect()
+        onNearRef.current()
+      }
+    }, { rootMargin: '100% 0px' })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+  return <div ref={ref} className="m-sb-more" aria-hidden style={{ height: 1 }} />
+}
+
 /** A bot's row: its face holds the state's pose, and the row says the state in words. */
 function BotRow({ bot, active, computer, onOpen }: { bot: ListBot; active: boolean; computer?: RowComputer; onOpen(): void }) {
   return (
     <button type="button" className={`m-chat-row${active ? ' is-active' : ''}`} aria-current={active ? 'true' : undefined} onClick={onOpen}>
-      <BotFace look={bot.look} state={bot.state} size={40} view="head" still />
+      <LazyBotFace look={bot.look} state={bot.state} size={40} view="head" still />
       <span className="m-chat-row__text">
         <span className="m-chat-row__name">{bot.name}</span>
         <span className="m-chat-row__preview">{computer && <span>{`${computer.name}${computer.offline ? ' (offline)' : ''} · `}</span>}{bot.stateText || bot.last?.text || bot.description}</span>
@@ -345,6 +372,8 @@ export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenCha
     ...model.direct.map((chat) => ({ at: chat.updatedAt, key: chat.id, row: () => <ChatRow key={chat.id} chat={chat} active={!!chat.threadId && chat.threadId === selectedId} computer={computerOf?.(chat.id)} onOpen={() => onOpenChat(chat)} /> })),
     ...bots.map((bot) => ({ at: Date.parse(bot.last?.at ?? bot.createdAt) || 0, key: bot.id, row: () => <BotBoundary key={`bot:${bot.id}`}><BotRow bot={bot} active={bot.id === selectedBotId} computer={computerOf?.(bot.id)} onOpen={() => onOpenBot!(bot)} /></BotBoundary> })),
   ].sort((a, b) => b.at - a.at)
+  const [recentShown, setRecentShown] = useState(RECENT_PAGE)
+  useEffect(() => setRecentShown(RECENT_PAGE), [tab, needle])
   const projects = [...lists.projects].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
   const card = (thread: ListThread) => (
     <ThreadCard
@@ -423,7 +452,7 @@ export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenCha
                     {bots.map((bot) => (
                       <button key={bot.id} type="button" className={bot.id === selectedBotId ? 'is-active' : ''} aria-label={`Message ${bot.name}`} onClick={() => onOpenBot(bot)}>
                         {/* On a phone only a face with something to show moves (working, needs you, stuck); the rest are still, so a long row costs no GPU. */}
-                        <BotFace look={bot.look} state={bot.state} size={48} view="head" still={bot.state === 'idle' || bot.state === 'paused'} />
+                        <LazyBotFace look={bot.look} state={bot.state} size={48} view="head" still={bot.state === 'idle' || bot.state === 'paused'} />
                         {bot.unread > 0 && bot.id !== selectedBotId && <span className="bot-roster-unread" role="img" aria-label={`${bot.unread} unread`} />}
                         <span>{bot.name}</span>
                       </button>
@@ -447,7 +476,8 @@ export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenCha
             {recent.length > 0 && (
               <>
                 <SectionHeading>Recent</SectionHeading>
-                <div className="m-chat-list">{recent.map((entry) => entry.row())}</div>
+                <div className="m-chat-list">{recent.slice(0, recentShown).map((entry) => entry.row())}</div>
+                {recent.length > recentShown && <MoreRows key={recentShown} onNear={() => setRecentShown((shown) => shown + RECENT_PAGE)} />}
               </>
             )}
           </>

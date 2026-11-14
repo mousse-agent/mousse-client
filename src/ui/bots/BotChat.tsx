@@ -33,6 +33,7 @@ import { Sheet } from '../components/Sheet'
 import { Button, Spinner } from '../components/primitives'
 import { Markdown, MarkdownImageRenderer } from '../timeline/Markdown'
 import { BotFace, type BotFaceState } from './face/BotFace'
+import { LazyBotFace } from './face/LazyBotFace'
 import { BOT_COLOUR_HEX, normalizeBotLook } from './look'
 import { botFullTime, botGroupTime, botMessageLabel, placeMessages } from './messageGroups'
 import { BotImageFiles, BotOtherFiles, isImageAttachment, renderBotImage } from './BotImages'
@@ -241,7 +242,7 @@ const Message = memo(function Message({ bot, bots, message, quote, starts, pendi
     <article className={`bot-msg bot-msg--bot${starts ? ' is-group-start' : ''}${quoted ? ' is-quoted' : ''}${message.kind === 'run_report' ? ' is-report' : ''}`} data-message-id={message.id} title={botFullTime(message.at)}>
       {/* Transcript faces are still: one baked pose per look, shared by every message. */}
       {starts
-        ? <BotFace look={bot.look} state="idle" size={32} view="head" className="bot-msg__face" still />
+        ? <LazyBotFace look={bot.look} state="idle" size={32} view="head" className="bot-msg__face" still />
         : <div className="bot-msg__gutter" aria-hidden />}
       <div className="bot-msg__body">
         {starts && <div className="bot-msg__meta"><strong>{bot.name}</strong>{label && <span className="bot-message-label">{label}</span>}{onReply && <ReplyButton onReply={() => onReply(message)} />}</div>}
