@@ -3,6 +3,8 @@
 // display stream.
 import { SessionBots, type ComputerBots } from './bots'
 import { newId } from '../net/canonical'
+import { equalBytes, fromB64url, fromUtf8 } from '../net/bytes'
+import { sha256 } from '../net/crypto'
 import { NetError } from '../net/errors'
 import type { SessionLink, StreamHead, StreamRecord } from '../net/session'
 import { ListsWatch } from './lists'
@@ -206,6 +208,51 @@ const SAVED_READ_TIMEOUT_MS = 400
 export const THREAD_SAVE_DELAY_MS = 1_000
 /** Codes that mean the thread is gone from the computer, so its saved copy is too. */
 const GONE = new Set(['not_found', 'stream_unknown'])
+/** The most a reply sent in parts (`reply.page`) may be: what the computer holds for one caller. */
+const PAGED_REPLY_MAX_BYTES = 32 * 1024 * 1024
+
+/** Standard base64, as `reply.page` sends it. */
+function fromBase64(text: string): Uint8Array {
+  return fromB64url(text.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''))
+}
+
+/**
+ * A reply as the computer meant it. One too large for an RPC reply comes as `{ paged: { id, bytes, pages, sha256 } }`;
+ * its parts are fetched with `reply.page` and checked against the length and the hash. A failure throws.
+ */
+export async function wholeReply(leaf: Pick<SessionLink, 'rpc'>, method: string, reply: unknown): Promise<unknown> {
+  if (!isObject(reply) || !isObject(reply.paged)) return reply
+  const { id, bytes, pages, sha256: hash } = reply.paged
+  if (
+    typeof id !== 'string' ||
+    typeof hash !== 'string' ||
+    !/^[0-9a-f]{64}$/.test(hash) ||
+    !Number.isSafeInteger(bytes) ||
+    (bytes as number) < 1 ||
+    (bytes as number) > PAGED_REPLY_MAX_BYTES ||
+    !Number.isSafeInteger(pages) ||
+    (pages as number) < 1 ||
+    (pages as number) > 4096
+  )
+    badAnswer(method)
+  const whole = new Uint8Array(bytes as number)
+  let received = 0
+  for (let index = 0; index < (pages as number); index++) {
+    const part = await leaf.rpc('reply.page', { id, index })
+    if (!isObject(part) || part.index !== index || typeof part.data !== 'string') badAnswer(method)
+    const data = fromBase64(part.data)
+    if (received + data.length > whole.length) badAnswer(method)
+    whole.set(data, received)
+    received += data.length
+  }
+  const expected = new Uint8Array((hash.match(/../g) ?? []).map((pair) => parseInt(pair, 16)))
+  if (received !== whole.length || !equalBytes(sha256(whole), expected)) badAnswer(method)
+  try {
+    return JSON.parse(fromUtf8(whole))
+  } catch {
+    return badAnswer(method)
+  }
+}
 
 const atOrBefore = (record: { epoch: number; seq: number }, head: StreamHead) =>
   record.epoch < head.epoch || (record.epoch === head.epoch && record.seq <= head.seq)
@@ -237,6 +284,7 @@ class ThreadWatch {
   /** The subscription finished its replay; a gap now means the computer skipped records. */
   private caught = false
   private saveTimer?: ReturnType<typeof setTimeout>
+  private loadingEarlier?: Promise<void>
   private dirty = false
   private closed = false
 
@@ -424,6 +472,34 @@ class ThreadWatch {
       .finally(() => {
         this.resyncing = undefined
       })
+  }
+
+  /**
+   * Reads the page of messages before the oldest one the phone has, and puts it in front. One read at a time; a page
+   * that arrives after a new snapshot moved the start is dropped. Resolves once the page is shown.
+   */
+  loadEarlier(): Promise<void> {
+    if (this.loadingEarlier) return this.loadingEarlier
+    const before = this.projection.earlierBefore
+    if (!before || this.closed) return Promise.resolve()
+    const loading = (async () => {
+      let page: unknown
+      try {
+        page = await wholeReply(this.leaf, 'thread.messages', await this.leaf.rpc('thread.messages', { threadId: this.threadId, before }))
+      } catch (error) {
+        // A computer that predates paged reads refuses the method: say where the messages are.
+        if (error instanceof NetError && (error.code === 'forbidden' || error.code === 'unknown_method' || error.code === 'not_found'))
+          throw new Error('This computer cannot send older messages to the phone yet. Update Mousse on it, or read them there.')
+        throw error
+      }
+      if (this.closed || !this.projection.prependEarlier(before, page)) return
+      this.changed()
+      this.emit()
+    })()
+    this.loadingEarlier = loading
+    return loading.finally(() => {
+      if (this.loadingEarlier === loading) this.loadingEarlier = undefined
+    })
   }
 
   /** The records moved the state on: save it soon. */
@@ -633,6 +709,10 @@ export class RealComputerSession implements ComputerSession {
       this.cache.read(threadId).catch(() => undefined),
       new Promise<undefined>((resolve) => (timer = setTimeout(() => resolve(undefined), SAVED_READ_TIMEOUT_MS))),
     ]).finally(() => clearTimeout(timer))
+  }
+
+  async loadEarlier(threadId: string): Promise<void> {
+    await this.watches.get(threadId)?.watch.loadEarlier()
   }
 
   async send(threadId: string, text: string, options: SendOptions = {}): Promise<void> {

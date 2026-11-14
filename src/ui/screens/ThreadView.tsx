@@ -37,6 +37,12 @@ export function ThreadView({ session, threadId, onActivityChange, computerName }
   const [away, setAway] = useState(false)
   const [folded, setFolded] = useState(false)
   const [addition, setAddition] = useState<{ text: string; key: number }>()
+  /**
+   * The scroll height and the oldest message shown when a page of older messages was asked for: once that message
+   * is no longer the oldest, the page is in front, and the reader is moved down by what it added.
+   */
+  const prepended = useRef<{ height: number; first: string | undefined }>()
+  const oldest = thread.items.find((entry) => entry.id !== 'local-earlier')?.id
   const addToDraft = useCallback((text: string) => setAddition({ text, key: Date.now() }), [])
   const send = thread.send
   const approvePlan = useCallback(async (markdown: string) => {
@@ -53,11 +59,38 @@ export function ThreadView({ session, threadId, onActivityChange, computerName }
 
   useEffect(() => { onActivityChange?.(thread.active) }, [thread.active, onActivityChange])
 
-  // Follow the stream while the reader is at the bottom; leave them alone if they scrolled up.
+  // Follow the stream while the reader is at the bottom; leave them alone if they scrolled up. Older messages put in
+  // front keep what the reader looks at in place.
   useLayoutEffect(() => {
     const element = scroller.current
-    if (element && stick.current) element.scrollTop = element.scrollHeight
-  }, [thread.items, thread.display, queue.items])
+    if (!element) return
+    const held = prepended.current
+    if (held && held.first !== oldest) {
+      prepended.current = undefined
+      if (!stick.current) {
+        element.scrollTop += element.scrollHeight - held.height
+        return
+      }
+    }
+    if (stick.current) element.scrollTop = element.scrollHeight
+  }, [thread.items, thread.display, queue.items, oldest])
+  useEffect(() => { if (!thread.loadingEarlier) prepended.current = undefined }, [thread.loadingEarlier])
+
+  // Near the top of a long thread, the page before the oldest message shown comes from the computer.
+  const loadEarlier = thread.loadEarlier
+  const earlierLoadable = thread.display.earlier?.loadable === true
+  const readEarlier = useCallback(() => {
+    const element = scroller.current
+    if (!element || !loadEarlier || !earlierLoadable || thread.loadingEarlier) return
+    if (element.scrollTop > 200) return
+    prepended.current = { height: element.scrollHeight, first: oldest }
+    void loadEarlier()
+  }, [loadEarlier, earlierLoadable, thread.loadingEarlier, oldest])
+  // A thread shorter than the screen has nothing to scroll: read on until it fills the screen or nothing is left.
+  useEffect(() => {
+    const element = scroller.current
+    if (element && element.scrollHeight <= element.clientHeight) readEarlier()
+  }, [thread.items, readEarlier])
 
   useEffect(() => { stick.current = true; setFolded(false) }, [threadId])
 
@@ -85,10 +118,12 @@ export function ThreadView({ session, threadId, onActivityChange, computerName }
           // The composer folds once the reader is well up, and unfolds back at the end; between the two it stays as it is.
           if (stick.current) setFolded(false)
           else if (distance > COMPOSER_FOLD_DISTANCE) setFolded(true)
+          readEarlier()
         }}
       >
         <div className="m-transcript" role="log" aria-live="polite" aria-busy={thread.active || undefined}>
           {thread.loading && <div className="m-loading m-loading--late"><Spinner label="Loading thread" /></div>}
+          {thread.loadingEarlier && <div className="m-loading"><Spinner label="Loading earlier messages" /></div>}
           {!thread.loading && thread.items.length === 0 && (
             <div className="m-start-hero">
               <MousseLogoOutline className="m-new-thread__logo" />
