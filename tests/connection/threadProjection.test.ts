@@ -76,17 +76,45 @@ describe('ThreadProjection', () => {
     expect(projection.items()).toEqual([])
   })
 
-  it('says how many older messages of a long thread the snapshot left on the computer, and keeps it in the saved state', () => {
+  it('says how many older messages of a long thread the snapshot left on the computer, and keeps where to read them in the saved state', () => {
     const projection = new ThreadProjection('t1')
     projection.apply(snapshot('t1', { messages: [message('m9', 'assistant', 'Newest', 9_000)], earlier: { before: 'c', count: 412 } }))
-    expect(projection.items().map((item) => item.text)).toEqual(['412 earlier messages are on the computer.', 'Newest'])
-    expect(projection.settled().earlier).toBe(412)
+    expect(projection.items().map((item) => item.text)).toEqual(['412 earlier messages', 'Newest'])
+    expect(projection.state().earlier).toEqual({ count: 412, loadable: true })
+    expect(projection.settled()).toMatchObject({ earlier: 412, earlierBefore: 'c' })
     const restored = new ThreadProjection('t1')
     restored.restore(projection.settled())
-    expect(restored.items()[0]?.text).toBe('412 earlier messages are on the computer.')
+    expect(restored.earlierBefore).toBe('c')
+    expect(restored.items()[0]?.text).toBe('412 earlier messages')
+    // A copy saved by an older phone has no cursor: the messages can only be read on the computer.
+    const old = new ThreadProjection('t1')
+    old.restore({ ...projection.settled(), earlierBefore: undefined })
+    expect(old.items()[0]?.text).toBe('412 earlier messages are on the computer.')
+    expect(old.state().earlier).toEqual({ count: 412, loadable: false })
     // A snapshot of the whole thread clears it.
     projection.apply(snapshot('t1', { messages: [message('m1', 'user', 'Hi', 1_000)] }))
     expect(projection.items().map((item) => item.text)).toEqual(['Hi'])
+    expect(projection.state().earlier).toBeUndefined()
+  })
+
+  it('keeps the older pages it loaded when a new snapshot continues them, and drops a page asked for an old start', () => {
+    const projection = new ThreadProjection('t1')
+    const all = Array.from({ length: 8 }, (_, n) => message(`m${n}`, 'assistant', `reply ${n}`, 1_000 + n))
+    projection.apply(snapshot('t1', { messages: all.slice(5, 7), earlier: { before: 'm5', count: 5 } }))
+    expect(projection.prependEarlier('m5', { messages: all.slice(2, 5), earlier: { before: 'm2', count: 2 } })).toBe(true)
+    // The thread grew and the computer sent a new snapshot that starts later (at m6): what the phone read stays.
+    projection.apply(snapshot('t1', { messages: all.slice(6, 8), earlier: { before: 'm6', count: 6 } }))
+    expect(projection.items().map((item) => item.id)).toEqual(['local-earlier', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7'])
+    expect(projection.earlierBefore).toBe('m2')
+    expect(projection.earlier).toBe(2)
+    // A page asked for before the reader's previous start arrives late: it is not put in.
+    expect(projection.prependEarlier('m5', { messages: all.slice(0, 5) })).toBe(false)
+    expect(projection.prependEarlier('m2', { messages: all.slice(0, 2) })).toBe(true)
+    expect(projection.items().map((item) => item.id)).toEqual(all.map((entry) => entry.id))
+    // A snapshot that does not continue what the phone shows replaces it.
+    projection.apply(snapshot('t1', { messages: [message('x1', 'user', 'Other', 9_000)], earlier: { before: 'x1', count: 40 } }))
+    expect(projection.items().map((item) => item.id)).toEqual(['local-earlier', 'x1'])
+    expect(projection.earlier).toBe(40)
   })
 
   it('stops showing a run and a reply still being written', () => {

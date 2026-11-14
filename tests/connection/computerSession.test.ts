@@ -4,6 +4,7 @@ import { RealComputerSession } from '../../src/connection/computerSession'
 import type { ChatItem, ThreadDisplayState } from '../../src/connection/types'
 import { newId } from '../../src/net/canonical'
 import { NetError } from '../../src/net/errors'
+import { sha256 } from '../../src/net/crypto'
 import { generateNodeKeys } from '../../src/net/keys'
 import { LeafSession, SNAPSHOT_DEADLINE_MS } from '../../src/net/session'
 import { streamPair } from '../../src/net/stream'
@@ -141,6 +142,71 @@ describe('computer session', () => {
 
     unsubscribe()
     expect(await remote.next('unsubscribe')).toEqual({ t: 'unsubscribe', stream: 'str_t1' })
+    session.close()
+  })
+
+  it('shows the older messages of a long thread page by page, including a page sent in parts', async () => {
+    const { session, remote } = await setup()
+    const seen: Array<{ items: ChatItem[]; state?: ThreadDisplayState }> = []
+    const opening = session.openThread('t1', (items, state) => seen.push({ items, state }))
+    await remote.answer('bridge.thread.open', { descriptor: { id: 'str_t1' }, head: { epoch: 1, seq: 3 } })
+    await remote.next('snapshot.get')
+    const all = Array.from({ length: 12 }, (_, n) => message(`m${n}`, 'assistant', `reply ${n} ${'x'.repeat(n === 7 ? 70_000 : 10)}`, 1_000 + n))
+    // The computer's snapshot starts at m10 and says ten older messages are left.
+    const snapshot = { messages: all.slice(10), earlier: { before: 'm10', count: 10 }, activeTurn: { active: false, running: false } }
+    await remote.snapshotChunk('str_t1', snapshotBodies('t1', snapshot).map((entry) => remote.record('str_t1', entry.type, entry.body)))
+    await opening
+    await remote.next('subscribe')
+    const shown = () => seen.at(-1)!.items.map((item) => item.id)
+    expect(shown()).toEqual(['local-earlier', 'm10', 'm11'])
+    expect(seen.at(-1)!.state?.earlier).toEqual({ count: 10, loadable: true })
+
+    // The first page is larger than one RPC reply: it comes in two parts, checked against its hash.
+    const first = session.loadEarlier('t1')
+    const whole = new TextEncoder().encode(JSON.stringify({ messages: all.slice(5, 10), earlier: { before: 'm5', count: 5 } }))
+    const half = Math.ceil(whole.length / 2)
+    const hex = [...sha256(whole)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+    const request = await remote.answer('thread.messages', { paged: { id: 'reply-1', bytes: whole.length, pages: 2, sha256: hex } })
+    expect(request.params).toEqual({ threadId: 't1', before: 'm10' })
+    for (const [index, part] of [whole.subarray(0, half), whole.subarray(half)].entries()) {
+      const page = await remote.answer('reply.page', { index, data: Buffer.from(part).toString('base64') })
+      expect(page.params).toEqual({ id: 'reply-1', index })
+    }
+    await first
+    expect(shown()).toEqual(['local-earlier', 'm5', 'm6', 'm7', 'm8', 'm9', 'm10', 'm11'])
+    expect(seen.at(-1)!.items[0]!.text).toBe('5 earlier messages')
+
+    // The last page leaves nothing on the computer: the note goes.
+    const last = session.loadEarlier('t1')
+    expect((await remote.answer('thread.messages', { messages: all.slice(0, 5) })).params).toEqual({ threadId: 't1', before: 'm5' })
+    await last
+    expect(shown()).toEqual(all.map((entry) => entry.id))
+    expect(seen.at(-1)!.state?.earlier).toBeUndefined()
+    session.close()
+  })
+
+  it('says where the older messages are when the computer cannot send them, and drops a page that does not match its hash', async () => {
+    const { session, remote } = await setup()
+    const seen: ChatItem[][] = []
+    const opening = session.openThread('t1', (items) => seen.push(items))
+    await remote.answer('bridge.thread.open', { descriptor: { id: 'str_t1' }, head: { epoch: 1, seq: 3 } })
+    await remote.next('snapshot.get')
+    const snapshot = { messages: [message('m3', 'user', 'Hi')], earlier: { before: 'm3', count: 3 }, activeTurn: { active: false, running: false } }
+    await remote.snapshotChunk('str_t1', snapshotBodies('t1', snapshot).map((entry) => remote.record('str_t1', entry.type, entry.body)))
+    await opening
+    await remote.next('subscribe')
+
+    const old = session.loadEarlier('t1')
+    const refused = await remote.next('rpc.request')
+    await remote.send({ t: 'rpc.result', id: refused.id, error: { code: 'forbidden', message: 'forbidden', retryable: false } })
+    await expect(old).rejects.toThrow('This computer cannot send older messages to the phone yet')
+
+    const forged = session.loadEarlier('t1')
+    const body = new TextEncoder().encode(JSON.stringify({ messages: [message('evil', 'assistant', 'not what was hashed')] }))
+    await remote.answer('thread.messages', { paged: { id: 'reply-2', bytes: body.length, pages: 1, sha256: '0'.repeat(64) } })
+    await remote.answer('reply.page', { index: 0, data: Buffer.from(body).toString('base64') })
+    await expect(forged).rejects.toThrow()
+    expect(seen.at(-1)!.map((item) => item.id)).toEqual(['local-earlier', 'm3'])
     session.close()
   })
 

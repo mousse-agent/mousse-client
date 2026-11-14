@@ -48,8 +48,10 @@ export interface SettledThreadState {
   turnStartedAt?: number
   turnError?: string
   connectionFailed?: string
-  /** Older messages of a long thread that the snapshot left on the computer. */
+  /** Older messages of a long thread that are still on the computer. */
   earlier?: number
+  /** Where to ask for them: the cursor `thread.messages` reads the page before. */
+  earlierBefore?: string
 }
 
 interface PendingSnapshot {
@@ -101,8 +103,10 @@ export class ThreadProjection {
   turnError?: string
   questions: PendingQuestions[] = []
   connectionFailed?: string
-  /** Older messages of a long thread that the computer's snapshot left out (it sends the newest 8 MiB). */
+  /** Older messages of a long thread that are still on the computer (a snapshot carries the newest 8 MiB). */
   earlier = 0
+  /** The cursor of the oldest message the phone has, for `thread.messages`; absent when the computer gave none. */
+  earlierBefore?: string
 
   constructor(readonly threadId: string) {}
 
@@ -135,7 +139,23 @@ export class ThreadProjection {
       ...(this.turnError ? { turnError: this.turnError } : {}),
       ...(this.connectionFailed ? { connectionFailed: this.connectionFailed } : {}),
       ...(this.earlier ? { earlier: this.earlier } : {}),
+      ...(this.earlier && this.earlierBefore ? { earlierBefore: this.earlierBefore } : {}),
     }
+  }
+
+  /**
+   * Puts a page of older messages (`thread.messages`) in front of the ones the phone has. `before` is the cursor the
+   * page was asked for: a page for a cursor the phone no longer starts at (a new snapshot came meanwhile) is dropped.
+   * Returns whether anything visible changed.
+   */
+  prependEarlier(before: string, value: unknown): boolean {
+    if (before !== this.earlierBefore || !isObject(value)) return false
+    const page = messagesOf(value.messages)
+    if (!page) return false
+    const known = new Set(this.messages.map((message) => message.id))
+    this.messages = [...page.filter((message) => !known.has(message.id)), ...this.messages]
+    this.setEarlier(value.earlier)
+    return true
   }
 
   /** Starts from saved state, before any record. Returns false when the state is unusable. */
@@ -154,6 +174,7 @@ export class ThreadProjection {
     this.turnError = typeof value.turnError === 'string' && value.turnError ? value.turnError : undefined
     this.connectionFailed = typeof value.connectionFailed === 'string' && value.connectionFailed ? value.connectionFailed : undefined
     this.earlier = earlierCount(value.earlier)
+    this.earlierBefore = this.earlier && typeof value.earlierBefore === 'string' && value.earlierBefore ? value.earlierBefore : undefined
     return true
   }
 
@@ -191,7 +212,10 @@ export class ThreadProjection {
     const note: ChatItem = {
       id: 'local-earlier',
       role: 'system',
-      text: `${count} earlier ${count === 1 ? 'message is' : 'messages are'} on the computer.`,
+      // The computer gives older pages when it knows `thread.messages`; the thread view loads them as the reader scrolls up.
+      text: this.earlierBefore
+        ? `${count} earlier ${count === 1 ? 'message' : 'messages'}`
+        : `${count} earlier ${count === 1 ? 'message is' : 'messages are'} on the computer.`,
       createdAt: (shown[0]?.createdAt ?? 1) - 1,
     }
     return [note, ...shown]
@@ -199,6 +223,7 @@ export class ThreadProjection {
 
   state(): ThreadDisplayState {
     return {
+      ...(this.earlier ? { earlier: { count: this.earlier, loadable: this.earlierBefore !== undefined } } : {}),
       ...(this.phase ? { phase: this.phase } : {}),
       ...(this.turnStartedAt !== undefined ? { turnStartedAt: this.turnStartedAt } : {}),
       ...(this.turnError ? { turnError: this.turnError } : {}),
@@ -321,12 +346,19 @@ export class ThreadProjection {
     if (!isObject(value)) return false
     const messages = messagesOf(value.messages)
     if (!messages) return false
-    this.messages = messages
+    // A snapshot of a long thread starts part-way. Older messages the phone already has (pages it loaded, or ones an
+    // earlier snapshot still carried) stay in front when the new one continues them, so the reader keeps their place.
+    const shown = this.settled().messages
+    const first = value.earlier !== undefined && messages.length ? shown.findIndex((message) => message.id === messages[0]!.id) : -1
+    if (first > 0) this.messages = [...shown.slice(0, first), ...messages]
+    else {
+      this.messages = messages
+      this.setEarlier(value.earlier)
+    }
     this.overlaid.clear()
     this.localItems = []
     if (isObject(value.activeTurn)) this.active = value.activeTurn.active === true
     this.questions = pendingQuestionsOf(value.pendingQuestions, this.threadId) ?? []
-    this.earlier = earlierCount(isObject(value.earlier) ? value.earlier.count : undefined)
     if (!this.active && this.phase && ACTIVE_PHASES.has(this.phase)) this.phase = undefined
     return true
   }
@@ -383,6 +415,12 @@ export class ThreadProjection {
       default:
         return false
     }
+  }
+
+  /** What is older than the phone's first message, from a snapshot's or a page's `earlier`. */
+  private setEarlier(value: unknown): void {
+    this.earlier = earlierCount(isObject(value) ? value.count : undefined)
+    this.earlierBefore = this.earlier && isObject(value) && typeof value.before === 'string' && value.before ? value.before : undefined
   }
 
   private upsert(message: DesktopMessage): boolean {

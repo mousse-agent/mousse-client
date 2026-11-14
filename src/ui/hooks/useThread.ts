@@ -16,6 +16,10 @@ export interface ThreadState {
   /** Answers pending questions; undefined when this computer cannot take answers from the phone. */
   answer?: (requestId: string, answers: QuestionAnswers) => Promise<void>
   dismiss?: (requestId: string) => Promise<void>
+  /** Shows the page of messages before the oldest one shown, when `display.earlier` is loadable. */
+  loadEarlier?: () => Promise<void>
+  /** True while a page of older messages is on its way. */
+  loadingEarlier: boolean
 }
 
 const NO_DISPLAY: ThreadDisplayState = { questions: [] }
@@ -42,6 +46,8 @@ export function useThread(session: ComputerSession | undefined, threadId: string
   const [remoteActive, setRemoteActive] = useState(false)
   const [pending, setPending] = useState(false)
   const [sending, setSending] = useState(false)
+  const [loadingEarlier, setLoadingEarlier] = useState(false)
+  const earlierRead = useRef<Promise<void>>()
   const recheck = useRef<ReturnType<typeof setTimeout>>()
   /** Number of items present when the last message was sent. */
   const baseline = useRef<number | null>(null)
@@ -148,6 +154,20 @@ export function useThread(session: ComputerSession | undefined, threadId: string
     }
   }, [session, threadId])
 
+  const loadEarlier = useCallback((): Promise<void> => {
+    if (!session?.loadEarlier) return Promise.resolve()
+    if (earlierRead.current) return earlierRead.current
+    setLoadingEarlier(true)
+    const read = session.loadEarlier(threadId)
+      .catch((cause: unknown) => { if (alive.current) setError(errorMessage(cause)) })
+      .finally(() => {
+        earlierRead.current = undefined
+        if (alive.current) setLoadingEarlier(false)
+      })
+    earlierRead.current = read
+    return read
+  }, [session, threadId])
+
   return {
     items,
     loading,
@@ -157,6 +177,8 @@ export function useThread(session: ComputerSession | undefined, threadId: string
     display,
     send,
     stop,
+    loadingEarlier,
+    ...(session?.loadEarlier ? { loadEarlier } : {}),
     ...(session?.answerQuestions ? { answer } : {}),
     ...(session?.dismissQuestions ? { dismiss } : {}),
   }

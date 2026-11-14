@@ -299,6 +299,8 @@ export interface ThreadDisplayState {
   questions: PendingQuestions[]
   /** The computer could not reach its model provider. */
   connectionFailed?: string
+  /** Older messages of a long thread still on the computer; `loadable` when `loadEarlier` can fetch them. */
+  earlier?: { count: number; loadable: boolean }
 }
 
 /** A computer's model choice for a thread. The effort is a `:<effort>` suffix on `model`. */
@@ -447,6 +449,8 @@ export interface ComputerSession {
    * it, on open and after every change. Returns an unsubscribe.
    */
   openThread(threadId: string, onItems: (items: ChatItem[], state?: ThreadDisplayState) => void): Promise<() => void>
+  /** Reads the page of messages before the oldest one an open thread shows (`state.earlier`), and shows it. */
+  loadEarlier?(threadId: string): Promise<void>
   /** Answers questions the computer is waiting on. False when they are no longer pending. */
   answerQuestions?(threadId: string, requestId: string, answers: QuestionAnswers): Promise<boolean>
   /** Dismisses questions the computer is waiting on. False when they are no longer pending. */
