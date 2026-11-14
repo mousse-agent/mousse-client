@@ -2,6 +2,7 @@ import type { KnownBotLook } from '../look'
 import type { BotFaceState } from './BotFace'
 import { FaceMotion, faceUniforms, stillPose, WHISKER_MIN_SIZE, type FaceUniforms } from './facePoses'
 import { MICE_FRAGMENT_SHADER, MICE_UNIFORMS, MICE_VERTEX_SHADER, type MiceUniform } from './miceShader'
+import { faceRendererAllowed, faceRendererReady, subscribeFaceGuard } from './faceGuard'
 
 /**
  * The shared face renderer (Bot Phase 1 §5.12, bot-ui §4.3). One WebGL context serves every face:
@@ -898,12 +899,18 @@ let cancelIdleRelease: (() => void) | null = null
 let released = false
 
 function notifyShared(): void {
+  if (shared?.status() === 'ready') faceRendererReady()
   for (const listener of [...sharedListeners]) listener()
 }
+
+// The guard opening (or closing) changes whether a renderer may be made, so the faces look again.
+subscribeFaceGuard(notifyShared)
 
 /** The app's one face renderer, made on first use. Null when WebGL is missing or failed to start. */
 export function sharedFaceRenderer(): FaceRenderer | null {
   if (shared !== undefined) return shared
+  // On a phone the guard first marks the start on disk; until then (or when 3D faces are off) faces are still.
+  if (sharedEnv === browserEnv && !faceRendererAllowed()) return null
   let env: FaceRendererEnv | null = null
   let renderer: FaceRenderer | null = null
   try {
