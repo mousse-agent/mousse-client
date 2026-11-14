@@ -433,6 +433,9 @@ export function isUnreachable(error: unknown): boolean {
   return value.unreachable === true || (typeof value.code === 'string' && UNREACHABLE.has(value.code))
 }
 
+/** What a computer answered to a request to open a folder as a project. */
+export type OpenProjectResult = { ok: true; project: Project } | { ok: false; error: string }
+
 export interface ComputerSession {
   readonly nodeId: string
   state(): SessionState
@@ -444,6 +447,11 @@ export interface ComputerSession {
   listProjects(): Promise<Project[]>
   listThreads(filter?: { projectId?: string; query?: string }): Promise<ThreadSummary[]>
   createThread(input: { projectId: string; title?: string; worktreeEnabled?: boolean }): Promise<ThreadSummary>
+  /**
+   * Asks the computer to open one of its folders, named by its full path, as a project (`projects.open`).
+   * The computer checks the path and answers why it refuses; a failed call throws.
+   */
+  openProject?(path: string): Promise<OpenProjectResult>
   /**
    * Calls onItems with the full item list, and the thread's display state when the session knows
    * it, on open and after every change. Returns an unsubscribe.

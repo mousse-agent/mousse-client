@@ -5,7 +5,7 @@
 // stay owned by the theme CSS in tokens.css.
 import { Capacitor } from '@capacitor/core'
 import { StatusBar, Style } from '@capacitor/status-bar'
-import { buildAccentCssVars } from './accentPalette'
+import { buildAccentCssVars, parseHex } from './accentPalette'
 
 export type ThemePreference = 'mousse-dark' | 'light' | 'system'
 /** The value written to html[data-theme]; names match the desktop theme ids. */
@@ -74,6 +74,33 @@ const THEME_OWNED_VARS = [
 
 const STORAGE_KEY = 'mousse.appearance'
 
+/** The dark and light inks an icon on a solid accent fill can take. */
+export const ACCENT_INKS = { dark: '#15121b', light: '#ffffff' } as const
+
+function luminance(hex: string): number {
+  const rgb = parseHex(hex)
+  if (!rgb) return 0
+  const channel = (value: number) => {
+    const c = value / 255
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  }
+  return 0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b)
+}
+
+/** WCAG contrast ratio of two colours. */
+export function contrastRatio(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+  return (hi + 0.05) / (lo + 0.05)
+}
+
+/**
+ * The ink for an icon drawn on the accent itself (the home dock's create button): whichever of the
+ * dark and light inks stands out more. The fill is the accent in every theme, so the theme does not change it.
+ */
+export function accentInk(accent: string): string {
+  return contrastRatio(accent, ACCENT_INKS.dark) >= contrastRatio(accent, ACCENT_INKS.light) ? ACCENT_INKS.dark : ACCENT_INKS.light
+}
+
 export function loadAppearance(): Appearance {
   try {
     const raw = globalThis.localStorage?.getItem(STORAGE_KEY)
@@ -105,6 +132,7 @@ export function applyAppearance(appearance: Appearance, root: HTMLElement = docu
   for (const [name, value] of Object.entries(buildAccentCssVars(appearance.accentColor))) {
     root.style.setProperty(name, value)
   }
+  root.style.setProperty('--accent-ink', accentInk(appearance.accentColor))
   for (const name of THEME_OWNED_VARS) root.style.removeProperty(name)
   const surfaces = theme === 'light' ? LIGHT_SURFACE_VARS : MOUSSE_DARK_SURFACES
   for (const [name, value] of Object.entries(surfaces)) root.style.setProperty(name, value)

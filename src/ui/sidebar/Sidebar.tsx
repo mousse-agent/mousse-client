@@ -1,7 +1,7 @@
-// The phone's version of the desktop sidebar: the Projects / Threads / Chats tab pill and the three
-// lists, drawn from a computer's live lists. Rows, status icons and colours follow
+// The phone's version of the desktop sidebar: the three lists of the Projects / Threads / Chats tabs
+// (the tab pill itself is in the home dock, HomeDock.tsx), drawn from a computer's live lists. Rows, status icons and colours follow
 // mousse/src/renderer/components/ThreadsSidebar.tsx and chats/ChatsSidebar.tsx.
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import '../bots/bots.css'
 import type { ListBot } from '../../connection/bots'
 import type { ComputerLists, ListChat, ListProject, ListThread, ThreadStatus } from '../../connection/types'
@@ -12,82 +12,25 @@ import {
   CircleAlert,
   CircleCheck,
   Folder,
-  FolderKanban,
   FolderOpen,
   GitBranch,
-  ListTree,
   Loader2,
   MessageSquarePlus,
-  MessagesSquare,
   Monitor,
   Pin,
-  Plus,
-  type IconComponent,
 } from '../components/icons'
-import { IconButton, SearchField, SectionHeading } from '../components/primitives'
+import { SearchField, SectionHeading } from '../components/primitives'
 import {
   chatColor,
   chatPreview,
   PROJECT_PREVIEW_LIMIT,
   projectHue,
   projectInitials,
-  SIDEBAR_TABS,
   sidebarModel,
   threadAge,
   type SidebarTab,
 } from './model'
 import './sidebar.css'
-
-const TAB_META: Record<SidebarTab, { label: string; icon: IconComponent }> = {
-  projects: { label: 'Projects', icon: FolderKanban },
-  threads: { label: 'Threads', icon: ListTree },
-  chats: { label: 'Chats', icon: MessagesSquare },
-}
-
-/** The desktop's segmented tab pill: icon-only tabs, the active one raised with its label. */
-export function SidebarTabs({ value, onChange }: { value: SidebarTab; onChange(tab: SidebarTab): void }) {
-  const refs = useRef<Record<string, HTMLButtonElement | null>>({})
-  const move = (event: KeyboardEvent<HTMLDivElement>) => {
-    const index = SIDEBAR_TABS.indexOf(value)
-    const next =
-      event.key === 'ArrowRight' ? SIDEBAR_TABS[(index + 1) % SIDEBAR_TABS.length]
-      : event.key === 'ArrowLeft' ? SIDEBAR_TABS[(index + SIDEBAR_TABS.length - 1) % SIDEBAR_TABS.length]
-      : event.key === 'Home' ? SIDEBAR_TABS[0]
-      : event.key === 'End' ? SIDEBAR_TABS[SIDEBAR_TABS.length - 1]
-      : undefined
-    if (!next) return
-    event.preventDefault()
-    onChange(next)
-    refs.current[next]?.focus()
-  }
-  return (
-    <div className="m-sidebar-tabs" role="tablist" aria-label="Sidebar view" onKeyDown={move}>
-      {SIDEBAR_TABS.map((tab) => {
-        const { label, icon: Icon } = TAB_META[tab]
-        const active = tab === value
-        return (
-          <button
-            key={tab}
-            ref={(element) => { refs.current[tab] = element }}
-            type="button"
-            role="tab"
-            id={`m-sidebar-tab-${tab}`}
-            aria-selected={active}
-            aria-controls={`m-sidebar-panel-${tab}`}
-            aria-label={label}
-            title={label}
-            tabIndex={active ? 0 : -1}
-            className={`m-sidebar-tab${active ? ' is-active' : ''}`}
-            onClick={() => onChange(tab)}
-          >
-            <Icon size={17} strokeWidth={1.8} />
-            {active && <span>{label}</span>}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
 
 /** The status icon of a compact row (Projects tab). Idle threads show nothing. */
 export function StatusIcon({ status }: { status?: ThreadStatus }) {
@@ -318,18 +261,17 @@ function BotRow({ bot, active, computer, onOpen }: { bot: ListBot; active: boole
 export interface SidebarProps {
   lists: ComputerLists
   tab: SidebarTab
-  onTab(tab: SidebarTab): void
   selectedId?: string
   onOpenThread(thread: ListThread): void
   onOpenChat(chat: ListChat): void
   onNewThread?(project: ListProject): void
   /** Opens a bot's chat; without it the Chats tab lists no bots. */
   onOpenBot?(bot: ListBot): void
-  /** New bot; without it there is no + beside Bots. */
-  onNewBot?(): void
+  /** The home dock's + makes a bot now; the empty Bots line then says so. */
+  canMakeBots?: boolean
   /** The open bot's id. */
   selectedBotId?: string
-  /** Shown above the list, under the tabs: connection notices and the like. */
+  /** Shown above the list, under the search field: connection notices and the like. */
   banner?: ReactNode
   /** For lists merged from several computers: the computer of a row, by its id. Rows then name their computer. */
   computerOf?(id: string): RowComputer | undefined
@@ -346,7 +288,7 @@ function useNow(ms = 30_000): number {
   return now
 }
 
-export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenChat, onNewThread, onOpenBot, onNewBot, selectedBotId, banner, computerOf, order = 'desktop' }: SidebarProps) {
+export function Sidebar({ lists, tab, selectedId, onOpenThread, onOpenChat, onNewThread, onOpenBot, canMakeBots, selectedBotId, banner, computerOf, order = 'desktop' }: SidebarProps) {
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [settledOpen, setSettledOpen] = useState(false)
@@ -391,7 +333,6 @@ export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenCha
   return (
     <div className="m-sidebar">
       <div className="m-sidebar__top">
-        <SidebarTabs value={tab} onChange={onTab} />
         <SearchField value={query} onChange={setQuery} placeholder={tab === 'chats' ? 'Search chats' : 'Search threads'} />
       </div>
       {banner}
@@ -446,7 +387,7 @@ export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenCha
             {onOpenBot && (
               <BotBoundary fallback={<p className="m-sb-empty">Bots can't be shown right now.</p>}>
               <section aria-label="Bots">
-                <SectionHeading action={onNewBot && <IconButton label="New bot" onClick={onNewBot}><Plus size={18} /></IconButton>}>Bots</SectionHeading>
+                <SectionHeading>Bots</SectionHeading>
                 {bots.length > 0 ? (
                   <div className="bot-roster">
                     {bots.map((bot) => (
@@ -459,7 +400,7 @@ export function Sidebar({ lists, tab, onTab, selectedId, onOpenThread, onOpenCha
                     ))}
                   </div>
                 ) : (
-                  <p className="m-sb-empty">{searching ? `No bots match “${query.trim()}”.` : onNewBot ? 'No bots yet. Press + to make one.' : 'No bots yet.'}</p>
+                  <p className="m-sb-empty">{searching ? `No bots match “${query.trim()}”.` : canMakeBots ? 'No bots yet. Press + to make one.' : 'No bots yet.'}</p>
                 )}
               </section>
               </BotBoundary>

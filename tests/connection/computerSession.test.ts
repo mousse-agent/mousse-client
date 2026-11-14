@@ -115,6 +115,16 @@ describe('computer session', () => {
     expect(createCall.params).toEqual({ name: 'New Thread', projectId: 'p1' })
     expect(createCall.idem).toBeTruthy()
     expect(await created).toMatchObject({ id: 't3', title: 'New thread', projectId: 'p1' })
+
+    // A folder on the computer becomes a project; the computer's refusal comes back in its words.
+    const opened = session.openProject('/home/me/code/notes')
+    const openCall = await remote.answer('projects.open', { ok: true, project: { id: 'p9', name: 'notes', path: '/home/me/code/notes' } })
+    expect(openCall.params).toEqual({ path: '/home/me/code/notes' })
+    expect(openCall.idem).toBeTruthy()
+    expect(await opened).toEqual({ ok: true, project: { id: 'p9', name: 'notes', path: '/home/me/code/notes' } })
+    const refused = session.openProject('/')
+    await remote.answer('projects.open', { ok: false, error: 'Pick a folder, not the root of the disk.' })
+    expect(await refused).toEqual({ ok: false, error: 'Pick a folder, not the root of the disk.' })
     session.close()
   })
 

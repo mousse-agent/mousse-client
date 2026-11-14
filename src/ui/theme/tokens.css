@@ -89,6 +89,8 @@
   --ui-focus-layer: linear-gradient(var(--ui-focus-fill), var(--ui-focus-fill));
   --ui-aura-strength: 0.12;
   --ui-on-accent: #15121b;
+  /* The icon ink on a solid accent fill; applyAppearance() picks it for the chosen accent. */
+  --accent-ink: #15121b;
 
   --success: #4fd08a;
   --warning: #f2b84b;
