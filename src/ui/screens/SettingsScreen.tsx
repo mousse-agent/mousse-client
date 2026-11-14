@@ -1,12 +1,36 @@
-import { useId, useState, type ReactNode } from 'react'
+import { useId, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { Computer } from '../../connection/types'
 import { accountEmail, deviceUsage, useAccount, useAutoJoin, useComputers, useConnection } from '../hooks/connection'
 import { useAppearance } from '../hooks/useAppearance'
 import { useRouter } from '../state/router'
 import { ACCENT_COLORS, type ThemePreference } from '../theme/appearance'
-import { Check, ChevronLeft, ChevronRight, Info, LogOut, Monitor, Palette, QrCode, Smartphone, User, type IconComponent } from '../components/icons'
+import { Bot, Check, ChevronLeft, ChevronRight, Info, LogOut, Monitor, Palette, QrCode, Smartphone, User, type IconComponent } from '../components/icons'
 import { Button, IconButton, MousseLogo, Notice, Segmented, StatusDot, TopBar } from '../components/primitives'
 import { AddPhoneSheet } from './AddPhoneSheet'
+import { faceGuardTripped, faceMode, setFaceMode, subscribeFaceGuard, type FaceMode } from '../bots/face/faceGuard'
+
+/** 3D bot faces or still ones. The app picks still by itself when 3D faces stopped it last time. */
+function BotFacesSection() {
+  const mode = useSyncExternalStore(subscribeFaceGuard, faceMode, faceMode)
+  const tripped = useSyncExternalStore(subscribeFaceGuard, faceGuardTripped, faceGuardTripped)
+  return (
+    <SettingsGroup title="Bots" icon={Bot}>
+      <SettingsRow
+        title="Bot faces"
+        description={tripped
+          ? 'Switched to still faces because the 3D faces stopped the app on this phone.'
+          : 'Still faces use less of the phone.'}
+      >
+        <Segmented<FaceMode>
+          label="Bot faces"
+          value={mode}
+          onChange={(next) => void setFaceMode(next)}
+          options={[{ value: 'live', label: '3D' }, { value: 'still', label: 'Still' }]}
+        />
+      </SettingsRow>
+    </SettingsGroup>
+  )
+}
 
 /** Online, or when the device was last seen. */
 export function lastSeen(device: Computer, now = Date.now()): string {
@@ -184,6 +208,8 @@ export function SettingsScreen() {
             </div>
           </SettingsRow>
         </SettingsGroup>
+
+        <BotFacesSection />
 
         <SettingsGroup title="About" icon={Info}>
           <SettingsRow leading={<MousseLogo size={22} />} title="Mousse for phones" control={<span className="m-set-row__value">Version {__APP_VERSION__}</span>} />
