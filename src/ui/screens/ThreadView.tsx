@@ -7,7 +7,7 @@ import { planApprovalText } from '../timeline/context'
 import { ThreadComposer } from '../components/ThreadComposer'
 import { QueuedMessages } from '../components/QueuedMessages'
 import { MousseLogoOutline } from '../components/MousseLogoOutline'
-import { Notice, Spinner } from '../components/primitives'
+import { Button, Notice, Spinner } from '../components/primitives'
 import { SpeechProvider } from '../speech/readAloud'
 
 export interface ThreadViewProps {
@@ -124,7 +124,14 @@ export function ThreadView({ session, threadId, onActivityChange, computerName }
         <div className="m-transcript" role="log" aria-live="polite" aria-busy={thread.active || undefined}>
           {thread.loading && <div className="m-loading m-loading--late"><Spinner label="Loading thread" /></div>}
           {thread.loadingEarlier && <div className="m-loading"><Spinner label="Loading earlier messages" /></div>}
-          {!thread.loading && thread.items.length === 0 && (
+          {!thread.loading && thread.openError && thread.items.length === 0 && (
+            <div className="m-empty" role="alert">
+              <h2 className="m-empty__title">Could not open this thread</h2>
+              <p className="m-empty__body">{thread.openError}</p>
+              <div className="m-empty__actions"><Button onClick={thread.retry}>Try again</Button></div>
+            </div>
+          )}
+          {!thread.loading && !thread.openError && thread.items.length === 0 && (
             <div className="m-start-hero">
               <MousseLogoOutline className="m-new-thread__logo" />
               <h2 className="m-new-thread__title">What should we build?</h2>

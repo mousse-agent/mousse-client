@@ -20,9 +20,22 @@ export interface ThreadState {
   loadEarlier?: () => Promise<void>
   /** True while a page of older messages is on its way. */
   loadingEarlier: boolean
+  /** Why the thread could not be opened, when nothing of it could be shown; `retry` opens it again. */
+  openError?: string
+  retry(): void
 }
 
 const NO_DISPLAY: ThreadDisplayState = { questions: [] }
+
+/**
+ * Why an open failed, in words for the reader. An older computer answered a failed read of a thread
+ * with "may have partly happened", which is never true of a read.
+ */
+function openErrorMessage(cause: unknown): string {
+  if ((cause as { code?: unknown } | undefined)?.code === 'outcome_uncertain')
+    return 'The computer could not read it. Updating Mousse on the computer may fix this.'
+  return errorMessage(cause)
+}
 const WORKING_PHASES = new Set(['queued', 'thinking', 'streaming', 'tool_running', 'finalizing'])
 
 /** An older computer refuses the answer methods; say where to answer instead. */
@@ -43,6 +56,9 @@ export function useThread(session: ComputerSession | undefined, threadId: string
   const [display, setDisplay] = useState<ThreadDisplayState>(NO_DISPLAY)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
+  const [openError, setOpenError] = useState<string>()
+  /** Bumped by `retry` to open the thread again. */
+  const [attempt, setAttempt] = useState(0)
   const [remoteActive, setRemoteActive] = useState(false)
   const [pending, setPending] = useState(false)
   const [sending, setSending] = useState(false)
@@ -69,6 +85,7 @@ export function useThread(session: ComputerSession | undefined, threadId: string
     let cancelled = false
     setLoading(true)
     setError(undefined)
+    setOpenError(undefined)
     setItems([])
     setDisplay(NO_DISPLAY)
     session.openThread(threadId, (next, state) => {
@@ -85,7 +102,7 @@ export function useThread(session: ComputerSession | undefined, threadId: string
     }).then((unsub) => {
       if (cancelled) unsub()
       else { unsubscribe = unsub; setLoading(false) }
-    }, (cause) => { if (!cancelled) { setError(errorMessage(cause)); setLoading(false) } })
+    }, (cause) => { if (!cancelled) { setOpenError(openErrorMessage(cause)); setLoading(false) } })
     askActive(0)
     return () => {
       cancelled = true
@@ -93,7 +110,8 @@ export function useThread(session: ComputerSession | undefined, threadId: string
       clearTimeout(recheck.current)
       unsubscribe?.()
     }
-  }, [session, threadId, askActive])
+  }, [session, threadId, askActive, attempt])
+  const retry = useCallback(() => setAttempt((value) => value + 1), [])
 
   const itemCount = useRef(0)
   itemCount.current = items.length
@@ -178,6 +196,8 @@ export function useThread(session: ComputerSession | undefined, threadId: string
     send,
     stop,
     loadingEarlier,
+    ...(openError ? { openError } : {}),
+    retry,
     ...(session?.loadEarlier ? { loadEarlier } : {}),
     ...(session?.answerQuestions ? { answer } : {}),
     ...(session?.dismissQuestions ? { dismiss } : {}),
