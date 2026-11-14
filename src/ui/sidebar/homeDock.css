@@ -6,8 +6,11 @@
 
 .m-home {
   --m-dock-size: 52px;
+  /* Below the dock: the home indicator's inset plus a gap, and never less than an Android gesture bar needs,
+     since an edge-to-edge Android WebView can report no bottom inset while the bar is drawn over the page. */
+  --m-dock-lift: max(calc(12px + var(--safe-bottom)), 24px);
   /* From the bottom of the screen to the top of the dock. */
-  --m-dock-space: calc(var(--m-dock-size) + 12px + var(--safe-bottom));
+  --m-dock-space: calc(var(--m-dock-size) + var(--m-dock-lift));
   position: relative;
   flex: 1;
   min-height: 0;
@@ -17,8 +20,8 @@
 /* The last row can scroll clear of the dock; rows fade as they pass under it, as the transcript does above the composer. */
 .m-home[data-dock] .m-content { padding-bottom: calc(var(--m-dock-space) + 20px); }
 .m-home[data-dock] .m-home__scroll {
-  -webkit-mask-image: linear-gradient(#000 calc(100% - var(--m-dock-space) - 4px), transparent calc(100% - var(--safe-bottom) - 20px));
-  mask-image: linear-gradient(#000 calc(100% - var(--m-dock-space) - 4px), transparent calc(100% - var(--safe-bottom) - 20px));
+  -webkit-mask-image: linear-gradient(#000 calc(100% - var(--m-dock-space) - 4px), transparent calc(100% - var(--m-dock-lift) - 12px));
+  mask-image: linear-gradient(#000 calc(100% - var(--m-dock-space) - 4px), transparent calc(100% - var(--m-dock-lift) - 12px));
 }
 /* With the keyboard up (searching) the dock steps away, so results run to the keyboard. */
 html[data-keyboard='open'] .m-home[data-dock] .m-home__scroll { -webkit-mask-image: none; mask-image: none; }
@@ -33,7 +36,7 @@ html[data-keyboard='open'] .m-home[data-dock] .m-home__scroll { -webkit-mask-ima
   align-items: center;
   justify-content: center;
   gap: 10px;
-  padding: 0 16px calc(12px + var(--safe-bottom));
+  padding: 0 16px var(--m-dock-lift);
   pointer-events: none;
   transition: opacity 160ms ease, transform 160ms ease, visibility 0s linear 0s;
 }
