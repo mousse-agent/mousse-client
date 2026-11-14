@@ -2,6 +2,7 @@
 // bridge RPCs (projects.list, threads.*, orchestrator.*, bridge.thread.open) and its signed thread
 // display stream.
 import { SessionBots, type ComputerBots } from './bots'
+import { SessionThreadActions, type ThreadActions } from './threadActions'
 import { newId } from '../net/canonical'
 import { equalBytes, fromB64url, fromUtf8 } from '../net/bytes'
 import { sha256 } from '../net/crypto'
@@ -550,6 +551,7 @@ export class RealComputerSession implements ComputerSession {
   readonly nodeId: string
   readonly speech: ComputerSpeech
   readonly bots: ComputerBots
+  readonly threadMenu: ThreadActions
   private readonly leaf: SessionLink
   private readonly watches = new Map<string, WatchEntry>()
   /** Runs this phone started, by thread: the `orchestrator.send` RPC id that `orchestrator.abort` names. */
@@ -573,6 +575,7 @@ export class RealComputerSession implements ComputerSession {
     this.cache = options.threadCache
     this.speech = new LeafComputerSpeech((method, params, rpcOptions) => this.leaf.rpc(method, params, rpcOptions))
     this.bots = new SessionBots((method, params, rpcOptions) => this.leaf.rpc(method, params, rpcOptions))
+    this.threadMenu = new SessionThreadActions((method, params, rpcOptions) => this.leaf.rpc(method, params, rpcOptions))
     const decide = (error?: Error) => {
       this.ended ??= options.endReason?.(error) ?? 'ended'
       this.endedWith ??= shortMessage(error)

@@ -24,7 +24,7 @@ describe('thread list', () => {
     expect(screen.getByText('Relay reconnect backoff').closest('button')).toHaveTextContent('Done')
     expect(screen.getByText('Fetch extra Kokoro voices on first use').closest('button')).toHaveTextContent('Waiting')
     expect(screen.queryByText('Swap lucide for Hugeicons')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: /Settled/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Archived/ }))
     expect(screen.getByText('Swap lucide for Hugeicons')).toBeInTheDocument()
 
     // Projects: tap a project to see its threads.

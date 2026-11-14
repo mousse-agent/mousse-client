@@ -217,7 +217,7 @@
 }
 .m-sb-empty { margin: 0; padding: 10px; color: var(--ui-faint); font-size: 14px; }
 
-/* Collapsible sections (Settled, Recent chats). */
+/* Collapsible sections (Archived, Recent chats). */
 .m-sb-section { margin-top: 10px; }
 .m-sb-section__toggle {
   display: flex;
@@ -323,3 +323,20 @@
   .m-sb-row.is-active::before,
   .m-chat-row.is-active::before { animation: none; opacity: 0; }
 }
+
+/* Press and hold opens a thread's options: no text selection, callout or link preview on the rows. */
+.m-sb-card,
+.m-sb-row {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* The thread options sheet (ThreadOptionsSheet.tsx), in the composer sheets' option rows. */
+.m-thread-option:disabled { opacity: 0.45; }
+.m-thread-option[aria-busy='true'] { opacity: 1; }
+.m-thread-option--danger .m-option__leading,
+.m-thread-option--danger .m-option__title { color: var(--danger); }
+.m-thread-option__chevron { flex: none; color: var(--text-secondary); }
+.m-thread-rename { display: flex; flex-direction: column; gap: 12px; }
+.m-options-notice { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

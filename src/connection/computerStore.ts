@@ -1,7 +1,7 @@
 // One computer as the phone's screens see it: the shared session, its connection state, and the
 // lists (projects, threads, chats, run status). Lists come from memory first, then from what the
 // phone saved last time, and then live from the computer, so screens never wait to draw them.
-import type { ComputerLists, ComputerSession, ListsState, SessionEndReason } from './types'
+import type { ComputerLists, ComputerSession, ListsState, ListThread, SessionEndReason } from './types'
 import { isUnreachable } from './types'
 import type { NetworkSignals } from './networkSignals'
 import { parseBots } from './bots'
@@ -230,6 +230,23 @@ export class ComputerStore {
     if (this.current.link === 'closed' || this.current.link === 'error' || waiting) {
       this.attempts = 0
       this.connect()
+    }
+  }
+
+  /**
+   * Shows a change to one thread at once, before the computer's lists confirm it; the next lists from the computer
+   * replace it. Returns a function that puts the thread back as it was, for a change the computer refused.
+   */
+  updateThread(threadId: string, patch: Partial<Omit<ListThread, 'id'>>): () => void {
+    const lists = this.current.lists
+    const before = lists?.threads.find((thread) => thread.id === threadId)
+    if (!lists || !before) return () => undefined
+    this.set({ lists: { ...lists, threads: lists.threads.map((thread) => (thread.id === threadId ? { ...thread, ...patch } : thread)) } })
+    return () => {
+      const now = this.current.lists
+      // Only while the computer has not sent lists since: those already say how the thread is.
+      if (now && now.threads.find((thread) => thread.id === threadId) !== before && now.receivedAt === lists.receivedAt)
+        this.set({ lists: { ...now, threads: now.threads.map((thread) => (thread.id === threadId ? before : thread)) } })
     }
   }
 

@@ -32,6 +32,7 @@ import type {
 } from '../../connection/types'
 import { SHOWCASE_LIVE_THREAD_ID, SHOWCASE_THREAD_ID, showcaseItems, showcaseLiveItems, showcaseQuestions } from './timelineShowcase'
 import { FakeComputerSpeech } from './fakeSpeech'
+import type { ThreadActions, ThreadActionSupport } from '../../connection/threadActions'
 
 export interface FakeConnectionOptions {
   /** Start signed in as demo@mousse.dev. */
@@ -87,6 +88,8 @@ function initialThreads(): ThreadSummary[] {
     { id: 't-voices', projectId: 'p-mousse', title: 'Fetch extra Kokoro voices on first use', updatedAt: BASE_TIME - 3 * 3_600_000 },
     { id: 't-landing', projectId: 'p-site', title: 'Landing page copy', updatedAt: BASE_TIME - 26 * 3_600_000 },
     { id: 't-icons', projectId: 'p-client', title: 'Swap lucide for Hugeicons', updatedAt: BASE_TIME - 50 * 3_600_000, settled: true },
+    // No project: listed under the Projects tab's Recent chats.
+    { id: 't-scratch', title: 'Scratch notes', updatedAt: BASE_TIME - 60 * 3_600_000 },
     { id: SHOWCASE_THREAD_ID, projectId: 'p-mousse', title: 'Timeline showcase', updatedAt: BASE_TIME - 80 * 3_600_000 },
     { id: SHOWCASE_LIVE_THREAD_ID, projectId: 'p-mousse', title: 'Live turn showcase', updatedAt: BASE_TIME - 81 * 3_600_000 }
   ]
@@ -201,12 +204,16 @@ export class FakeSession implements ComputerSession {
   readonly speech = new FakeComputerSpeech()
   /** The owner's bots on this computer. */
   readonly bots = new FakeBots(() => this.emitLists())
+  /** The thread menu: rename, pin, archive, regenerate title, delete after. */
+  readonly threadMenu: FakeThreadMenu
   /** Every send, queued message and steer, with its options, for tests. */
   readonly sent: Array<{ kind: 'send' | 'queue' | 'steer'; threadId: string; text: string; options?: SendOptions }> = []
   /** What each new thread was created with, for tests. */
   readonly created: Array<{ projectId: string; title?: string; worktreeEnabled?: boolean }> = []
 
-  constructor(readonly nodeId: string, private threads: ThreadSummary[], private opts: Required<Omit<FakeConnectionOptions, 'now' | 'email'>>) {}
+  constructor(readonly nodeId: string, private threads: ThreadSummary[], private opts: Required<Omit<FakeConnectionOptions, 'now' | 'email'>>, menuSupport: ThreadActionSupport = { regenerateTitle: true, expiry: true }) {
+    this.threadMenu = new FakeThreadMenu(threads, menuSupport, opts.latencyMs, () => this.emitLists())
+  }
 
   watchLists(handlers: ListsHandlers): () => void {
     this.listWatchers.add(handlers)
@@ -240,7 +247,8 @@ export class FakeSession implements ComputerSession {
         order,
         pinned: !!thread.pinned,
         settled: !!thread.settled,
-        started: true
+        started: true,
+        ...this.threadMenu.expiryOf(thread.id)
       })),
       chats,
       bots: this.bots.list(),
@@ -671,12 +679,21 @@ export class FakeMousseConnection implements MousseConnection {
     if (!computer.enrolled) throw new Error(`Add this phone to ${computer.name} first.`)
     let threads = this.threadsByNode.get(nodeId)
     if (!threads) this.threadsByNode.set(nodeId, (threads = initialThreads()))
-    this.lastSession = new FakeSession(nodeId, threads, this.opts)
+    this.lastSession = new FakeSession(nodeId, threads, this.opts, this.menuSupport.get(nodeId))
+    this.sessions.set(nodeId, this.lastSession)
     return this.lastSession
+  }
+
+  private readonly menuSupport = new Map<string, ThreadActionSupport>()
+  /** What a computer's thread menu offers phones, for tests: an older Mousse offers neither extra. Applies to the next session. */
+  setThreadMenuSupport(nodeId: string, support: ThreadActionSupport): void {
+    this.menuSupport.set(nodeId, support)
   }
 
   /** The most recently opened session, for tests. */
   lastSession?: FakeSession
+  /** The latest session of each computer, for tests. */
+  readonly sessions = new Map<string, FakeSession>()
 
   private async runStages(onProgress: (progress: EnrollmentProgress) => void): Promise<void> {
     onProgress({ stage: 'requesting' })
@@ -709,4 +726,70 @@ export class FakeMousseConnection implements MousseConnection {
 
 export function createFakeConnection(options?: FakeConnectionOptions): MousseConnection {
   return new FakeMousseConnection(options)
+}
+
+/** Generated titles the demo's Regenerate title picks from, in turn. */
+const DEMO_TITLES = ['Tidy the thread list', 'Hold a thread for its options', 'Phone menu for threads']
+
+/** The demo computer's thread menu: changes its threads as the computer would and sends new lists. */
+export class FakeThreadMenu implements ThreadActions {
+  /** Every call, for tests. */
+  readonly calls: Array<{ method: string; threadId: string; value?: unknown }> = []
+  /** The next call fails with this message, for tests. */
+  failNext?: string
+  private readonly expiry = new Map<string, { expiresAt: string; stopsRun: boolean }>()
+  private titles = 0
+
+  constructor(private readonly threads: ThreadSummary[], private readonly supported: ThreadActionSupport, private readonly latencyMs: number, private readonly changed: () => void) {}
+
+  support(): Promise<ThreadActionSupport> {
+    return Promise.resolve({ ...this.supported })
+  }
+
+  expiryOf(threadId: string): { expiresAt?: string; expiryStopsRun?: boolean } {
+    const entry = this.expiry.get(threadId)
+    return entry ? { expiresAt: entry.expiresAt, ...(entry.stopsRun ? { expiryStopsRun: true } : {}) } : {}
+  }
+
+  private async change(method: string, threadId: string, value: unknown, apply: (thread: ThreadSummary) => void, delayMs = this.latencyMs): Promise<void> {
+    this.calls.push({ method, threadId, ...(value !== undefined ? { value } : {}) })
+    await sleep(delayMs)
+    if (this.failNext) {
+      const message = this.failNext
+      this.failNext = undefined
+      throw new Error(message)
+    }
+    const thread = this.threads.find((entry) => entry.id === threadId)
+    if (!thread) throw new Error('This thread is gone from the computer.')
+    apply(thread)
+    this.changed()
+  }
+
+  rename(threadId: string, name: string): Promise<void> {
+    const trimmed = name.trim()
+    if (!trimmed) return Promise.reject(new Error('Write a name first.'))
+    return this.change('threads.rename', threadId, trimmed, (thread) => { thread.title = trimmed })
+  }
+
+  pin(threadId: string, pinned: boolean): Promise<void> {
+    return this.change('threads.pin', threadId, pinned, (thread) => { thread.pinned = pinned })
+  }
+
+  settle(threadId: string, settled: boolean): Promise<void> {
+    return this.change('threads.settle', threadId, settled, (thread) => { thread.settled = settled })
+  }
+
+  regenerateTitle(threadId: string): Promise<void> {
+    if (!this.supported.regenerateTitle) return Promise.reject(new Error('unknown_method'))
+    // The title model takes a moment.
+    return this.change('threads.regenerateTitle', threadId, undefined, (thread) => { thread.title = DEMO_TITLES[this.titles++ % DEMO_TITLES.length]! }, this.latencyMs + 900)
+  }
+
+  setExpiry(threadId: string, expiresAt: string | null, stopsRun: boolean): Promise<void> {
+    if (!this.supported.expiry) return Promise.reject(new Error('unknown_method'))
+    return this.change('threads.setExpiry', threadId, expiresAt, () => {
+      if (expiresAt) this.expiry.set(threadId, { expiresAt, stopsRun })
+      else this.expiry.delete(threadId)
+    })
+  }
 }

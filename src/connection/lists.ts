@@ -54,7 +54,15 @@ export function listThread(value: unknown): ListThread | undefined {
     // The desktop hides empty drafts: never sent to, still under their default name.
     started: !!value.startedAt || (!!name && !/^new (thread|chat)$/i.test(name)),
     ...(value.worktreeEnabled === true ? { worktree: true } : {}),
+    ...expiryOf(value),
   }
+}
+
+/** When a thread deletes itself (`Thread.expiresAt`), from computers that list it; a time that is not one is ignored. */
+function expiryOf(value: Record<string, unknown>): Pick<ListThread, 'expiresAt' | 'expiryStopsRun'> {
+  const at = typeof value.expiresAt === 'string' && time(value.expiresAt) !== undefined ? value.expiresAt : undefined
+  if (!at) return {}
+  return { expiresAt: at, ...(value.expiryStopsRun === true ? { expiryStopsRun: true } : {}) }
 }
 
 function status(value: unknown): ThreadStatus | undefined {

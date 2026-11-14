@@ -49,6 +49,8 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- A light tick when a thread's options open on press and hold (navigator.vibrate in the WebView). -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Dictation: the composer's microphone. Android asks the first time it records. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
