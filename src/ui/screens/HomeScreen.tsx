@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { ComputerView } from '../../connection/computerStore'
 import { deviceNetworkSignals } from '../../connection/networkSignals'
 import type { ListBot } from '../../connection/bots'
@@ -15,10 +15,13 @@ import { mergedKey, mergeLists, savedTab, saveTab, splitKey, type SidebarTab } f
 import { loadLastComputer, saveLastComputer } from '../lib/composerPrefs'
 import { threadComputers } from '../lib/newThread'
 import { ThreadView } from './ThreadView'
-import { BotAboutSheet, BotChat } from '../bots/BotChat'
-import { NewBotSheet } from '../bots/NewBotSheet'
 import { BotHeader } from '../bots/BotHeader'
 import { BotBoundary } from '../bots/BotBoundary'
+
+// A bot's chat and the New bot sheet load the first time they open, so the app and its Chats tab start without them.
+const BotChat = lazy(() => import('../bots/BotChat').then((module) => ({ default: module.BotChat })))
+const BotAboutSheet = lazy(() => import('../bots/BotChat').then((module) => ({ default: module.BotAboutSheet })))
+const NewBotSheet = lazy(() => import('../bots/NewBotSheet').then((module) => ({ default: module.NewBotSheet })))
 
 /** How often the home screen reads the account's computers again, to notice one coming online. */
 export const COMPUTERS_REFRESH_MS = 30_000
@@ -349,7 +352,10 @@ function ThreadPane({ nodeId, threadId, name, wide }: { nodeId: string; threadId
 
 function NewBotHost({ open, nodeId, computerName, onClose, onCreated }: { open: boolean; nodeId: string; computerName?: string; onClose(): void; onCreated(bot: ListBot): void }) {
   const { session, lists } = useComputer(nodeId)
-  return <BotBoundary resetKey={open}><NewBotSheet open={open} computerName={computerName} bots={session?.bots} existing={lists?.bots ?? []} onClose={onClose} onCreated={onCreated} /></BotBoundary>
+  const [opened, setOpened] = useState(open)
+  useEffect(() => { if (open) setOpened(true) }, [open])
+  if (!opened && !open) return null
+  return <BotBoundary resetKey={open}><Suspense fallback={null}><NewBotSheet open={open} computerName={computerName} bots={session?.bots} existing={lists?.bots ?? []} onClose={onClose} onCreated={onCreated} /></Suspense></BotBoundary>
 }
 
 /** One bot's chat on its computer, or why it cannot open. */
@@ -376,10 +382,14 @@ function BotPane({ nodeId, botId, name, labelled, wide }: { nodeId: string; botI
       <BotBoundary resetKey={botId} fallback={(retry) => (
         <div className="m-scroll"><div className="m-content"><Notice>{`Couldn't show ${bot.name}'s chat.`}</Notice><Button onClick={retry}>Try again</Button></div></div>
       )}>
-        <BotChat bot={bot} bots={session.bots} />
+        <Suspense fallback={<div className="m-scroll"><div className="m-content"><div className="m-loading"><Spinner label="Loading" /></div></div></div>}>
+          <BotChat bot={bot} bots={session.bots} />
+        </Suspense>
       </BotBoundary>
       <BotBoundary resetKey={about}>
-        <BotAboutSheet open={about} bot={bot} bots={session.bots} onClose={() => setAbout(false)} onError={setError} />
+        <Suspense fallback={null}>
+          <BotAboutSheet open={about} bot={bot} bots={session.bots} onClose={() => setAbout(false)} onError={setError} />
+        </Suspense>
       </BotBoundary>
     </>
   } else {
