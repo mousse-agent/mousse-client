@@ -8,6 +8,7 @@ import { HomeScreen } from './screens/HomeScreen'
 import { NewThreadScreen } from './screens/NewThreadScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { SelectionReplyButton } from './components/SelectionReplyButton'
 import './theme/fonts.css'
 import './theme/tokens.css'
 import './theme/app.css'
@@ -43,7 +44,7 @@ export function App({ connection, initialRoutes, joinOptions }: AppProps) {
   return (
     <AppearanceProvider>
       <ConnectionProvider connection={connection} joinOptions={joinOptions}>
-        <div className="m-app"><ErrorBoundary what="Mousse"><Gate initialRoutes={initialRoutes} /></ErrorBoundary></div>
+        <div className="m-app"><ErrorBoundary what="Mousse"><Gate initialRoutes={initialRoutes} /><SelectionReplyButton /></ErrorBoundary></div>
       </ConnectionProvider>
     </AppearanceProvider>
   )

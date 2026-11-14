@@ -9,6 +9,8 @@ import { QueuedMessages } from '../components/QueuedMessages'
 import { MousseLogoOutline } from '../components/MousseLogoOutline'
 import { Button, Notice, Spinner } from '../components/primitives'
 import { SpeechProvider } from '../speech/readAloud'
+import { ShowQuotedContext } from '../components/SentQuotes'
+import { QUOTE_SOURCE_ATTRIBUTE } from '../components/SelectionReplyButton'
 
 export interface ThreadViewProps {
   session: ComputerSession
@@ -25,6 +27,8 @@ export interface ThreadViewProps {
  * closer; this keeps it clear of the 80px follow threshold, so the composer never unfolds again there.
  */
 const COMPOSER_FOLD_DISTANCE = 160
+
+const nextFrame = () => new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()) })
 
 export function ThreadView({ session, threadId, onActivityChange, computerName }: ThreadViewProps) {
   const thread = useThread(session, threadId)
@@ -94,6 +98,34 @@ export function ThreadView({ session, threadId, onActivityChange, computerName }
 
   useEffect(() => { stick.current = true; setFolded(false) }, [threadId])
 
+  // A sent reply's quote goes to the message it quoted; one not loaded yet is loaded first, page by page, as the
+  // bot chat's quotes do.
+  const latest = useRef(thread)
+  latest.current = thread
+  const showQuoted = useCallback(async (id: string) => {
+    const find = () => scroller.current?.querySelector<HTMLElement>(`[data-item-id="${CSS.escape(id)}"]`) ?? null
+    let element = find()
+    for (let pages = 0; !element && pages < 40; pages += 1) {
+      const before = latest.current
+      if (!before.loadEarlier || before.display.earlier?.loadable !== true || before.items.some((item) => item.id === id)) break
+      const first = before.items[0]?.id
+      await before.loadEarlier()
+      for (let frame = 0; frame < 10 && latest.current.items[0]?.id === first; frame += 1) await nextFrame()
+      if (latest.current.items[0]?.id === first) break
+      element = find()
+    }
+    for (let frame = 0; frame < 10 && !(element = find()); frame += 1) await nextFrame()
+    if (!element) return
+    stick.current = false
+    setAway(true)
+    element.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    element.classList.remove('is-shown')
+    void element.offsetWidth
+    element.classList.add('is-shown')
+    window.setTimeout(() => element!.classList.remove('is-shown'), 1400)
+  }, [])
+  const onShowQuoted = useCallback((id: string) => { void showQuoted(id) }, [showQuoted])
+
   // The view shrinks when the composer unfolds or grows (or the keyboard opens): a reader at the end stays there.
   useEffect(() => {
     const element = scroller.current
@@ -105,10 +137,12 @@ export function ThreadView({ session, threadId, onActivityChange, computerName }
 
   return (
     <SpeechProvider speech={session.speech}>
+    <ShowQuotedContext.Provider value={onShowQuoted}>
     <div className="m-thread m-thread--timeline">
       <div
         ref={scroller}
         className="m-thread__scroll"
+        {...{ [QUOTE_SOURCE_ATTRIBUTE]: '' }}
         onScroll={(event) => {
           const element = event.currentTarget
           // Stay pinned within 80px of the bottom, like the desktop.
@@ -159,6 +193,7 @@ export function ThreadView({ session, threadId, onActivityChange, computerName }
         <ThreadComposer session={session} threadId={threadId} thread={thread} queue={queue} addition={addition} computerName={computerName} folded={folded} />
       </div>
     </div>
+    </ShowQuotedContext.Provider>
     </SpeechProvider>
   )
 }

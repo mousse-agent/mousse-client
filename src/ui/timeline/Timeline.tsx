@@ -39,6 +39,7 @@ import { ImageGalleryContext, ImageLightbox } from './ImageLightbox'
 import { AppletCard, AppletPending } from './AppletCard'
 import { ReadAloudButton as ComputerReadAloudButton, useComputerSpeech } from '../speech/readAloud'
 import { QuestionPrompt } from './QuestionPrompt'
+import { WithSentQuotes } from '../components/SentQuotes'
 import { DiffStat, PlanCard, Shimmer, Spinner, SubagentGroup, ToolGroup, ToolIcon, ToolItem } from './ToolCards'
 
 // ---- Message actions ----
@@ -183,7 +184,7 @@ const UserMessage = memo(function UserMessage({ item }: { item: ChatItem }) {
   const folded = foldable && !expanded
   const images = item.images ?? []
   return (
-    <div className="m-tl-user" data-testid="chat-item" data-role="user">
+    <div className="m-tl-user" data-testid="chat-item" data-role="user" data-item-id={item.id}>
       {images.length > 0 && (
         <div className="m-tl-user__images">
           {images.map((image, index) =>
@@ -219,7 +220,7 @@ const UserMessage = memo(function UserMessage({ item }: { item: ChatItem }) {
       {item.text.trim() && (
         <div className="m-tl-user__bubble">
           <div ref={textRef} className={`m-tl-user__text${folded ? ' m-tl-user__text--folded' : ''}`}>
-            {item.text}
+            <WithSentQuotes text={item.text} render={(part) => part} />
           </div>
           {foldable && (
             <button type="button" className="m-tl-user__fold" aria-expanded={expanded} onClick={() => setExpanded((open) => !open)}>
@@ -274,7 +275,7 @@ const AssistantMessage = memo(function AssistantMessage({ item, live }: { item: 
   const streaming = item.status === 'streaming' && live
   const showActions = !streaming && !item.incomplete && item.status !== 'streaming' && !!item.text.trim()
   return (
-    <div className="m-tl-assistant" data-testid="chat-item" data-role="assistant" data-status={item.status} aria-busy={streaming || undefined}>
+    <div className="m-tl-assistant" data-testid="chat-item" data-role="assistant" data-item-id={item.id} data-status={item.status} aria-busy={streaming || undefined}>
       {item.parts ? (
         item.parts.map((part, index) =>
           part.type === 'applet' ? (
