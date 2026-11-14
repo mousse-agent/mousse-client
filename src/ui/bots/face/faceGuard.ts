@@ -119,6 +119,12 @@ export function faceMode(): FaceMode {
   return phase === 'off' ? 'still' : 'live'
 }
 
+/** The guard has not decided yet (reading the phone's storage, or saving its mark): faces wait. */
+export function faceGuardWaiting(): boolean {
+  ensureLoaded()
+  return phase === 'loading' || phase === 'idle' || phase === 'arming'
+}
+
 /** True when 3D faces were turned off because they stopped the app last time. */
 export function faceGuardTripped(): boolean {
   return tripped

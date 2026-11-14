@@ -2,7 +2,7 @@
 // under it, and Back and About as round glass buttons at the sides.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { ListBot } from '../../connection/bots'
-import { BotFace, BotFaceStill, type BotFaceState } from './face/BotFace'
+import { BotFace, type BotFaceState } from './face/BotFace'
 import { BotBoundary } from './BotBoundary'
 import './bots.css'
 
@@ -38,7 +38,7 @@ export function BotHeader({ bot, name, computer, leading, trailing }: { bot?: Li
         <div className="bot-header__glass" aria-hidden="true">
           {bot && (
             // The live face, moving as on the desktop: idle, working, needs you, stuck, paused and happy.
-            <BotBoundary resetKey={bot.id} fallback={() => <BotFaceStill look={bot.look} state={pose} size={FACE} view="head" />}>
+            <BotBoundary resetKey={bot.id} fallback={null}>
               <BotFace look={bot.look} state={pose} size={FACE} view="head" />
             </BotBoundary>
           )}

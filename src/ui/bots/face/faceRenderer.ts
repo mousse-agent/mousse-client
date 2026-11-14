@@ -186,6 +186,15 @@ interface Slot {
   changedAt: number
   /** Whether its last frame was the still pose. */
   drawnStill: boolean
+  /** Called once, when the face's first frame is in its canvas. */
+  onDrawn?: () => void
+}
+
+function firstDrawn(slot: Slot): void {
+  const onDrawn = slot.onDrawn
+  if (!onDrawn) return
+  slot.onDrawn = undefined
+  onDrawn()
 }
 
 interface Job {
@@ -294,7 +303,7 @@ export class FaceRenderer {
   }
 
   /** Starts drawing into `canvas`. Null when the canvas has no 2D context or WebGL failed. */
-  register(canvas: HTMLCanvasElement, spec: FaceSpec): FaceHandle | null {
+  register(canvas: HTMLCanvasElement, spec: FaceSpec, onDrawn?: () => void): FaceHandle | null {
     if (this.failed || this.timedOut) return null
     let ctx: CanvasRenderingContext2D | null = null
     try {
@@ -316,7 +325,8 @@ export class FaceRenderer {
       px: 0,
       drawPx: 0,
       changedAt: t,
-      drawnStill: spec.still
+      drawnStill: spec.still,
+      onDrawn
     }
     this.slots.set(canvas, slot)
     this.sizeCanvas(slot)
@@ -554,6 +564,7 @@ export class FaceRenderer {
           slot.ctx.clearRect(0, 0, slot.px, slot.px)
           slot.ctx.drawImage(cached, 0, 0)
           slot.dirty = false
+          firstDrawn(slot)
           continue
         }
         // Two still faces alike on one tick: the second copies the first's frame next tick.
@@ -579,6 +590,8 @@ export class FaceRenderer {
       if (this.measureGpu) this.measure(gpu, () => this.drawJobs(gpu, jobs))
       else this.drawJobs(gpu, jobs)
       if (!this.verified) this.verifyDrawn(jobs[0]!.slot)
+      // Only frames that passed the empty check count as a face's first.
+      if (!this.failed) for (const job of jobs) firstDrawn(job.slot)
       const ms = this.env.now() - started
       this.stat.ticks++
       this.stat.lastFaces = jobs.length
@@ -941,6 +954,11 @@ export function sharedFaceRenderer(): FaceRenderer | null {
     }
   }
   return shared
+}
+
+/** The shader is taking longer than `PENDING_TIMEOUT_MS` but has not failed: faces wait for it. */
+export function sharedFaceRendererCompiling(): boolean {
+  return !!shared && shared.status() === 'failed' && !shared.broken
 }
 
 /** `unavailable` when there is no WebGL at all. Faces draw the still fallback unless it is `pending` or `ready`. */

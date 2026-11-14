@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
-import { BotFace, BotFaceStill, type BotFaceProps } from './BotFace'
+import { BotFace, type BotFaceProps } from './BotFace'
 import { sharedFaceRendererStatus, subscribeSharedFaceRenderer } from './faceRenderer'
 
 /**
  * A face for lists (the Bots row, Recent, a chat's messages) that never slows the screen it is on.
- * It draws the still face at once, and the live one only when both are true:
+ * It shows the face's saved picture or its loader at once, and starts the live face only when both
+ * are true:
  * - the face renderer is ready: it starts after the screen has painted, off the render path, so
  *   opening the Chats tab never waits for the WebGL shader to compile;
  * - the face is on screen or close to it.
@@ -13,10 +14,10 @@ import { sharedFaceRendererStatus, subscribeSharedFaceRenderer } from './faceRen
 export function LazyBotFace(props: BotFaceProps) {
   const ready = useRendererReady()
   const [ref, near] = useNearScreen<HTMLSpanElement>()
-  if (ready && near) return <BotFace {...props} />
+  const go = ready && near
   return (
     <span ref={ref} className={`bot-face-lazy${props.className ? ` ${props.className}` : ''}`} style={{ display: 'inline-flex', flex: 'none', width: props.size, height: props.size }}>
-      <BotFaceStill {...props} className={undefined} />
+      <BotFace {...props} className={undefined} hold={!go} />
     </span>
   )
 }
