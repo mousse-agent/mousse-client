@@ -760,6 +760,9 @@ html[data-keyboard='open'] .m-thread__composer { padding-bottom: 8px; }
 .m-composer__icon::after { content: ''; position: absolute; inset: -4px 0; }
 .m-composer__icon:active:not(:disabled) { background: var(--ui-pressed); }
 .m-composer__icon:disabled { opacity: 0.45; }
+/* The microphone beside send (composer-dictate-btn): quiet like attach, wide enough for a 44px touch target. */
+.m-composer__dictate { width: 40px; }
+.m-composer__dictate::after { inset: -4px -2px; }
 .m-composer__error { font-size: 12.5px; color: var(--danger); padding: 0 4px; }
 
 .m-context-ring { transform: rotate(-90deg); }

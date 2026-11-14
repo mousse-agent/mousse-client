@@ -114,6 +114,8 @@ describe('composer controls', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await screen.findByRole('button', { name: 'Stop' })
     type('Second')
+    // As on the desktop, dictation waits for the reply to end; the row keeps Queue in send's place.
+    expect(screen.queryByRole('button', { name: 'Voice input' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Queue message' }))
     const queue = await screen.findByRole('region', { name: 'Queued messages' })
     expect(within(queue).getByText('Second')).toBeInTheDocument()

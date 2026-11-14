@@ -26,12 +26,13 @@
 .m-speech-spin { animation: m-speech-spin 0.9s linear infinite; }
 @keyframes m-speech-spin { to { transform: rotate(360deg); } }
 
-/* Recording action (composer-action-btn-recording). */
-.m-composer__action--recording {
-  color: #fff;
-  background: #ef4444;
+/* Recording action (composer-action-btn-recording): a soft red fill and a red stop square in send's place. Scoped to
+   the composer so it wins over the send button's accent tint, and without an outer ring the footer would clip. */
+.m-composer .m-composer__action--recording {
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.2);
   background-image: none;
-  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25);
+  box-shadow: none;
 }
 
 /* Microphone errors (composer-recording-error). */

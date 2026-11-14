@@ -326,6 +326,9 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
   const actionLabel = hasContent ? (active ? (steersText ? 'Steer message' : 'Queue message') : 'Send') : active ? 'Stop' : 'Send'
   const shownPlaceholder = placeholder ?? (active ? (steers ? 'Running… send steers the reply' : 'Running… send queues next') : 'Message')
   const modeShown = !!sendMode && !!onSteer && active && !dictation.isRecording
+  // As the desktop's ComposerFooter: the microphone sits left of send whenever no reply runs, with or without
+  // text, so dictation can add to a message already started. Recording puts Stop recording in send's place.
+  const dictateShown = !!voice && !active && !voice.recording
   // Folded: the reader scrolled up and nothing here needs the footer (no text, focus, attachment or notice).
   const isFolded = folded && !!controls && !hasContent && !skill && !focused && !suggestions.length && !error && !dictation.error &&
     !dictation.isRecording && !dictation.transcribing && !dictation.notice
@@ -416,10 +419,15 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
             onKeyDown={onKeyDown}
             onPaste={onPaste}
           />
-          {!controls && <ActionButton label={actionLabel} hasContent={hasContent} active={active} canSend={canSend} onStop={onStop} voice={voice} />}
+          {!controls && (
+            <>
+              {dictateShown && <DictateButton voice={voice} />}
+              <ActionButton label={actionLabel} hasContent={hasContent} active={active} canSend={canSend} onStop={onStop} voice={voice} />
+            </>
+          )}
           {controls && isFolded && (
             <span className="m-composer__folded-action">
-              <ActionButton label={actionLabel} hasContent={hasContent} active={active} canSend={canSend} onStop={onStop} voice={voice} />
+              <ActionButton label={actionLabel} hasContent={hasContent} active={active} canSend={canSend} onStop={onStop} voice={voice} micInSlot />
             </span>
           )}
         </div>
@@ -455,6 +463,7 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
                   {sendMode.mode === 'steer' ? <ArrowTurnForward size={18} /> : <Layers size={18} />}
                 </button>
               )}
+              {dictateShown && <DictateButton voice={voice} />}
               <ActionButton label={actionLabel} hasContent={hasContent} active={active} canSend={canSend} onStop={onStop} voice={voice} />
             </div>
           </div>
@@ -515,16 +524,35 @@ interface VoiceAction {
   onStop(): void
 }
 
-function ActionButton({ label, hasContent, active, canSend, onStop, voice }: { label: string; hasContent: boolean; active: boolean; canSend: boolean; onStop(): void; voice?: VoiceAction }) {
-  // As on the desktop: recording turns the button into a stop square; an empty, idle composer offers the microphone.
+/** The quiet microphone beside send (composer-dictate-btn); a spinner while it checks the model or transcribes. */
+function DictateButton({ voice }: { voice: VoiceAction }) {
+  return (
+    <button
+      type="button"
+      className="m-composer__icon m-composer__dictate"
+      aria-label="Voice input"
+      aria-busy={voice.busy || undefined}
+      disabled={voice.disabled}
+      // The box keeps focus, so the caret and selection it had are where the words go.
+      onPointerDown={(event) => event.preventDefault()}
+      onClick={voice.onStart}
+    >
+      {voice.busy ? <Loader2 size={18} className="m-speech-spin" /> : <Mic size={18} />}
+    </button>
+  )
+}
+
+function ActionButton({ label, hasContent, active, canSend, onStop, voice, micInSlot = false }: { label: string; hasContent: boolean; active: boolean; canSend: boolean; onStop(): void; voice?: VoiceAction; micInSlot?: boolean }) {
+  // As on the desktop: recording turns the send slot into a stop square. The folded composer has room for one
+  // button, so there an empty, idle composer offers the microphone in send's place.
   if (voice?.recording) {
     return (
-      <button type="button" className="m-composer__action m-composer__action--recording" aria-label="Stop recording" onClick={voice.onStop}>
+      <button type="button" className="m-composer__action m-composer__action--recording" aria-label="Stop recording" onPointerDown={(event) => event.preventDefault()} onClick={voice.onStop}>
         <Square size={15} strokeWidth={2} fill="currentColor" />
       </button>
     )
   }
-  if (!hasContent && !active && voice) {
+  if (micInSlot && !hasContent && !active && voice) {
     return (
       <button type="button" className="m-composer__action" aria-label="Voice input" aria-busy={voice.busy || undefined} disabled={voice.disabled} onClick={voice.onStart}>
         {voice.busy ? <Loader2 size={18} className="m-speech-spin" /> : <Mic size={18} />}
