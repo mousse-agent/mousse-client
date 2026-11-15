@@ -1,7 +1,7 @@
 // A deterministic, in-memory MousseConnection for development, screenshots and
 // UI tests. It simulates sign-in, enrollment stages and streamed replies; it
 // never touches the network. Replace it with the real connection in main.tsx.
-import { FakeBots } from './fakeBots'
+import { FakeBots, demoQuotesOf } from './fakeBots'
 import type {
   AccountState,
   ChatItem,
@@ -171,6 +171,11 @@ export const FAKE_COMPOSER_OPTIONS: ComposerOptions = {
 }
 
 function replyFor(text: string): string {
+  const { quotes, words } = demoQuotesOf(text)
+  if (quotes.length) {
+    const more = quotes.length > 1 ? ` and ${quotes.length - 1} more passage${quotes.length > 2 ? 's' : ''}` : ''
+    return `You replied to “${quotes[0]!.slice(0, 60)}”${more}. ${words ? `About "${words.slice(0, 48)}": ` : ''}I will look at that part again and report back.`
+  }
   return `Here is the plan for "${text.slice(0, 48)}": I will look at the relevant files, make the change, and run the focused tests before reporting back.`
 }
 

@@ -29,6 +29,8 @@ import {
   type IconComponent,
 } from '../components/icons'
 import { Composer } from '../components/Composer'
+import { ShowQuotedContext, WithSentQuotes } from '../components/SentQuotes'
+import { QUOTE_SOURCE_ATTRIBUTE } from '../components/SelectionReplyButton'
 import { Sheet } from '../components/Sheet'
 import { Button, Spinner } from '../components/primitives'
 import { Markdown, MarkdownImageRenderer } from '../timeline/Markdown'
@@ -230,7 +232,7 @@ const Message = memo(function Message({ bot, bots, message, quote, starts, pendi
           {/* As in a messaging app: the pictures first, the words under them, then any other files. */}
           <div className="bot-you-content">
             {images && <BotImageFiles files={files} bots={bots} botId={bot.id} messageId={message.id} />}
-            {message.text && <div className="bot-you-bubble"><Markdown text={message.text} /></div>}
+            {message.text && <div className="bot-you-bubble"><WithSentQuotes text={message.text} render={(part) => <Markdown text={part} />} /></div>}
             {!!files.length && <BotOtherFiles files={files} images={images} />}
           </div>
         </div>
@@ -639,10 +641,12 @@ export function BotChat({ bot, bots }: { bot: ListBot; bots: ComputerBots }) {
 
   return (
     <MarkdownImageRenderer.Provider value={renderBotImage}>
+      <ShowQuotedContext.Provider value={show}>
       <div className="m-thread bot-chat" style={style}>
         <div
           ref={scroller}
           className="m-thread__scroll"
+          {...{ [QUOTE_SOURCE_ATTRIBUTE]: '' }}
           onScroll={(event) => {
             const element = event.currentTarget
             anchor.current.atEnd = element.scrollHeight - element.scrollTop - element.clientHeight < 60
@@ -737,6 +741,7 @@ export function BotChat({ bot, bots }: { bot: ListBot; bots: ComputerBots }) {
           />
         </div>
       </div>
+      </ShowQuotedContext.Provider>
     </MarkdownImageRenderer.Provider>
   )
 }

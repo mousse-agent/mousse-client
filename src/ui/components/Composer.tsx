@@ -12,6 +12,8 @@ import { loadDraft, saveDraft, type SendMode } from '../lib/composerPrefs'
 import { MAX_IMAGES, readImage, type PendingImage } from '../lib/images'
 import { ProviderIcon } from './providerIcons'
 import { ContextRing, ContextSheet, ModelSheet, SkillSheet, isPlanless, runSettingsOf, type PermissionView } from './ComposerSheets'
+import { ComposerQuoteStrip, useComposerQuotes } from './ComposerQuotes'
+import { expandQuotes, quotesOfMessage, registerQuote } from '../lib/composerQuotes'
 
 /** What the computer's composer offers; without it the composer is a plain text box. */
 export interface ComposerControls {
@@ -113,6 +115,8 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
   const [foldMotion, setFoldMotion] = useState(false)
   const foldTimer = useRef<ReturnType<typeof setTimeout>>()
   const firstFold = useRef(true)
+  // Reply quotes from text selected in the conversation (ComposerQuotes.tsx); they go out before the typed words.
+  const { quotes, setQuotes } = useComposerQuotes(field, draftKey)
 
   // The selection (or caret) when dictation started, with the text it was taken from.
   const dictationRange = useRef<{ start: number; end: number; value: string } | null>(null)
@@ -170,7 +174,13 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
 
   useEffect(() => {
     if (!prefill) return
-    setText((text) => (prefill.append && text.trim() ? `${text}\n\n${prefill.text}` : prefill.text))
+    if (prefill.append) setText((text) => (text.trim() ? `${text}\n\n${prefill.text}` : prefill.text))
+    else {
+      // A message moved back for editing gets its reply quotes back as quotes.
+      const parts = quotesOfMessage(prefill.text)
+      setText(parts.text)
+      setQuotes(parts.quotes)
+    }
     field.current?.focus()
   }, [prefill])
 
@@ -182,7 +192,7 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
   }, [text, commands, dismissedFor])
   useEffect(() => setHighlight(0), [suggestions.length])
 
-  const hasContent = text.trim().length > 0 || images.length > 0
+  const hasContent = text.trim().length > 0 || images.length > 0 || quotes.length > 0
   const canSend = !disabled && hasContent
   // Steer mode applies while a reply runs, to text alone: images and skills still queue.
   const steers = active && sendMode?.mode === 'steer' && !!onSteer
@@ -228,8 +238,13 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
     event?.preventDefault()
     if (!hasContent) { if (active) onStop(); return }
     if (!canSend) return
-    const draft = text
-    const command = !images.length && !skill ? parseCommand(draft, commands) : undefined
+    const typed = text
+    const sentQuotes = quotes
+    // As on the desktop, each quote goes to the agent in double quotes, alone in its paragraph.
+    const draft = expandQuotes(sentQuotes, typed)
+    const restoreQuotes = () => { if (sentQuotes.length) setQuotes((current) => current.length ? current : sentQuotes) }
+    sentQuotes.forEach(registerQuote)
+    const command = !images.length && !skill && !sentQuotes.length ? parseCommand(draft, commands) : undefined
     if (command) {
       setText('')
       const handled = await runCommand(command)
@@ -237,21 +252,24 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
     }
     if (active && onSteer && !images.length && !skill && steers !== invert) {
       setText('')
+      setQuotes([])
       setError(undefined)
-      if (!(await onSteer(draft.trim()))) setText((current) => current || draft)
+      if (!(await onSteer(draft.trim()))) { setText((current) => current || typed); restoreQuotes() }
       return
     }
     const sentImages = images
     const sentSkill = skill
     const payload = extras()
     setText('')
+    setQuotes([])
     setImages([])
     setSkill(undefined)
     setError(undefined)
     // Like the desktop, an image-only message still needs words for the agent.
     const sent = await onSend(draft.trim() || '[Image attachment]', payload)
     if (!sent) {
-      setText((current) => current || draft)
+      setText((current) => current || typed)
+      restoreQuotes()
       setImages((current) => current.length ? current : sentImages)
       setSkill((current) => current ?? sentSkill)
     }
@@ -287,8 +305,9 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
         if (!exact) { event.preventDefault(); applySuggestion(suggestions[highlight]); return }
       }
     }
-    if (event.key === 'Backspace' && !text && (images.length || skill)) {
+    if (event.key === 'Backspace' && !text && (images.length || skill || quotes.length)) {
       if (skill) setSkill(undefined)
+      else if (quotes.length) setQuotes((current) => current.slice(0, -1))
       else setImages((current) => current.slice(0, -1))
       return
     }
@@ -402,6 +421,7 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
             ))}
           </div>
         )}
+        <ComposerQuoteStrip quotes={quotes} onRemove={(index) => setQuotes((current) => current.filter((_, at) => at !== index))} />
         <div className="m-composer__row">
           <textarea
             ref={field}

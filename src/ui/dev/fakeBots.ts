@@ -2,6 +2,19 @@
 // open ask, a piece of work, a reminder, pictures, and replies that arrive a moment after a message.
 import type { BotAttachmentImage, BotChatMessage, BotChatPage, BotDetail, BotLook, BotMemoryItem, BotPermissionItem, BotReminderItem, BotRunItem, ComputerBots, ListBot } from '../../connection/bots'
 
+/** A message's reply quotes (each a paragraph in double quotes, as the desktop and the phone send them) and its other words. */
+export function demoQuotesOf(text: string): { quotes: string[]; words: string } {
+  const paragraphs = text.split('\n\n')
+  const quoted = (part: string) => part.length > 1 && part.startsWith('"') && part.endsWith('"')
+  return { quotes: paragraphs.filter(quoted).map((part) => part.slice(1, -1)), words: paragraphs.filter((part) => !quoted(part)).join(' ') }
+}
+
+function demoBotReply(text: string): string {
+  const { quotes, words } = demoQuotesOf(text)
+  if (quotes.length) return `On it. You replied to “${quotes[0]!.slice(0, 60)}”${words ? ` with “${words.slice(0, 60)}”` : ''}; I’ll report back here.`
+  return `On it. I noted “${text.slice(0, 60)}” and I’ll report back here.`
+}
+
 /** A small picture: the photo the owner attached, and the chart in a reply. */
 const PICTURE = 'iVBORw0KGgoAAAANSUhEUgAAABgAAAAQCAIAAACDRijCAAADRklEQVR42g3MsQquIBgA0Pucd2lpaWlpaWlpaWlpEa6CCCKFEUYI8UEJIogURtTQ69z/PMD58xc9CbpTFDN05igUyJfIVcjWyDRoaxF0aEVIE7QwpASaJJIKDRoJQNwg5hANiET0789f/CT4TnHM8JnjUGBfYldhW2PT4K3F0OEVYU3wwrASeJJYKjxoLABzg5nDNGAS8S+iT0LvlMaMnjkNBfUldRW1NTUN3VoKHV0R1YQujCpBJ0mlooOmAig3lDlKAyWR/iL+JPxOecz4mfNQcF9yV3Fbc9PwreXQ8RVxTfjCuBJ8klwqPmgugHPDmeM0cBL5L+qfpL/TPmb9mfeh6H3Zu6q3dW+afmt76PoV9Zr0C+uV6CfZS9UPuhfQc9Mz19PQk9j/ovFJxjsdYzae+RiK0Zejq0Zbj6YZt3aEblzRqMm4sFGJcZKjVOOgRwEjNyNzIw0jieMvmp9kvtM5ZvOZz6GYfTm7arb1bJp5a2fo5hXNmswLm5WYJzlLNQ96FjBzMzM30zCTOP8i/ST6TnXM9JnrUGhfaldpW2vT6K3V0OkVaU30wrQSepJaKj1oLUBzo5nTNGgS9S+CJ4E7hZjBmUMowJfgKrA1mAa2FqCDFYEmsDBQAiYJUsGgQQBwA8wBDUAi/KL9SfY73WO2n/keit2Xu6t2W++m2bd2h25f0a7JvrBdiX2Su1T7oHcBOzc7czsNO4n7L7JPYu/UxsyeuQ2F9aV1lbW1NY3dWgudXZHVxC7MKmEnaaWyg7YCLDeWOUuDJdH+Iv8k/k59zPyZ+1B4X3pXeVt70/it9dD5FXlN/MK8En6SXio/aC/Ac+OZ8zR4Ev0vOp7kuNMjZseZH6E4fHm46rD1YZpjaw/ojhUdmhwLO5Q4JnlIdQz6EHBwczB30HCQePyi60muO71idp35FYrLl5erLltfprm29oLuWtGlybWwS4lrkpdU16AvARc3F3MXDReJ1y96n+S90zdm75m/oXh9+brqtfVrmndrX+jeFb2avAt7lXgn+Ur1DvoV8HLzMvfS8JL4/qLvSb47/WL2nfkXis+Xn6s+W3+m+bb2g+5b0afJt7BPiW+Sn1TfoD8BHzcfcx8NH4nfv/9RPP8vpV9HpQAAAABJRU5ErkJggg=='
 
@@ -99,7 +112,7 @@ export class FakeBots implements ComputerBots {
     this.changed()
     setTimeout(() => {
       if (!entry.bot.chat) return
-      this.push(entry, { author: 'bot', kind: 'text', text: `On it. I noted “${text.slice(0, 60)}” and I’ll report back here.`, chips: [{ icon: 'memory', text: 'Remembered', highlight: 'your request' }], replyTo: { id: message.id, author: 'owner', text } })
+      this.push(entry, { author: 'bot', kind: 'text', text: demoBotReply(text), chips: [{ icon: 'memory', text: 'Remembered', highlight: 'your request' }], replyTo: { id: message.id, author: 'owner', text } })
       const { chat: _chat, activity: _activity, ...rest } = entry.bot
       entry.bot = { ...rest, state: entry.bot.work?.length ? 'working' : 'idle', stateText: '', lastOutcome: 'ok' }
       this.changed()
