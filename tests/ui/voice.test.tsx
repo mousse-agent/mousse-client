@@ -114,6 +114,44 @@ describe('dictation on the phone', () => {
     expect(session.speech.selections.dictation).toMatchObject({ source: 'local', modelId: 'moonshine-base' })
   })
 
+  it('keeps the microphone beside send once text is typed, dictates into that text, and send still sends', async () => {
+    const session = await open()
+    session.speech.selections.dictation = { source: 'provider', providerId: 'openai', modelId: 'gpt-4o-transcribe', label: 'OpenAI · GPT-4o Transcribe' }
+    const box = screen.getByLabelText('Message') as HTMLTextAreaElement
+    const footer = () => box.closest('form')!.querySelector('.m-composer__tools')!
+    // Empty, as on the desktop: the microphone, then a send button that waits for words.
+    await screen.findByRole('button', { name: 'Voice input' })
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+
+    fireEvent.change(box, { target: { value: 'Fix the login bug' } })
+    const order = () => [...footer().querySelectorAll('button')].map((button) => button.getAttribute('aria-label')).slice(-2)
+    expect(order()).toEqual(['Voice input', 'Send'])
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled()
+
+    // The words selected before dictation are replaced, with a space on either side.
+    box.focus()
+    box.setSelectionRange(8, 13)
+    fireEvent.click(screen.getByRole('button', { name: 'Voice input' }))
+    await screen.findByRole('status', { name: /^Recording/ })
+    // Listening, as on the desktop: Stop recording takes send's place and the microphone steps aside.
+    expect(order()).toEqual(['Attach images', 'Stop recording'])
+    fireEvent.click(screen.getByRole('button', { name: 'Stop recording' }))
+    await waitFor(() => expect(box).toHaveValue(`Fix the ${FAKE_TRANSCRIPT} bug`))
+
+    // At the caret after typed words, the dictated words get their own space.
+    fireEvent.change(box, { target: { value: 'Then' } })
+    box.focus()
+    box.setSelectionRange(4, 4)
+    fireEvent.click(await screen.findByRole('button', { name: 'Voice input' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop recording' }))
+    await waitFor(() => expect(box).toHaveValue(`Then ${FAKE_TRANSCRIPT}`))
+
+    expect(order()).toEqual(['Voice input', 'Send'])
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(session.sent.map((entry) => [entry.kind, entry.text])).toEqual([['send', `Then ${FAKE_TRANSCRIPT}`]]))
+    expect(box).toHaveValue('')
+  })
+
   it('explains a denied microphone and offers a retry', async () => {
     const session = await open()
     session.speech.selections.dictation = { source: 'provider', providerId: 'openai', modelId: 'gpt-4o-transcribe', label: 'OpenAI · GPT-4o Transcribe' }
