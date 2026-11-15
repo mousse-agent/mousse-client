@@ -1,0 +1,154 @@
+/*
+ * The home dock: the tab pill and the create button float over the bottom of the list. Both wear the
+ * composer's material (app.css .m-composer: raised surface, thin line, top-edge glint, raised shadow);
+ * the create button is the accent itself, with --accent-ink (set by applyAppearance) for its icon.
+ */
+
+.m-home {
+  --m-dock-size: 52px;
+  /* Below the dock: the home indicator's inset plus a gap, and never less than an Android gesture bar needs,
+     since an edge-to-edge Android WebView can report no bottom inset while the bar is drawn over the page. */
+  --m-dock-lift: max(calc(12px + var(--safe-bottom)), 24px);
+  /* From the bottom of the screen to the top of the dock. */
+  --m-dock-space: calc(var(--m-dock-size) + var(--m-dock-lift));
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* The last row can scroll clear of the dock; rows fade as they pass under it, as the transcript does above the composer. */
+.m-home[data-dock] .m-content { padding-bottom: calc(var(--m-dock-space) + 20px); }
+.m-home[data-dock] .m-home__scroll {
+  -webkit-mask-image: linear-gradient(#000 calc(100% - var(--m-dock-space) - 4px), transparent calc(100% - var(--m-dock-lift) - 12px));
+  mask-image: linear-gradient(#000 calc(100% - var(--m-dock-space) - 4px), transparent calc(100% - var(--m-dock-lift) - 12px));
+}
+/* With the keyboard up (searching) the dock steps away, so results run to the keyboard. */
+html[data-keyboard='open'] .m-home[data-dock] .m-home__scroll { -webkit-mask-image: none; mask-image: none; }
+
+.m-dock {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 0 16px var(--m-dock-lift);
+  pointer-events: none;
+  transition: opacity 160ms ease, transform 160ms ease, visibility 0s linear 0s;
+}
+.m-dock > * { pointer-events: auto; }
+html[data-keyboard='open'] .m-dock {
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(12px);
+  transition: opacity 120ms ease, transform 120ms ease, visibility 0s linear 120ms;
+}
+
+/* ---------- Tab pill (threads-sidebar.css .threads-sidebar-tabs, raised like the composer) ---------- */
+.m-sidebar-tabs {
+  display: flex;
+  flex-shrink: 0;
+  width: fit-content;
+  height: var(--m-dock-size);
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--ui-line-strong);
+  border-radius: 999px;
+  background-color: var(--ui-raised);
+  background-image: linear-gradient(90deg, transparent, var(--ui-glint), transparent), var(--ui-sheen);
+  background-size: 46% 1px, 100% 100%;
+  background-position: 50% 0, 0 0;
+  background-repeat: no-repeat;
+  background-clip: padding-box;
+  box-shadow: var(--ui-raised-shadow);
+}
+.m-sidebar-tab {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 50px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-sidebar-tab:active:not(.is-active) { color: var(--text-primary); background-color: var(--ui-hover); }
+.m-sidebar-tab svg { flex-shrink: 0; }
+.m-sidebar-tab.is-active {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: auto;
+  padding: 0 16px 0 14px;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 14.5px;
+  font-weight: 600;
+  background-color: color-mix(in srgb, var(--text-primary) 9%, var(--ui-raised));
+  box-shadow: var(--ui-specular);
+}
+.m-sidebar-tab.is-active svg { color: var(--accent); }
+.m-sidebar-tab.is-active > span { animation: m-dock-label 180ms ease-out; }
+@keyframes m-dock-label { from { opacity: 0; } }
+
+/* ---------- Create button ---------- */
+.m-dock__create {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--m-dock-size);
+  height: var(--m-dock-size);
+  padding: 0;
+  border: 1px solid color-mix(in srgb, #000 16%, var(--accent));
+  border-radius: 50%;
+  background-color: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: var(--ui-specular-accent), var(--ui-raised-shadow);
+  transition: transform 120ms ease, filter 120ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-dock__create:active:not(:disabled) { transform: scale(0.94); filter: brightness(1.06); }
+.m-dock__create:disabled { opacity: 0.45; }
+.m-dock__create-icon { animation: m-dock-icon 180ms ease-out; }
+@keyframes m-dock-icon { from { opacity: 0; transform: scale(0.7) rotate(-45deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .m-dock,
+  html[data-keyboard='open'] .m-dock { transition: none; transform: none; }
+  .m-sidebar-tab,
+  .m-dock__create { transition: none; }
+  .m-sidebar-tab.is-active > span,
+  .m-dock__create-icon { animation: none; }
+  .m-dock__create:active:not(:disabled) { transform: none; }
+}
+
+/* ---------- New project sheet ---------- */
+.m-new-project__recents { display: flex; flex-direction: column; gap: 2px; }
+.m-new-project__recents h3 { margin-bottom: 4px; }
+.m-new-project__recent {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--ui-row-radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 13px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-new-project__recent:active { background-color: var(--ui-pressed); color: var(--text-primary); }

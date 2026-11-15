@@ -30,7 +30,7 @@ describe('Chats tab', () => {
       status: {},
       receivedAt: 0,
     }
-    render(<Sidebar lists={lists} tab="chats" onTab={() => {}} onOpenThread={() => {}} onOpenChat={() => {}} onNewThread={() => {}} />)
+    render(<Sidebar lists={lists} tab="chats" onOpenThread={() => {}} onOpenChat={() => {}} onNewThread={() => {}} />)
     expect(screen.getAllByText(/^Chat \d+$/)).toHaveLength(30)
     const more = () => {
       const sentinel = document.querySelector('.m-sb-more')!

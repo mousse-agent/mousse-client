@@ -21,6 +21,7 @@ import type {
   ListsHandlers,
   ThreadStatus,
   MousseConnection,
+  OpenProjectResult,
   Project,
   SessionEndReason,
   PendingQuestions,
@@ -190,6 +191,7 @@ export class FakeSession implements ComputerSession {
   private endedWith?: string
   private listWatchers = new Set<ListsHandlers>()
   private chats = initialChats()
+  private projects = PROJECTS.map((project) => ({ ...project }))
   /** Threads whose last turn finished and that show "Done" until their next turn. */
   private done = new Set<string>(['t-relay'])
   private waiting = new Set<string>(['t-voices'])
@@ -228,7 +230,7 @@ export class FakeSession implements ComputerSession {
       ? { ...chat, run: { id: `run-${chat.id}`, state: 'running', startedAt: Date.now() } }
       : { ...chat })
     return {
-      projects: PROJECTS.map((project, order) => ({ id: project.id, name: project.name, path: project.path, order, pinned: false })),
+      projects: this.projects.map((project, order) => ({ id: project.id, name: project.name, path: project.path, order, pinned: false })),
       threads: this.threads.map((thread, order) => ({
         id: thread.id,
         title: thread.title,
@@ -266,7 +268,7 @@ export class FakeSession implements ComputerSession {
 
   async listProjects(): Promise<Project[]> {
     await sleep(this.opts.latencyMs)
-    return PROJECTS.map((project) => ({ ...project }))
+    return this.projects.map((project) => ({ ...project }))
   }
 
   async listThreads(filter?: { projectId?: string; query?: string }): Promise<ThreadSummary[]> {
@@ -292,6 +294,19 @@ export class FakeSession implements ComputerSession {
     this.items.set(thread.id, [])
     this.emitLists()
     return { ...thread }
+  }
+
+  /** Opens any full path as a project, as a computer would a folder that exists; a relative path is refused. */
+  async openProject(path: string): Promise<OpenProjectResult> {
+    await sleep(this.opts.latencyMs)
+    const trimmed = path.trim().replace(/\/+$/, '')
+    if (!trimmed.startsWith('/') && !trimmed.startsWith('~/')) return { ok: false, error: 'Enter the full path of a folder, starting from the root.' }
+    const existing = this.projects.find((project) => project.path === trimmed)
+    if (existing) return { ok: true, project: { ...existing } }
+    const project: Project = { id: `p-new-${this.nextId++}`, name: trimmed.split('/').pop() || trimmed, path: trimmed }
+    this.projects.push(project)
+    this.emitLists()
+    return { ok: true, project: { ...project } }
   }
 
   async openThread(threadId: string, onItems: (items: ChatItem[], state?: ThreadDisplayState) => void): Promise<() => void> {

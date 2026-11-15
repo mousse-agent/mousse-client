@@ -14,51 +14,7 @@
 .m-sidebar__top .m-search { align-self: stretch; }
 .m-sidebar__panel { display: flex; flex-direction: column; gap: 2px; padding-bottom: 24px; }
 
-/* ---------- Tab pill: threads-sidebar.css .threads-sidebar-tabs + polish.css ---------- */
-.m-sidebar-tabs {
-  display: flex;
-  flex-shrink: 0;
-  width: fit-content;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--ui-line);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
-}
-.m-sidebar-tab {
-  position: relative;
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 40px;
-  height: 36px;
-  padding: 0;
-  border: 0;
-  border-radius: 9px;
-  background: transparent;
-  color: var(--text-secondary);
-  font: inherit;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-  -webkit-tap-highlight-color: transparent;
-}
-.m-sidebar-tab:active:not(.is-active) { color: var(--text-primary); background: var(--ui-hover); }
-.m-sidebar-tab svg { flex-shrink: 0; }
-.m-sidebar-tab.is-active {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  width: auto;
-  padding: 0 12px;
-  white-space: nowrap;
-  color: var(--text-primary);
-  font-size: 14px;
-  font-weight: 600;
-  background: var(--ui-raised);
-  box-shadow: var(--ui-specular), 0 1px 3px rgba(0, 0, 0, 0.2);
-}
-.m-sidebar-tab.is-active svg { color: var(--accent); }
+/* The tab pill is in homeDock.css. */
 
 /* Selection glint (polish.css ui-edge-glint), shared by the active tab, card and rows. */
 .m-sidebar-tab.is-active::before,
@@ -344,7 +300,7 @@
 .m-chat-color-3 { --chat-hue: var(--hue-4); }
 .m-chat-color-4 { --chat-hue: var(--hue-5); }
 
-/* ---------- Connection line under the tabs ---------- */
+/* ---------- Connection line under the search field ---------- */
 .m-sb-banner {
   display: flex;
   align-items: center;

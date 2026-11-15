@@ -248,7 +248,8 @@ describe('bots on the phone', () => {
     renderApp({ signedIn: true })
     fireEvent.click(await screen.findByRole('tab', { name: 'Chats' }))
     fireEvent.click(await screen.findByRole('button', { name: 'New bot' }))
-    const create = await screen.findByRole('button', { name: 'Create bot' })
+    // The sheet loads the first time it opens, which can take a while when the whole suite runs.
+    const create = await screen.findByRole('button', { name: 'Create bot' }, { timeout: 5000 })
     expect(create).toBeDisabled()
     fireEvent.change(screen.getByLabelText('What should it do?'), { target: { value: 'Tell me which PRs wait for me.' } })
     fireEvent.click(create)

@@ -2,15 +2,17 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNo
 import type { ComputerView } from '../../connection/computerStore'
 import { deviceNetworkSignals } from '../../connection/networkSignals'
 import type { ListBot } from '../../connection/bots'
-import type { Computer, ListChat, ListProject, ListThread } from '../../connection/types'
+import type { Computer, ListChat, ListProject, ListThread, Project } from '../../connection/types'
 import { useAutoJoin, useComputer, useComputers, useComputerViews } from '../hooks/connection'
 import { useIsWide } from '../hooks/useMediaQuery'
 import { useRouter } from '../state/router'
 import { EmptyState } from '../components/EmptyState'
 import { ErrorBoundary } from '../components/ErrorBoundary'
-import { ChevronLeft, Info, MessageSquarePlus, Settings } from '../components/icons'
+import { ChevronLeft, FolderPlus, Info, MessageSquarePlus, Plus, Settings } from '../components/icons'
 import { Button, IconButton, MousseLogo, Notice, Spinner, TopBar } from '../components/primitives'
 import { Sidebar, type RowComputer } from '../sidebar/Sidebar'
+import { HomeDock, TAB_META, type DockAction } from '../sidebar/HomeDock'
+import { NewProjectSheet } from '../sidebar/NewProjectSheet'
 import { mergedKey, mergeLists, savedTab, saveTab, splitKey, type SidebarTab } from '../sidebar/model'
 import { loadLastComputer, saveLastComputer } from '../lib/composerPrefs'
 import { threadComputers } from '../lib/newThread'
@@ -66,6 +68,7 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
   const [tab, setTab] = useState<SidebarTab>(savedTab)
   const [notice, setNotice] = useState<string>()
   const [newBotOpen, setNewBotOpen] = useState(false)
+  const [newProjectOpen, setNewProjectOpen] = useState(false)
 
   const enrolled = useMemo(() => threadComputers(computers.data ?? []), [computers.data])
   const byNode = useMemo(() => new Map(enrolled.map((computer) => [computer.nodeId, computer])), [enrolled])
@@ -127,17 +130,22 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
     if (open && wide) router.replace(route)
     else router.push(route)
   }, [open, wide, router])
-  // New bot is made on the computer last used, or the first one online.
+  // New bot and new project are made on the computer last used, or the first one online.
   const online = enrolled.filter((computer) => !isOffline(computer, views.get(computer.nodeId)))
   const last = loadLastComputer()
-  const botComputer = online.find((computer) => computer.nodeId === last) ?? online[0]
+  const createComputer = online.find((computer) => computer.nodeId === last) ?? online[0]
+  const projectCreated = useCallback((_project: Project) => {
+    setNewProjectOpen(false)
+    // The project shows on the Projects tab once the computer's lists say so.
+    changeTab('projects')
+  }, [changeTab])
   const created = useCallback((bot: ListBot) => {
     setNewBotOpen(false)
-    if (!botComputer) return
-    const route = { name: 'bot' as const, nodeId: botComputer.nodeId, botId: bot.id }
+    if (!createComputer) return
+    const route = { name: 'bot' as const, nodeId: createComputer.nodeId, botId: bot.id }
     if (open && wide) router.replace(route)
     else router.push(route)
-  }, [botComputer, open, wide, router])
+  }, [createComputer, open, wide, router])
 
   const openThread = useCallback((thread: ListThread) => {
     const key = splitKey(thread.id)
@@ -159,11 +167,12 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
   }, [router])
 
   const settings = <IconButton label="Settings" onClick={() => router.push({ name: 'settings' })}><Settings /></IconButton>
-  const compose = (
-    <IconButton label="New thread" disabled={!enrolled.length} onClick={() => router.push({ name: 'new' })}>
-      <MessageSquarePlus />
-    </IconButton>
-  )
+  // The dock's round button makes what the open tab lists.
+  const actions: Record<typeof tab, DockAction> = {
+    projects: { label: 'New project', icon: FolderPlus, disabled: !createComputer, onClick: () => setNewProjectOpen(true) },
+    threads: { label: 'New thread', icon: MessageSquarePlus, disabled: !enrolled.length, onClick: () => router.push({ name: 'new' }) },
+    chats: { label: 'New bot', icon: Plus, disabled: !createComputer, onClick: () => setNewBotOpen(true) },
+  }
 
   const banner = (
     <>
@@ -198,13 +207,12 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
       <Sidebar
         lists={lists}
         tab={tab}
-        onTab={changeTab}
         selectedId={selected ? mergedKey(selected.nodeId, selected.threadId) : undefined}
         onOpenThread={openThread}
         onOpenChat={openChat}
         onNewThread={newThreadIn}
         onOpenBot={openBot}
-        {...(botComputer ? { onNewBot: () => setNewBotOpen(true) } : {})}
+        canMakeBots={!!createComputer}
         {...(selectedBot ? { selectedBotId: mergedKey(selectedBot.nodeId, selectedBot.botId) } : {})}
         banner={banner}
         order="recent"
@@ -253,28 +261,47 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
   }
 
   const selectedComputer = selected ? byNode.get(selected.nodeId) : undefined
-  const botComputerName = selectedBot ? byNode.get(selectedBot.nodeId)?.name : undefined
+  const createComputerName = selectedBot ? byNode.get(selectedBot.nodeId)?.name : undefined
   const pane = selected
     ? <ThreadPane nodeId={selected.nodeId} threadId={selected.threadId} name={selectedComputer?.name ?? 'Computer'} wide={wide} />
-    : selectedBot ? <ErrorBoundary what="this bot's chat" resetKey={selectedBot.botId}><BotPane nodeId={selectedBot.nodeId} botId={selectedBot.botId} name={botComputerName ?? 'Computer'} labelled={labelled} wide={wide} /></ErrorBoundary> : null
-  const newBot = botComputer && (
+    : selectedBot ? <ErrorBoundary what="this bot's chat" resetKey={selectedBot.botId}><BotPane nodeId={selectedBot.nodeId} botId={selectedBot.botId} name={createComputerName ?? 'Computer'} labelled={labelled} wide={wide} /></ErrorBoundary> : null
+  const newBot = createComputer && (
     <NewBotHost
-      key={botComputer.nodeId}
+      key={createComputer.nodeId}
       open={newBotOpen}
-      nodeId={botComputer.nodeId}
-      computerName={labelled ? botComputer.name : undefined}
+      nodeId={createComputer.nodeId}
+      computerName={labelled ? createComputer.name : undefined}
       onClose={() => setNewBotOpen(false)}
       onCreated={created}
     />
+  )
+  const newProject = createComputer && (
+    <NewProjectHost
+      key={`project:${createComputer.nodeId}`}
+      open={newProjectOpen}
+      nodeId={createComputer.nodeId}
+      computerName={createComputer.name}
+      onClose={() => setNewProjectOpen(false)}
+      onCreated={projectCreated}
+    />
+  )
+  const title = TAB_META[tab].label
+  // The dock shows with the lists; until then there is nothing for its tabs to show.
+  const home = (
+    <div className="m-home" data-dock={lists ? '' : undefined}>
+      <div className="m-scroll m-home__scroll"><div className="m-content">{list}</div></div>
+      {lists && <HomeDock tab={tab} onTab={changeTab} action={actions[tab]} />}
+    </div>
   )
 
   if (!wide) {
     if (pane) return pane
     return (
       <main className="m-screen">
-        <TopBar leading={<span className="m-topbar__brand"><MousseLogo size={24} /></span>} title="Threads" trailing={<>{compose}{settings}</>} />
-        <div className="m-scroll"><div className="m-content">{list}</div></div>
+        <TopBar leading={<span className="m-topbar__brand"><MousseLogo size={24} /></span>} title={title} trailing={settings} />
+        {home}
         {newBot}
+        {newProject}
       </main>
     )
   }
@@ -282,8 +309,8 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
   return (
     <main className="m-screen m-split">
       <aside className="m-split__list">
-        <TopBar leading={<span className="m-topbar__brand"><MousseLogo size={24} /></span>} title="Threads" trailing={<>{compose}{settings}</>} />
-        <div className="m-scroll"><div className="m-content">{list}</div></div>
+        <TopBar leading={<span className="m-topbar__brand"><MousseLogo size={24} /></span>} title={title} trailing={settings} />
+        {home}
       </aside>
       <section className="m-split__detail">
         {pane ?? (
@@ -293,6 +320,7 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
         )}
       </section>
       {newBot}
+      {newProject}
     </main>
   )
 }
@@ -356,6 +384,13 @@ function NewBotHost({ open, nodeId, computerName, onClose, onCreated }: { open: 
   useEffect(() => { if (open) setOpened(true) }, [open])
   if (!opened && !open) return null
   return <BotBoundary resetKey={open}><Suspense fallback={null}><NewBotSheet open={open} computerName={computerName} bots={session?.bots} existing={lists?.bots ?? []} onClose={onClose} onCreated={onCreated} /></Suspense></BotBoundary>
+}
+
+function NewProjectHost({ open, nodeId, computerName, onClose, onCreated }: { open: boolean; nodeId: string; computerName: string; onClose(): void; onCreated(project: Project): void }) {
+  const { session, lists } = useComputer(nodeId)
+  const projectPaths = useMemo(() => (lists?.projects ?? []).flatMap((project) => (project.path ? [project.path] : [])), [lists?.projects])
+  const openProject = session?.openProject?.bind(session)
+  return <NewProjectSheet open={open} computerName={computerName} {...(openProject ? { openProject } : {})} projectPaths={projectPaths} onClose={onClose} onCreated={onCreated} />
 }
 
 /** One bot's chat on its computer, or why it cannot open. */

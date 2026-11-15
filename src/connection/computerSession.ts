@@ -25,6 +25,7 @@ import type {
   LlmModelOption,
   LlmProviderOption,
   ModelSelection,
+  OpenProjectResult,
   PermissionMode,
   Project,
   QuestionAnswers,
@@ -648,6 +649,16 @@ export class RealComputerSession implements ComputerSession {
     const thread = isObject(value) ? threadSummary(value.thread) : undefined
     if (!thread) return badAnswer('threads.create')
     return thread
+  }
+
+  async openProject(path: string): Promise<OpenProjectResult> {
+    const value = await this.leaf.rpc('projects.open', { path }, { idem: crypto.randomUUID() })
+    if (isObject(value) && value.ok === true) {
+      const opened = project(value.project)
+      if (opened) return { ok: true, project: opened }
+    }
+    const error = isObject(value) && typeof value.error === 'string' && value.error ? value.error : 'The computer did not open the folder.'
+    return { ok: false, error }
   }
 
   /**

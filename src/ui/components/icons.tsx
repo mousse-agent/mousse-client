@@ -44,6 +44,7 @@ import ComputerIcon from '@hugeicons/core-free-icons/ComputerIcon'
 import PaletteIcon from '@hugeicons/core-free-icons/PaletteIcon'
 import CrownIcon from '@hugeicons/core-free-icons/CrownIcon'
 import Folder01Icon from '@hugeicons/core-free-icons/Folder01Icon'
+import FolderAddIcon from '@hugeicons/core-free-icons/FolderAddIcon'
 import InformationCircleIcon from '@hugeicons/core-free-icons/InformationCircleIcon'
 import Link01Icon from '@hugeicons/core-free-icons/Link01Icon'
 import Loading03Icon from '@hugeicons/core-free-icons/Loading03Icon'
@@ -150,6 +151,7 @@ export const Wrench = /* @__PURE__ */ createIcon('Wrench', Wrench01Icon)
 export const X = /* @__PURE__ */ createIcon('X', Cancel01Icon)
 // Sidebar (mousse/src/renderer/lib/icons.tsx names).
 export const FolderKanban = /* @__PURE__ */ createIcon('FolderKanban', FolderLibraryIcon)
+export const FolderPlus = /* @__PURE__ */ createIcon('FolderPlus', FolderAddIcon)
 export const FolderOpen = /* @__PURE__ */ createIcon('FolderOpen', FolderOpenIcon)
 export const GitBranch = /* @__PURE__ */ createIcon('GitBranch', GitBranchIcon)
 export const ListTree = /* @__PURE__ */ createIcon('ListTree', Structure01Icon)
