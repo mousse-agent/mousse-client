@@ -17,6 +17,8 @@ import { mergedKey, mergeLists, savedTab, saveTab, splitKey, type SidebarTab } f
 import { loadLastComputer, saveLastComputer } from '../lib/composerPrefs'
 import { threadComputers } from '../lib/newThread'
 import { ThreadView } from './ThreadView'
+import { ThreadOptionsHost } from '../sidebar/ThreadOptionsHost'
+import type { ThreadOptionsResult } from '../sidebar/ThreadOptionsSheet'
 import { BotHeader } from '../bots/BotHeader'
 import { BotBoundary } from '../bots/BotBoundary'
 
@@ -69,6 +71,19 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
   const [notice, setNotice] = useState<string>()
   const [newBotOpen, setNewBotOpen] = useState(false)
   const [newProjectOpen, setNewProjectOpen] = useState(false)
+  // The thread whose options are open (its merged key), and what the last option said when it finished.
+  const [optionsKey, setOptionsKey] = useState<string>()
+  const [optionsNotice, setOptionsNotice] = useState<{ text: string; error?: boolean; undo?: () => void }>()
+  const optionsResult = useCallback((result: ThreadOptionsResult | { error: string }) => {
+    setOptionsNotice('error' in result ? { text: result.error, error: true } : { text: result.message, ...(result.undo ? { undo: result.undo } : {}) })
+  }, [])
+  const closeOptions = useCallback(() => setOptionsKey(undefined), [])
+  const openOptions = useCallback((thread: ListThread) => { setOptionsNotice(undefined); setOptionsKey(thread.id) }, [])
+  useEffect(() => {
+    if (!optionsNotice || optionsNotice.error) return
+    const timer = setTimeout(() => setOptionsNotice(undefined), 6_000)
+    return () => clearTimeout(timer)
+  }, [optionsNotice])
 
   const enrolled = useMemo(() => threadComputers(computers.data ?? []), [computers.data])
   const byNode = useMemo(() => new Map(enrolled.map((computer) => [computer.nodeId, computer])), [enrolled])
@@ -114,6 +129,7 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
     setTab(next)
     saveTab(next)
     setNotice(undefined)
+    setOptionsNotice(undefined)
   }, [])
 
   const open = selected ?? selectedBot
@@ -197,6 +213,14 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
         return null
       })}
       {notice && <Notice tone="info">{notice}</Notice>}
+      {optionsNotice && (
+        <Notice tone={optionsNotice.error ? 'error' : 'info'}>
+          <span className="m-options-notice">
+            <span>{optionsNotice.text}</span>
+            {optionsNotice.undo && <Button variant="ghost" onClick={() => { optionsNotice.undo?.(); setOptionsNotice(undefined) }}>Undo</Button>}
+          </span>
+        </Notice>
+      )}
     </>
   )
 
@@ -217,6 +241,7 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
         banner={banner}
         order="recent"
         {...(labelled ? { computerOf } : {})}
+        onThreadOptions={openOptions}
       />
       </ErrorBoundary>
     )
@@ -265,6 +290,9 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
   const pane = selected
     ? <ThreadPane nodeId={selected.nodeId} threadId={selected.threadId} name={selectedComputer?.name ?? 'Computer'} wide={wide} />
     : selectedBot ? <ErrorBoundary what="this bot's chat" resetKey={selectedBot.botId}><BotPane nodeId={selectedBot.nodeId} botId={selectedBot.botId} name={createComputerName ?? 'Computer'} labelled={labelled} wide={wide} /></ErrorBoundary> : null
+  const threadOptions = (
+    <ThreadOptionsHost threadKey={optionsKey} views={views} computerOf={computerOf} showComputer={labelled} onResult={optionsResult} onClose={closeOptions} />
+  )
   const newBot = createComputer && (
     <NewBotHost
       key={createComputer.nodeId}
@@ -302,6 +330,7 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
         {home}
         {newBot}
         {newProject}
+        {threadOptions}
       </main>
     )
   }
@@ -321,6 +350,7 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
       </section>
       {newBot}
       {newProject}
+      {threadOptions}
     </main>
   )
 }

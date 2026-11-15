@@ -20,6 +20,7 @@ import {
   Pin,
 } from '../components/icons'
 import { SearchField, SectionHeading } from '../components/primitives'
+import { useLongPress } from '../hooks/useLongPress'
 import {
   chatColor,
   chatPreview,
@@ -78,6 +79,15 @@ export interface RowComputer {
   offline?: boolean
 }
 
+/**
+ * Pressing and holding a thread row opens its options; screen readers reach them through a hidden button after the
+ * row, outside the tab order (keyboards use the context-menu key or Shift+F10 on the row).
+ */
+function OptionsButton({ thread, onOptions }: { thread: ListThread; onOptions?(): void }) {
+  if (!onOptions) return null
+  return <button type="button" className="m-sr-only" tabIndex={-1} onClick={onOptions}>{`Options for ${thread.title}`}</button>
+}
+
 /** The computer's name beside its icon, and "offline" when the row comes from the saved lists. */
 function ComputerMark({ computer }: { computer: RowComputer }) {
   const title = computer.offline ? `Runs on ${computer.name} · Offline` : `Runs on ${computer.name}`
@@ -90,7 +100,7 @@ function ComputerMark({ computer }: { computer: RowComputer }) {
   )
 }
 
-function ThreadCard({ thread, projectName, status, active, now, computer, onOpen }: {
+function ThreadCard({ thread, projectName, status, active, now, computer, onOpen, onOptions }: {
   thread: ListThread
   projectName?: string
   status?: ThreadStatus
@@ -98,9 +108,12 @@ function ThreadCard({ thread, projectName, status, active, now, computer, onOpen
   now: number
   computer?: RowComputer
   onOpen(): void
+  onOptions?(): void
 }) {
+  const hold = useLongPress(onOptions)
   return (
-    <button type="button" className={`m-sb-card${active ? ' is-active' : ''}${thread.settled ? ' is-settled' : ''}`} aria-current={active ? 'true' : undefined} onClick={onOpen}>
+    <>
+    <button type="button" className={`m-sb-card${active ? ' is-active' : ''}${thread.settled ? ' is-settled' : ''}`} aria-current={active ? 'true' : undefined} aria-keyshortcuts={onOptions ? 'Shift+F10' : undefined} onClick={onOpen} {...hold}>
       {projectName && thread.projectId ? (
         <span className="m-sb-card__mark" style={{ color: `var(--hue-${projectHue(thread.projectId)})` }} aria-hidden="true">{projectInitials(projectName)}</span>
       ) : (
@@ -123,12 +136,16 @@ function ThreadCard({ thread, projectName, status, active, now, computer, onOpen
         )}
       </span>
     </button>
+    <OptionsButton thread={thread} onOptions={onOptions} />
+    </>
   )
 }
 
-function ThreadRow({ thread, status, active, onOpen }: { thread: ListThread; status?: ThreadStatus; active: boolean; onOpen(): void }) {
+function ThreadRow({ thread, status, active, onOpen, onOptions }: { thread: ListThread; status?: ThreadStatus; active: boolean; onOpen(): void; onOptions?(): void }) {
+  const hold = useLongPress(onOptions)
   return (
-    <button type="button" className={`m-sb-row${active ? ' is-active' : ''}`} aria-current={active ? 'true' : undefined} onClick={onOpen}>
+    <>
+    <button type="button" className={`m-sb-row${active ? ' is-active' : ''}`} aria-current={active ? 'true' : undefined} aria-keyshortcuts={onOptions ? 'Shift+F10' : undefined} onClick={onOpen} {...hold}>
       {thread.pinned && <Pin size={12} strokeWidth={2} className="m-sb-row__pin" aria-label="Pinned" />}
       <span className="m-sb-row__title">{thread.title}</span>
       <span className="m-sb-row__trailing">
@@ -136,6 +153,8 @@ function ThreadRow({ thread, status, active, onOpen }: { thread: ListThread; sta
         {thread.worktree && <GitBranch size={13} className="m-faint" aria-label="Worktree" />}
       </span>
     </button>
+    <OptionsButton thread={thread} onOptions={onOptions} />
+    </>
   )
 }
 
@@ -152,7 +171,7 @@ function Collapsible({ title, count, open, onToggle, children }: { title: string
   )
 }
 
-function ProjectGroup({ project, threads, lists, selectedId, computer, expanded, onToggle, onOpen, onNewThread }: {
+function ProjectGroup({ project, threads, lists, selectedId, computer, expanded, onToggle, onOpen, onOptions, onNewThread }: {
   project: ListProject
   threads: ListThread[]
   lists: ComputerLists
@@ -161,6 +180,7 @@ function ProjectGroup({ project, threads, lists, selectedId, computer, expanded,
   expanded: boolean
   onToggle(): void
   onOpen(thread: ListThread): void
+  onOptions?(thread: ListThread): void
   onNewThread?(project: ListProject): void
 }) {
   const [all, setAll] = useState(false)
@@ -186,7 +206,7 @@ function ProjectGroup({ project, threads, lists, selectedId, computer, expanded,
         <div className="m-sb-children">
           {threads.length === 0 && <p className="m-sb-empty">No threads yet.</p>}
           {shown.map((thread) => (
-            <ThreadRow key={thread.id} thread={thread} status={lists.status[thread.id]} active={thread.id === selectedId} onOpen={() => onOpen(thread)} />
+            <ThreadRow key={thread.id} thread={thread} status={lists.status[thread.id]} active={thread.id === selectedId} onOpen={() => onOpen(thread)} {...(onOptions ? { onOptions: () => onOptions(thread) } : {})} />
           ))}
           {threads.length > PROJECT_PREVIEW_LIMIT && (
             <button type="button" className="m-sb-more" onClick={() => setAll((value) => !value)}>{all ? 'Show less' : `Show ${threads.length - PROJECT_PREVIEW_LIMIT} more`}</button>
@@ -277,6 +297,8 @@ export interface SidebarProps {
   computerOf?(id: string): RowComputer | undefined
   /** `recent` orders the Threads tab by activity, for merged lists. */
   order?: 'desktop' | 'recent'
+  /** Opens a thread's options (press and hold, right-click, or the context-menu key on a row). */
+  onThreadOptions?(thread: ListThread): void
 }
 
 function useNow(ms = 30_000): number {
@@ -288,7 +310,7 @@ function useNow(ms = 30_000): number {
   return now
 }
 
-export function Sidebar({ lists, tab, selectedId, onOpenThread, onOpenChat, onNewThread, onOpenBot, canMakeBots, selectedBotId, banner, computerOf, order = 'desktop' }: SidebarProps) {
+export function Sidebar({ lists, tab, selectedId, onOpenThread, onOpenChat, onNewThread, onOpenBot, canMakeBots, selectedBotId, banner, computerOf, order = 'desktop', onThreadOptions }: SidebarProps) {
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [settledOpen, setSettledOpen] = useState(false)
@@ -327,6 +349,7 @@ export function Sidebar({ lists, tab, selectedId, onOpenThread, onOpenChat, onNe
       now={now}
       computer={computerOf?.(thread.id)}
       onOpen={() => onOpenThread(thread)}
+      {...(onThreadOptions ? { onOptions: () => onThreadOptions(thread) } : {})}
     />
   )
 
@@ -354,6 +377,7 @@ export function Sidebar({ lists, tab, selectedId, onOpenThread, onOpenChat, onNe
                   expanded={searching || expanded.has(project.id)}
                   onToggle={() => toggle(project.id)}
                   onOpen={onOpenThread}
+                  {...(onThreadOptions ? { onOptions: onThreadOptions } : {})}
                   onNewThread={onNewThread}
                 />
               )
@@ -362,7 +386,7 @@ export function Sidebar({ lists, tab, selectedId, onOpenThread, onOpenChat, onNe
               <Collapsible title="Recent chats" count={model.standalone.length} open={searching || standaloneOpen} onToggle={() => setStandaloneOpen((value) => !value)}>
                 <div className="m-sb-children m-sb-children--flat">
                   {model.standalone.map((thread) => (
-                    <ThreadRow key={thread.id} thread={thread} status={lists.status[thread.id]} active={thread.id === selectedId} onOpen={() => onOpenThread(thread)} />
+                    <ThreadRow key={thread.id} thread={thread} status={lists.status[thread.id]} active={thread.id === selectedId} onOpen={() => onOpenThread(thread)} {...(onThreadOptions ? { onOptions: () => onThreadOptions(thread) } : {})} />
                   ))}
                 </div>
               </Collapsible>
@@ -375,7 +399,7 @@ export function Sidebar({ lists, tab, selectedId, onOpenThread, onOpenChat, onNe
             {model.threads.length === 0 && <p className="m-sb-empty">{searching ? `No threads match “${query.trim()}”.` : 'No threads yet.'}</p>}
             <div className="m-sb-feed">{model.threads.map(card)}</div>
             {model.settled.length > 0 && (
-              <Collapsible title="Settled" count={model.settled.length} open={settledOpen} onToggle={() => setSettledOpen((value) => !value)}>
+              <Collapsible title="Archived" count={model.settled.length} open={settledOpen} onToggle={() => setSettledOpen((value) => !value)}>
                 <div className="m-sb-feed">{model.settled.map(card)}</div>
               </Collapsible>
             )}

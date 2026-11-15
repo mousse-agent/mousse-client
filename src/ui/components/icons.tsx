@@ -5,6 +5,9 @@ import { HugeiconsIcon, type IconSvgElement } from '@hugeicons/react'
 import Alert02Icon from '@hugeicons/core-free-icons/Alert02Icon'
 import Robot01Icon from '@hugeicons/core-free-icons/Robot01Icon'
 import Clock01Icon from '@hugeicons/core-free-icons/Clock01Icon'
+import Archive01Icon from '@hugeicons/core-free-icons/Archive01Icon'
+import ArchiveRestoreIcon from '@hugeicons/core-free-icons/ArchiveRestoreIcon'
+import PinOffIcon from '@hugeicons/core-free-icons/PinOffIcon'
 import File02Icon from '@hugeicons/core-free-icons/File02Icon'
 import Globe02Icon from '@hugeicons/core-free-icons/Globe02Icon'
 import PauseIcon from '@hugeicons/core-free-icons/PauseIcon'
@@ -139,6 +142,9 @@ export const MessageSquare = /* @__PURE__ */ createIcon('MessageSquare', BubbleC
 export const Monitor = /* @__PURE__ */ createIcon('Monitor', ComputerIcon)
 export const Palette = /* @__PURE__ */ createIcon('Palette', PaletteIcon)
 export const Pin = /* @__PURE__ */ createIcon('Pin', PinIcon)
+export const PinOff = /* @__PURE__ */ createIcon('PinOff', PinOffIcon)
+export const Archive = /* @__PURE__ */ createIcon('Archive', Archive01Icon)
+export const ArchiveRestore = /* @__PURE__ */ createIcon('ArchiveRestore', ArchiveRestoreIcon)
 export const Plus = /* @__PURE__ */ createIcon('Plus', Add01Icon)
 export const QrCode = /* @__PURE__ */ createIcon('QrCode', QrCodeIcon)
 export const RefreshCw = /* @__PURE__ */ createIcon('RefreshCw', RefreshIcon)

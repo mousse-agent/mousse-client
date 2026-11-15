@@ -3,6 +3,7 @@ import type { ComputerBots, ListBot } from './bots'
 // talks to MousseConnection; the Net and Mousse ID implementation lives in src/net and
 // src/mousseId. Keep this file small and stable: both sides depend on it.
 import type { ComputerSpeech } from './speech'
+import type { ThreadActions } from './threadActions'
 
 export interface Account {
   id: string
@@ -105,6 +106,10 @@ export interface ListThread {
   /** False for empty drafts, which the sidebar hides. */
   started: boolean
   worktree?: boolean
+  /** When the thread deletes itself (ISO time), from computers that list it. */
+  expiresAt?: string
+  /** At that time a running turn is stopped too; kept when the time changes. */
+  expiryStopsRun?: boolean
 }
 
 /** A conversation with agents (the desktop's Chats tab). Its messages live in a backing thread. */
@@ -495,6 +500,8 @@ export interface ComputerSession {
   readonly speech?: ComputerSpeech
   /** The owner's personal bots on this computer. */
   readonly bots?: ComputerBots
+  /** A thread's menu: rename, pin, archive, and what else the computer offers phones. */
+  readonly threadMenu?: ThreadActions
   close(): void
 }
 
