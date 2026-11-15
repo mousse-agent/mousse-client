@@ -2,21 +2,33 @@ import { Capacitor } from '@capacitor/core'
 import { Preferences } from '@capacitor/preferences'
 
 /**
- * Keeps the 3D bot faces from taking the app down on a phone whose GPU can't run their shader.
+ * Keeps the 3D bot faces from taking the app down twice on a phone whose GPU can't run their shader.
  *
- * On Android the WebView's GPU work runs in the app's own process. A driver that stalls compiling or
- * drawing the face shader freezes the whole app, and Android closes it after 5 seconds, so no
+ * The faces now compile and draw in a Worker (`faceWorker.ts`), so a slow compile no longer freezes
+ * the page. But a GPU driver that crashes or hangs runs in the app's own process, and then no
  * JavaScript error handler ever runs. The guard leaves a mark on disk before the face renderer
  * starts and clears it once faces have drawn for a while. A launch that finds the mark still there
- * knows the last start never finished, and keeps to the still faces until the person turns 3D faces
- * on again in Settings.
+ * knows the last start never finished, and keeps to the saved pictures.
  *
- * Stored values: `ok` (3D faces ran here), `starting` (a start in progress, or one that died),
- * `off` (still faces only). Nothing stored means 3D faces have never started on this phone.
+ * That holds only for the renderer revision that tripped (`FACE_RENDERER_REVISION`). A build with a
+ * newer revision tries 3D faces again, still guarded, without the person having to find the setting:
+ * the shader or the way it starts may have changed what stopped the app. Turning 3D faces off in
+ * Settings is the person's choice and stays.
+ *
+ * Stored values: `ok` (3D faces ran here), `starting:<rev>` (a start in progress, or one that died),
+ * `tripped:<rev>` (a start of that revision died: no 3D faces for it), `user-off` (turned off in
+ * Settings). Builds before revision 2 stored `starting` and `off`, and used `off` for both a trip and
+ * the setting; both read as a trip of revision 1, so the new build tries again once.
+ * Nothing stored means 3D faces have never started on this phone.
  * In a browser (the demo, tests) there is no guard: faces start at once.
  */
 export type FaceMode = 'live' | 'still'
-type Stored = 'ok' | 'starting' | 'off'
+
+/**
+ * Bump when a change to the face renderer or shader may let a phone whose last start died run the
+ * faces: it then tries once more. 2: the shader a sixth of its size, compiled and drawn in a Worker.
+ */
+export const FACE_RENDERER_REVISION = 2
 
 const KEY = 'mousse.botFaces.v1'
 /** Faces that have drawn this long after the shader was ready count as safe on this phone. */
@@ -28,7 +40,7 @@ type Phase = 'loading' | 'idle' | 'arming' | 'armed' | 'off'
 
 interface GuardStore {
   get(): Promise<string | null>
-  set(value: Stored): Promise<void>
+  set(value: string): Promise<void>
 }
 
 const preferencesStore: GuardStore = {
@@ -38,8 +50,10 @@ const preferencesStore: GuardStore = {
 
 let store: GuardStore | null = Capacitor.isNativePlatform() ? preferencesStore : null
 let phase: Phase = store ? 'loading' : 'armed'
-/** The last start died: shown once in Settings so the person knows why faces are still. */
-let tripped = false
+/** Why faces are off: a start that died (of this revision), or the setting. */
+let offBecause: 'tripped' | 'setting' | null = null
+/** A start of an older revision died, and this launch tries again. */
+let retrying = false
 let confirmed = false
 const listeners = new Set<() => void>()
 
@@ -53,6 +67,12 @@ function setPhase(next: Phase): void {
   emit()
 }
 
+/** The revision in a stored `starting:<rev>` or `tripped:<rev>`; builds before revision 2 wrote none. */
+function revisionOf(value: string): number {
+  const rev = Number(value.split(':')[1])
+  return Number.isInteger(rev) && rev > 0 ? rev : 1
+}
+
 async function load(): Promise<void> {
   if (!store) return
   let value: string | null = null
@@ -61,16 +81,22 @@ async function load(): Promise<void> {
   } catch {
     value = null
   }
-  if (value === 'starting') {
-    // The last start never confirmed: the app died while faces were starting.
-    tripped = true
-    await store.set('off').catch(() => {})
+  if (value === 'user-off') {
+    offBecause = 'setting'
     setPhase('off')
-  } else if (value === 'off') {
-    setPhase('off')
-  } else {
-    setPhase('idle')
+    return
   }
+  const died = value !== null && (value === 'off' || value.startsWith('starting') || value.startsWith('tripped'))
+  if (died && revisionOf(value!) === FACE_RENDERER_REVISION) {
+    // A start of this revision never confirmed: the app died while faces were starting.
+    offBecause = 'tripped'
+    if (!value!.startsWith('tripped')) await store.set(`tripped:${FACE_RENDERER_REVISION}`).catch(() => {})
+    setPhase('off')
+    return
+  }
+  // Nothing stored, `ok`, or a start of an older revision that died: start, guarded.
+  retrying = died
+  setPhase('idle')
 }
 
 let loaded: Promise<void> | null = null
@@ -90,9 +116,10 @@ async function arm(): Promise<void> {
   if (phase !== 'idle' || !store) return
   setPhase('arming')
   try {
-    await store.set('starting')
+    await store.set(`starting:${FACE_RENDERER_REVISION}`)
   } catch {
-    // Without a mark the guard can't protect the next launch; still faces are the safe choice.
+    // Without a mark the guard can't protect the next launch; the saved pictures are the safe choice.
+    offBecause = 'tripped'
     setPhase('off')
     return
   }
@@ -113,7 +140,7 @@ export function subscribeFaceGuard(listener: () => void): () => void {
   return () => listeners.delete(listener)
 }
 
-/** The Settings choice: 3D faces (`live`) or still ones. */
+/** The Settings choice: 3D faces (`live`) or the saved pictures only. */
 export function faceMode(): FaceMode {
   ensureLoaded()
   return phase === 'off' ? 'still' : 'live'
@@ -125,34 +152,45 @@ export function faceGuardWaiting(): boolean {
   return phase === 'loading' || phase === 'idle' || phase === 'arming'
 }
 
-/** True when 3D faces were turned off because they stopped the app last time. */
+/** True when 3D faces are off because a start of this renderer revision stopped the app. */
 export function faceGuardTripped(): boolean {
-  return tripped
+  return phase === 'off' && offBecause === 'tripped'
+}
+
+/** Where the guard is, for Settings → Advanced. */
+export function faceGuardState(): { guarded: boolean; phase: Phase; offBecause: 'tripped' | 'setting' | null; retrying: boolean; confirmed: boolean } {
+  return { guarded: !!store, phase, offBecause: phase === 'off' ? offBecause : null, retrying, confirmed }
 }
 
 export async function setFaceMode(mode: FaceMode): Promise<void> {
-  tripped = false
-  emit()
   if (!store) {
+    offBecause = mode === 'still' ? 'setting' : null
     setPhase(mode === 'still' ? 'off' : 'armed')
+    emit()
     return
   }
   if (mode === 'still') {
-    await store.set('off').catch(() => {})
+    offBecause = 'setting'
+    await store.set('user-off').catch(() => {})
     setPhase('off')
+    emit()
     return
   }
   // Back on: the next start is guarded again, as on a new install.
+  offBecause = null
+  retrying = false
   await store.set('ok').catch(() => {})
   confirmed = false
   setPhase('idle')
+  emit()
 }
 
 /** For tests: a guard over `next` (null = a browser, no guard). */
 export function resetFaceGuard(next: GuardStore | null): void {
   store = next
   phase = next ? 'loading' : 'armed'
-  tripped = false
+  offBecause = null
+  retrying = false
   confirmed = false
   loaded = null
   emit()

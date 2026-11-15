@@ -8,6 +8,8 @@ import { Bot, Check, ChevronLeft, ChevronRight, Info, LogOut, Monitor, Palette, 
 import { Button, IconButton, MousseLogo, Notice, Segmented, StatusDot, TopBar } from '../components/primitives'
 import { AddPhoneSheet } from './AddPhoneSheet'
 import { faceGuardTripped, faceMode, setFaceMode, subscribeFaceGuard, type FaceMode } from '../bots/face/faceGuard'
+import { subscribeFaceDiagnostics } from '../bots/face/faceRenderer'
+import { currentFaceDiagnosticsLines } from '../bots/face/faceDiagnosticsText'
 
 /** 3D bot faces on or off. The app turns them off by itself when they stopped it last time. */
 function BotFacesSection() {
@@ -18,7 +20,7 @@ function BotFacesSection() {
       <SettingsRow
         title="Bot faces"
         description={tripped
-          ? 'Turned off because the 3D faces stopped the app on this phone. Bots show their last 3D picture instead.'
+          ? 'Turned off because the 3D faces stopped the app on this phone. Bots show their last 3D picture instead; an update tries again.'
           : 'Off shows each bot’s last 3D picture and uses less of the phone.'}
       >
         <Segmented<FaceMode>
@@ -29,6 +31,28 @@ function BotFacesSection() {
         />
       </SettingsRow>
     </SettingsGroup>
+  )
+}
+
+function subscribeFaceRow(listener: () => void): () => void {
+  const stopGuard = subscribeFaceGuard(listener)
+  const stopDiagnostics = subscribeFaceDiagnostics(listener)
+  return () => {
+    stopGuard()
+    stopDiagnostics()
+  }
+}
+
+const faceRowText = () => currentFaceDiagnosticsLines().join('\n')
+
+/** Settings → Advanced: what the 3D bot faces are doing on this phone, and why, in a screenshot-ready form. */
+function BotFacesDiagnosticsRow() {
+  const text = useSyncExternalStore(subscribeFaceRow, faceRowText, faceRowText)
+  return (
+    <SettingsRow
+      title="Bot faces"
+      description={<span className="font-mono" style={{ whiteSpace: 'pre-line', overflowWrap: 'anywhere' }}>{text}</span>}
+    />
   )
 }
 
@@ -224,6 +248,7 @@ export function SettingsScreen() {
             <div id={advancedId} className="m-set-rows">
               <SettingsRow title="Mousse ID server" description={<span className="font-mono">{signedIn?.idOrigin || 'Not signed in'}</span>} />
               <SettingsRow title="Account id" description={<span className="font-mono">{signedIn?.account.id ?? '—'}</span>} />
+              <BotFacesDiagnosticsRow />
             </div>
           )}
         </section>

@@ -2,9 +2,9 @@ import { useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProper
 import type { BotState } from '../../../connection/bots'
 import { BOT_COLOUR_HEX, botEyesOf, botKindOf, normalizeBotLook, type BotLook, type KnownBotLook } from '../look'
 import { useMotionScale } from '../motion'
-import { facePixelRatio, sharedFaceRenderer, sharedFaceRendererCompiling, sharedFaceRendererStatus, subscribeSharedFaceRenderer, type FaceHandle, type FaceSpec } from './faceRenderer'
+import { facePixelRatio, sharedFaceRenderer, sharedFaceRendererStatus, stillFrameKey, subscribeSharedFaceRenderer, type FaceHandle, type FaceSpec } from './faceRenderer'
 import { faceGuardWaiting, faceMode } from './faceGuard'
-import { faceShot, faceShotKey, saveFaceShot } from './faceShots'
+import { faceShot } from './faceShots'
 import { BotBoundary } from '../BotBoundary'
 import './face.css'
 
@@ -59,8 +59,9 @@ function a11y(label: string | undefined) {
 
 /**
  * How a face shows right now:
- * - `live`: the WebGL renderer is compiling or ready; the canvas is mounted and fades in on its first frame.
- * - `waiting`: the live face will come (the guard is saving its mark, a slow compile, or `hold`); the loader moves.
+ * - `live`: the WebGL renderer is compiling (in the background) or ready; the canvas is mounted and
+ *   fades in on its first frame.
+ * - `waiting`: the live face will come (the guard is saving its mark, or `hold`); the loader moves.
  * - `off`: no 3D faces on this phone (no WebGL, a failed shader, or turned off in Settings).
  * Until the live face draws, the face shows its saved picture from an earlier visit, or the loader.
  * The flat drawings older builds showed here are gone: a face is the 3D face or its loader.
@@ -69,13 +70,12 @@ type FaceShow = 'live' | 'waiting' | 'off'
 
 function useFaceShow(hold: boolean | undefined): FaceShow {
   const status = useSyncExternalStore(subscribeSharedFaceRenderer, sharedFaceRendererStatus, () => 'unavailable' as const)
-  const compiling = useSyncExternalStore(subscribeSharedFaceRenderer, sharedFaceRendererCompiling, () => false)
   const guardWaiting = useSyncExternalStore(subscribeSharedFaceRenderer, faceGuardWaiting, () => false)
   // Turned off in Settings: faces already live stop too, not only ones made from now on.
   const off = useSyncExternalStore(subscribeSharedFaceRenderer, faceMode, () => 'live' as const) === 'still'
   if (off) return 'off'
   if (status === 'pending' || status === 'ready') return hold ? 'waiting' : 'live'
-  if (compiling || guardWaiting) return 'waiting'
+  if (guardWaiting) return 'waiting'
   return 'off'
 }
 
@@ -87,8 +87,8 @@ export function BotFace(props: BotFaceProps) {
   const motionOff = useMotionScale() === 0
   const still = props.still === true || motionOff
   const ratio = facePixelRatio(typeof window === 'undefined' ? 1 : window.devicePixelRatio)
-  const shotKey = faceShotKey(look, state, view, Math.round(size * ratio))
-  const shot = faceShot(shotKey)
+  // The renderer saves each face's still pose under this key (its look, pose, view, size and canvas side).
+  const shot = faceShot(stillFrameKey({ look, state, view, size }, Math.max(1, Math.round(size * ratio))))
   const live = show === 'live' && !broken
   const loading = !shot && (live || show === 'waiting')
   // A face that goes back to waiting (a lost context) shows its picture or loader until it draws again.
@@ -113,7 +113,7 @@ export function BotFace(props: BotFaceProps) {
       {live && (
         // A live face that throws (a lost context, a driver quirk) leaves the picture or loader, never a blank app.
         <BotBoundary fallback={null}>
-          <BotFaceCanvas spec={{ look, state, size, view, still }} shotKey={shotKey} onDrawn={() => setDrawn(true)} onBroken={() => setBroken(true)} />
+          <BotFaceCanvas spec={{ look, state, size, view, still }} onDrawn={() => setDrawn(true)} onBroken={() => setBroken(true)} />
         </BotBoundary>
       )}
       {state === 'paused' && (
@@ -126,23 +126,18 @@ export function BotFace(props: BotFaceProps) {
 }
 
 /** The canvas the shared WebGL renderer draws this face into. */
-function BotFaceCanvas({ spec, shotKey, onDrawn, onBroken }: { spec: FaceSpec; shotKey: string; onDrawn(): void; onBroken(): void }) {
+function BotFaceCanvas({ spec, onDrawn, onBroken }: { spec: FaceSpec; onDrawn(): void; onBroken(): void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const handleRef = useRef<FaceHandle | null>(null)
   const specRef = useRef(spec)
   specRef.current = spec
-  const shotKeyRef = useRef(shotKey)
-  shotKeyRef.current = shotKey
   const onDrawnRef = useRef(onDrawn)
   onDrawnRef.current = onDrawn
 
   useLayoutEffect(() => {
     const canvas = canvasRef.current
     const handle = canvas
-      ? sharedFaceRenderer()?.register(canvas, specRef.current, () => {
-          onDrawnRef.current()
-          saveFaceShot(shotKeyRef.current, canvas)
-        }) ?? null
+      ? sharedFaceRenderer()?.register(canvas, specRef.current, { onDrawn: () => onDrawnRef.current() }) ?? null
       : null
     if (!handle) {
       onBroken()
