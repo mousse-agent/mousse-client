@@ -8,7 +8,9 @@ import type { FetchLike } from '../../src/mousseId/http'
 import { sealForOffer, sealForRequest } from '../../src/mousseId/seal'
 import { b64url, fromB64url, randomBytes } from '../../src/net/bytes'
 import { canonicalJson, newId } from '../../src/net/canonical'
-import { sha256, signDocument, type Signed } from '../../src/net/crypto'
+import { sha256, signDocument, x25519PublicKey, x25519Shared, type Signed } from '../../src/net/crypto'
+import { lanKey, sealAdvertisement } from '../../src/net/lan'
+import type { NativeLan } from '../../src/net/nativeLan'
 import { encodeInvite, type Enrollment, type NodeInviteAuthorization, type RedeemOptions } from '../../src/net/enrollment'
 import { NetError } from '../../src/net/errors'
 import { MemoryKeyStorage } from '../../src/net/keys'
@@ -54,7 +56,7 @@ function idServer(world: World) {
     if (path === '/v1/net/inventory')
       return reply({
         registrations: [
-          { id: 'reg_c', userId: world.user.user, nodeId: world.computer.node, kind: 'computer', deviceName: 'Studio', online: true, generation: 1, expiresAt: now + 60_000, revokedAt: null },
+          { id: 'reg_c', userId: world.user.user, nodeId: world.computer.node, kind: 'computer', deviceName: 'Studio', online: !world.computerOffline, generation: 1, expiresAt: now + 60_000, revokedAt: null },
           { id: 'reg_old', userId: world.user.user, nodeId: world.computer.node, kind: 'computer', deviceName: 'Studio', online: false, generation: 1, expiresAt: now - 1, revokedAt: null },
           { id: 'reg_gone', userId: world.user.user, nodeId: 'nod_gone', kind: 'computer', deviceName: 'Old', online: false, generation: 1, expiresAt: now, revokedAt: now - 5 },
           ...(world.phoneNode
@@ -162,6 +164,8 @@ interface World {
   config?: Record<string, unknown>
   /** When the phone's current registration ends, as Mousse ID holds it. */
   registrationExpiresAt?: number
+  /** Mousse ID reports the computer offline (it cannot reach Mousse ID). */
+  computerOffline?: boolean
 }
 
 /**
@@ -816,5 +820,100 @@ describe('real connection', () => {
     await connection.signOut()
     await connection.signInWithPassword('a@b.test', 'pw')
     expect(await connection.joinPlan()).toMatchObject({ status: 'needed' })
+  })
+})
+
+/** The phone's native LAN plugin as the test drives it: advertisements arrive when the test sends them. */
+function testLan() {
+  let deliver: ((packet: Uint8Array, source: string) => void) | undefined
+  const lan: NativeLan = {
+    dial: async () => {
+      throw new Error('The test opens LAN channels itself.')
+    },
+    advertisements: {
+      start: async (onPacket) => {
+        deliver = onPacket
+      },
+      stop: async () => {
+        deliver = undefined
+      },
+    },
+  }
+  return {
+    lan,
+    listening: () => !!deliver,
+    /** `from` advertises its LAN port to the phone whose agreement secret is `phoneAgree`. */
+    advertise(from: TestComputer, phoneAgree: string, port = 40123, source = '192.168.1.20') {
+      const key = lanKey(x25519Shared(from.keys.agreeSecret, x25519PublicKey(fromB64url(phoneAgree, 32))), from.node)
+      deliver?.(sealAdvertisement(key, port, Date.now(), randomBytes(12), randomBytes(6)), source)
+    },
+  }
+}
+
+const noLifecycle = { onPause() {}, onResume() {} }
+
+describe('real connection on the same Wi-Fi without the internet', () => {
+  it('lists and opens the computer on the LAN after the app restarts with Mousse ID out of reach', async () => {
+    const before = testLan()
+    const { w, storage, deps } = await enrolled(undefined, { lan: before.lan, lifecycle: noLifecycle })
+    expect(before.listening()).toBe(true)
+    // The app starts again with no internet: every Mousse ID request fails.
+    const offline: string[] = []
+    const after = testLan()
+    const targets: Array<{ node: string; host: string; port: number }> = []
+    let remote: ReturnType<typeof fakeComputer> | undefined
+    const connection = await createMousseConnection({
+      ...deps,
+      storage,
+      lan: after.lan,
+      lifecycle: noLifecycle,
+      fetcher: async (input) => {
+        offline.push(new URL(input).pathname)
+        throw new TypeError('Network request failed')
+      },
+      openChannel: async () => {
+        throw new Error('The relay is not reachable.')
+      },
+      openLanChannel: async (target) => {
+        targets.push({ node: target.node, host: target.host, port: target.port })
+        expect(target.expectedSpki).toEqual(w.computer.keys.transport.spki)
+        const [a, b] = streamPair()
+        remote = fakeComputer(b, w.user, w.computer, roster(w.user, w.computer.node))
+        void remote.handshake()
+        return channelOf(a, w.computer.keys.transport.spki)
+      },
+    })
+    expect(after.listening()).toBe(true)
+    // Last listed computers, offline until the computer is seen here.
+    expect((await connection.listComputers()).find((c) => c.nodeId === w.computer.node)).toMatchObject({ enrolled: true, online: false })
+    const phoneAgree = ((await stored(storage))[0] as { keys: { agree: string } }).keys.agree
+    // An advertisement from a computer that is not this phone's opens nothing.
+    after.advertise(testComputer(testUser()), phoneAgree)
+    expect((await connection.listComputers()).find((c) => c.nodeId === w.computer.node)?.online).toBe(false)
+    const changed = vi.fn()
+    connection.onComputersChange?.(changed)
+    after.advertise(w.computer, phoneAgree)
+    expect(changed).toHaveBeenCalled()
+    expect((await connection.listComputers()).find((c) => c.nodeId === w.computer.node)?.online).toBe(true)
+
+    const session = await connection.openComputer(w.computer.node)
+    expect(session.state()).toBe('open')
+    expect(targets).toEqual([{ node: w.computer.node, host: '192.168.1.20', port: 40123 }])
+    const projects = session.listProjects()
+    await remote!.answer('projects.list', { projects: [{ id: 'p1', name: 'Site' }] })
+    expect(await projects).toEqual([{ id: 'p1', name: 'Site' }])
+    // The LAN needs no registration with Mousse ID.
+    expect(offline.filter((path) => path.startsWith('/v1/net/registrations'))).toEqual([])
+    session.close()
+  })
+
+  it('shows a computer online that Mousse ID reports offline but this network sees', async () => {
+    const lan = testLan()
+    const { w, connection, storage } = await enrolled(undefined, { lan: lan.lan, lifecycle: noLifecycle })
+    w.computerOffline = true
+    expect((await connection.listComputers()).find((c) => c.nodeId === w.computer.node)?.online).toBe(false)
+    const phoneAgree = ((await stored(storage))[0] as { keys: { agree: string } }).keys.agree
+    lan.advertise(w.computer, phoneAgree)
+    expect((await connection.listComputers()).find((c) => c.nodeId === w.computer.node)?.online).toBe(true)
   })
 })

@@ -3,7 +3,7 @@ import type { ComputerView } from '../../connection/computerStore'
 import { deviceNetworkSignals } from '../../connection/networkSignals'
 import type { ListBot } from '../../connection/bots'
 import type { Computer, ListChat, ListProject, ListThread, Project } from '../../connection/types'
-import { useAutoJoin, useComputer, useComputers, useComputerViews } from '../hooks/connection'
+import { useAutoJoin, useComputer, useComputers, useComputerViews, useConnection } from '../hooks/connection'
 import { useIsWide } from '../hooks/useMediaQuery'
 import { useRouter } from '../state/router'
 import { EmptyState } from '../components/EmptyState'
@@ -66,6 +66,7 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
   const router = useRouter()
   const wide = useIsWide()
   const computers = useComputers()
+  const connection = useConnection()
   const join = useAutoJoin()
   const [tab, setTab] = useState<SidebarTab>(savedTab)
   const [notice, setNotice] = useState<string>()
@@ -96,8 +97,9 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
   useEffect(() => {
     const timer = setInterval(reload, COMPUTERS_REFRESH_MS)
     const off = deviceNetworkSignals.onChange(reload)
-    return () => { clearInterval(timer); off() }
-  }, [reload])
+    const offLan = connection.onComputersChange?.(reload)
+    return () => { clearInterval(timer); off(); offLan?.() }
+  }, [reload, connection])
   const troubled = [...views.values()].filter((view) => view.link === 'error' || view.link === 'removed').map((view) => view.nodeId).join(',')
   useEffect(() => {
     if (troubled) reload()

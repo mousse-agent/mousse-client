@@ -1,5 +1,7 @@
 // One computer session that moves between network paths without the screens noticing. It starts on
-// the Mousse ID relay. When the computer reports that it takes WebRTC offers and a peer-to-peer path
+// the Mousse ID relay, or directly on the phone's network when the computer advertises itself
+// there (which needs no internet). From the relay it moves to the LAN as soon as the computer is
+// seen there. When the computer reports that it takes WebRTC offers and a peer-to-peer path
 // opens and answers faster than the relay, a full second session opens there and
 // streams and new requests move onto it; the relay session closes once its requests in flight
 // finish. When the direct path stops answering, the session falls back to the relay. Callers see
@@ -62,6 +64,11 @@ export interface DirectLink {
 export interface PathOpeners {
   /** Opens a session over the Mousse ID relay; resolves once it is open. */
   relay(): Promise<LeafSession>
+  /**
+   * Opens a session to the computer on the phone's own network, without the internet; undefined
+   * when the computer was not seen there. Tried before the relay whenever a path is needed.
+   */
+  lan?(): Promise<LeafSession | undefined>
   /** Opens a session on one direct endpoint; resolves once it is open. Aborting closes it. */
   direct(endpoint: DirectEndpoint, signal: AbortSignal, link: DirectLink): Promise<LeafSession>
   /** False when direct paths are switched off (Mousse ID's kill switch, no WebRTC on the device). */
@@ -71,8 +78,9 @@ export interface PathOpeners {
 }
 
 export interface PathSessionOptions {
-  /** The session that is already open, on the relay. */
+  /** The session that is already open, on the relay unless `firstKind` says it is direct (the LAN). */
   first: LeafSession
+  firstKind?: PathKind
   open: PathOpeners
   network?: NetworkSignals
   probeIntervalMs?: number
@@ -139,7 +147,7 @@ export class PathSession implements SessionLink {
   private readonly offNetwork: () => void
 
   constructor(private readonly options: PathSessionOptions) {
-    this.active = this.track('relay', options.first)
+    this.active = this.track(options.firstKind ?? 'relay', options.first)
     this.offNetwork = (options.network ?? deviceNetworkSignals).onChange(() => this.networkChanged())
     if (options.autoProbe !== false) this.probeSoon(0)
   }
@@ -230,11 +238,18 @@ export class PathSession implements SessionLink {
 
   /** Looks for a direct path now; resolves when the attempt is over. */
   async probe(): Promise<void> {
-    if (this.stateValue !== 'open' || this.recovering || this.upgrading || this.active.kind === 'direct' || !this.directSupported) return
+    if (this.stateValue !== 'open' || this.recovering || this.upgrading || this.active.kind === 'direct' || !this.searches()) return
     this.upgrading = true
     clearTimeout(this.probeTimer)
     try {
       const relay = this.active
+      // The computer on the phone's own network needs no signaling and is always nearer than the relay.
+      const lan = await this.openLan()
+      if (lan) {
+        if (this.stateValue !== 'open' || this.recovering || this.active !== relay || lan.state !== 'open') return lan.close()
+        return this.adopt(this.track('direct', lan))
+      }
+      if (!this.directSupported) return
       if (this.options.open.directAllowed && !(await this.options.open.directAllowed().catch(() => false))) return
       if (this.stateValue !== 'open' || this.recovering || this.active !== relay) return
       await this.discover(relay)
@@ -276,8 +291,22 @@ export class PathSession implements SessionLink {
 
   private probeSoon(delay = this.options.probeIntervalMs ?? PROBE_INTERVAL_MS): void {
     clearTimeout(this.probeTimer)
-    if (this.stateValue !== 'open' || this.options.autoProbe === false || this.active.kind === 'direct' || !this.directSupported) return
+    if (this.stateValue !== 'open' || this.options.autoProbe === false || this.active.kind === 'direct' || !this.searches()) return
     this.probeTimer = setTimeout(() => void this.probe(), delay)
+  }
+
+  /** Whether there is any direct path to look for: WebRTC through the computer, or the LAN. */
+  private searches(): boolean {
+    return this.directSupported || !!this.options.open.lan
+  }
+
+  /** A LAN session when the computer is on this network; never throws. */
+  private async openLan(): Promise<LeafSession | undefined> {
+    try {
+      return (await this.options.open.lan?.()) ?? undefined
+    } catch {
+      return undefined
+    }
   }
 
   private async discover(path: Path): Promise<void> {
@@ -466,8 +495,8 @@ export class PathSession implements SessionLink {
   }
 
   /**
-   * Opens the next path after the current one was lost: always the relay, since a direct path is
-   * signaled through an open session. A relay that is restarting, or a computer that has not
+   * Opens the next path after the current one was lost: the computer on the phone's network when
+   * it is seen there, otherwise the relay, since a WebRTC path is signaled through an open session. A relay that is restarting, or a computer that has not
    * registered with it again yet, gets a few more attempts within a short window before the
    * session closes, so a brief drop never reaches the screens. After a relay loss on a computer
    * with a direct path, the direct path is tried again from the new relay session at once.
@@ -481,6 +510,12 @@ export class PathSession implements SessionLink {
       if (index > 0 && Date.now() + delay >= until) break
       if (delay > 0) await this.waitToRecover(delay)
       if (this.stateValue !== 'open') return
+      const lan = await this.openLan()
+      if (lan) {
+        if (this.stateValue !== 'open') return lan.close()
+        next = this.track('direct', lan)
+        break
+      }
       try {
         next = this.track('relay', await this.options.open.relay())
         break
@@ -500,7 +535,7 @@ export class PathSession implements SessionLink {
       return this.fail(code && !PATH_LOST.has(code) && code !== 'cancelled' ? (failure as Error) : reason)
     }
     this.adopt(next)
-    if (dead.kind === 'relay' && this.endpoints.length) this.probeSoon(0)
+    if (next.kind === 'relay' && dead.kind === 'relay' && this.endpoints.length) this.probeSoon(0)
   }
 
   /** Waits before the next relay attempt; closing the session ends the wait. */
