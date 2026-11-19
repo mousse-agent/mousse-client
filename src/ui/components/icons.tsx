@@ -78,6 +78,25 @@ import FlashIcon from '@hugeicons/core-free-icons/FlashIcon'
 import MagicWand01Icon from '@hugeicons/core-free-icons/MagicWand01Icon'
 import ShieldCheckIcon from '@hugeicons/core-free-icons/ShieldCheckIcon'
 import ShieldOffIcon from '@hugeicons/core-free-icons/ShieldOffIcon'
+import Activity01Icon from '@hugeicons/core-free-icons/Activity01Icon'
+import AppWindowIcon from '@hugeicons/core-free-icons/AppWindowIcon'
+import BookOpen01Icon from '@hugeicons/core-free-icons/BookOpen01Icon'
+import BrowserIcon from '@hugeicons/core-free-icons/BrowserIcon'
+import CancelCircleIcon from '@hugeicons/core-free-icons/CancelCircleIcon'
+import CheckListIcon from '@hugeicons/core-free-icons/CheckListIcon'
+import CircleDotDashedIcon from '@hugeicons/core-free-icons/CircleDotDashedIcon'
+import CircleGaugeIcon from '@hugeicons/core-free-icons/CircleGaugeIcon'
+import CircleIcon from '@hugeicons/core-free-icons/CircleIcon'
+import Coins01Icon from '@hugeicons/core-free-icons/Coins01Icon'
+import ComputerTerminal01Icon from '@hugeicons/core-free-icons/ComputerTerminal01Icon'
+import CpuIcon from '@hugeicons/core-free-icons/CpuIcon'
+import FolderSearchIcon from '@hugeicons/core-free-icons/FolderSearchIcon'
+import GitPullRequestIcon from '@hugeicons/core-free-icons/GitPullRequestIcon'
+import MinusSignCircleIcon from '@hugeicons/core-free-icons/MinusSignCircleIcon'
+import Moon02Icon from '@hugeicons/core-free-icons/Moon02Icon'
+import PlugIcon from '@hugeicons/core-free-icons/PlugIcon'
+import ViewIcon from '@hugeicons/core-free-icons/ViewIcon'
+import ViewOffSlashIcon from '@hugeicons/core-free-icons/ViewOffSlashIcon'
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'stroke'> {
   size?: number | string
@@ -187,3 +206,22 @@ export const Brain = /* @__PURE__ */ createIcon('Brain', Brain01Icon)
 export const Bell = /* @__PURE__ */ createIcon('Bell', Notification03Icon)
 export const Reply = /* @__PURE__ */ createIcon('Reply', ArrowTurnBackwardIcon)
 export const Shuffle = /* @__PURE__ */ createIcon('Shuffle', ShuffleIcon)
+export const Activity = /* @__PURE__ */ createIcon('Activity', Activity01Icon)
+export const AppWindow = /* @__PURE__ */ createIcon('AppWindow', AppWindowIcon)
+export const BookOpen = /* @__PURE__ */ createIcon('BookOpen', BookOpen01Icon)
+export const BrowserTab = /* @__PURE__ */ createIcon('BrowserTab', BrowserIcon)
+export const Circle = /* @__PURE__ */ createIcon('Circle', CircleIcon)
+export const CircleDotDashed = /* @__PURE__ */ createIcon('CircleDotDashed', CircleDotDashedIcon)
+export const CircleGauge = /* @__PURE__ */ createIcon('CircleGauge', CircleGaugeIcon)
+export const CircleMinus = /* @__PURE__ */ createIcon('CircleMinus', MinusSignCircleIcon)
+export const CircleX = /* @__PURE__ */ createIcon('CircleX', CancelCircleIcon)
+export const Coins = /* @__PURE__ */ createIcon('Coins', Coins01Icon)
+export const Cpu = /* @__PURE__ */ createIcon('Cpu', CpuIcon)
+export const Eye = /* @__PURE__ */ createIcon('Eye', ViewIcon)
+export const EyeOff = /* @__PURE__ */ createIcon('EyeOff', ViewOffSlashIcon)
+export const FolderSearch = /* @__PURE__ */ createIcon('FolderSearch', FolderSearchIcon)
+export const GitPullRequest = /* @__PURE__ */ createIcon('GitPullRequest', GitPullRequestIcon)
+export const Moon = /* @__PURE__ */ createIcon('Moon', Moon02Icon)
+export const Plug = /* @__PURE__ */ createIcon('Plug', PlugIcon)
+export const RowTodo = /* @__PURE__ */ createIcon('RowTodo', CheckListIcon)
+export const Terminal = /* @__PURE__ */ createIcon('Terminal', ComputerTerminal01Icon)
