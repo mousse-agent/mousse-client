@@ -8,7 +8,7 @@ import { useIsWide } from '../hooks/useMediaQuery'
 import { useRouter } from '../state/router'
 import { EmptyState } from '../components/EmptyState'
 import { ErrorBoundary } from '../components/ErrorBoundary'
-import { ChevronLeft, FolderPlus, Info, MessageSquarePlus, Plus, Settings } from '../components/icons'
+import { ChevronLeft, FolderPlus, MessageSquarePlus, MoreHorizontal, Plus, Settings } from '../components/icons'
 import { Button, IconButton, MousseLogo, Notice, Spinner, TopBar } from '../components/primitives'
 import { Sidebar, type RowComputer } from '../sidebar/Sidebar'
 import { HomeDock, TAB_META, type DockAction } from '../sidebar/HomeDock'
@@ -21,10 +21,17 @@ import { ThreadOptionsHost } from '../sidebar/ThreadOptionsHost'
 import type { ThreadOptionsResult } from '../sidebar/ThreadOptionsSheet'
 import { BotHeader } from '../bots/BotHeader'
 import { BotBoundary } from '../bots/BotBoundary'
+import { BotThreadHeader } from '../bots/BotThreadHeader'
+import { Mascot } from '../bots/Mascot'
+import type { BotMenuView } from '../bots/BotMenuSheet'
 
-// A bot's chat and the New bot sheet load the first time they open, so the app and its Chats tab start without them.
+// Bot chat and its heavy sheets load on demand, keeping initial phone startup fast.
 const BotChat = lazy(() => import('../bots/BotChat').then((module) => ({ default: module.BotChat })))
-const BotAboutSheet = lazy(() => import('../bots/BotChat').then((module) => ({ default: module.BotAboutSheet })))
+const BotAboutSheet = lazy(() => import('../bots/BotAboutSheet').then((module) => ({ default: module.BotAboutSheet })))
+const BotMemorySheet = lazy(() => import('../bots/BotMemorySheet').then((module) => ({ default: module.BotMemorySheet })))
+const BotPresenceSheet = lazy(() => import('../bots/BotPresenceSheet').then((module) => ({ default: module.BotPresenceSheet })))
+const BotTasksSheet = lazy(() => import('../bots/BotTasksSheet').then((module) => ({ default: module.BotTasksSheet })))
+const BotMenuSheet = lazy(() => import('../bots/BotMenuSheet').then((module) => ({ default: module.BotMenuSheet })))
 const NewBotSheet = lazy(() => import('../bots/NewBotSheet').then((module) => ({ default: module.NewBotSheet })))
 
 /** How often the home screen reads the account's computers again, to notice one coming online. */
@@ -72,6 +79,8 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
   const [notice, setNotice] = useState<string>()
   const [newBotOpen, setNewBotOpen] = useState(false)
   const [newProjectOpen, setNewProjectOpen] = useState(false)
+  // The bot whose long-press options are open in the Chats tab (merged key).
+  const [botOptionsKey, setBotOptionsKey] = useState<string>()
   // The thread whose options are open (its merged key), and what the last option said when it finished.
   const [optionsKey, setOptionsKey] = useState<string>()
   const [optionsNotice, setOptionsNotice] = useState<{ text: string; error?: boolean; undo?: () => void }>()
@@ -238,6 +247,8 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
         onOpenChat={openChat}
         onNewThread={newThreadIn}
         onOpenBot={openBot}
+        onBotOptions={(bot) => setBotOptionsKey(bot.id)}
+        onNewBot={() => setNewBotOpen(true)}
         canMakeBots={!!createComputer}
         {...(selectedBot ? { selectedBotId: mergedKey(selectedBot.nodeId, selectedBot.botId) } : {})}
         banner={banner}
@@ -295,6 +306,10 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
   const threadOptions = (
     <ThreadOptionsHost threadKey={optionsKey} views={views} computerOf={computerOf} showComputer={labelled} onResult={optionsResult} onClose={closeOptions} />
   )
+  const botOptions = botOptionsKey ? (() => {
+    const key = splitKey(botOptionsKey)
+    return key ? <SidebarBotMenuHost key={botOptionsKey} nodeId={key.nodeId} botId={key.id} onClose={() => setBotOptionsKey(undefined)} onOpenBot={() => { setBotOptionsKey(undefined); router.push({ name: 'bot', nodeId: key.nodeId, botId: key.id }) }} /> : null
+  })() : null
   const newBot = createComputer && (
     <NewBotHost
       key={createComputer.nodeId}
@@ -333,6 +348,7 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
         {newBot}
         {newProject}
         {threadOptions}
+        {botOptions}
       </main>
     )
   }
@@ -346,13 +362,23 @@ export function HomeScreen({ selected, selectedBot }: { selected?: { nodeId: str
       <section className="m-split__detail">
         {pane ?? (
           <div className="m-split__empty">
-            <EmptyState title="Pick a thread" body="Choose a thread or chat, or start a new one." />
+            {tab === 'chats' ? (
+              <div className="bot-empty-page">
+                <Mascot size={96} />
+                <h2 className="bot-empty-page__title">Talk to your bots and agents</h2>
+                <p className="bot-empty-page__body">Pick a bot or chat on the left, or make a new bot.</p>
+                {createComputer && <Button variant="primary" onClick={() => setNewBotOpen(true)}>New bot</Button>}
+              </div>
+            ) : (
+              <EmptyState title="Pick a thread" body="Choose a thread or chat, or start a new one." />
+            )}
           </div>
         )}
       </section>
       {newBot}
       {newProject}
       {threadOptions}
+      {botOptions}
     </main>
   )
 }
@@ -374,6 +400,16 @@ function ThreadPane({ nodeId, threadId, name, wide }: { nodeId: string; threadId
   const projectName = thread?.projectId ? lists?.projects.find((entry) => entry.id === thread.projectId)?.name : undefined
   const subtitle = chat ? `Chat · ${name}` : projectName ? `${projectName} · ${name}` : name
   const back = wide ? undefined : <IconButton label="Back" onClick={router.pop}><ChevronLeft size={22} /></IconButton>
+  // If a bot started this thread, show a breadcrumb bar back to that bot's chat (desktop BotThreadHeader).
+  const launcher = lists?.bots?.find((entry) => entry.threads?.some((launched) => launched.threadId === threadId))
+  const launchedThread = launcher?.threads?.find((launched) => launched.threadId === threadId)
+  const botBanner = launcher ? (
+    <BotThreadHeader
+      bot={launcher}
+      thread={launchedThread}
+      onBackToBot={() => router.replace({ name: 'bot', nodeId, botId: launcher.id })}
+    />
+  ) : null
 
   let body: ReactNode
   if (link === 'removed') {
@@ -400,11 +436,12 @@ function ThreadPane({ nodeId, threadId, name, wide }: { nodeId: string; threadId
   }
 
   if (wide) {
-    return <><TopBar title={title} subtitle={subtitle} />{body}</>
+    return <><TopBar title={title} subtitle={subtitle} />{botBanner}{body}</>
   }
   return (
     <main className="m-screen">
       <TopBar leading={back} title={title} subtitle={subtitle} />
+      {botBanner}
       {body}
     </main>
   )
@@ -425,16 +462,56 @@ function NewProjectHost({ open, nodeId, computerName, onClose, onCreated }: { op
   return <NewProjectSheet open={open} computerName={computerName} {...(openProject ? { openProject } : {})} projectPaths={projectPaths} onClose={onClose} onCreated={onCreated} />
 }
 
+function SidebarBotMenuHost({ nodeId, botId, onClose, onOpenBot }: { nodeId: string; botId: string; onClose(): void; onOpenBot(): void }) {
+  const { session, lists } = useComputer(nodeId)
+  const bot = lists?.bots?.find((entry) => entry.id === botId)
+  if (!bot) return null
+  return (
+    <BotBoundary resetKey={botId}>
+      <Suspense fallback={null}>
+        <BotMenuSheet
+          open
+          bot={bot}
+          bots={session?.bots}
+          existing={lists?.bots ?? []}
+          onClose={onClose}
+          onAbout={onOpenBot}
+        />
+      </Suspense>
+    </BotBoundary>
+  )
+}
+
 /** One bot's chat on its computer, or why it cannot open. */
 function BotPane({ nodeId, botId, name, labelled, wide }: { nodeId: string; botId: string; name: string; labelled: boolean; wide: boolean }) {
   const router = useRouter()
   const computer = useComputer(nodeId)
   const { link, lists, session, store } = computer
   const [about, setAbout] = useState(false)
+  const [memory, setMemory] = useState<{ open: boolean; focus?: string }>({ open: false })
+  const [presenceOpen, setPresenceOpen] = useState(false)
+  const [tasksOpen, setTasksOpen] = useState(false)
+  const [menu, setMenu] = useState<{ open: boolean; view: BotMenuView }>({ open: false, view: 'menu' })
+  const [findSignal, setFindSignal] = useState(0)
+  const [prefill, setPrefill] = useState<{ text: string; key: number; append?: boolean }>()
   const [error, setError] = useState<string>()
   const bot = lists?.bots?.find((entry) => entry.id === botId)
   const back = wide ? undefined : <IconButton label="Back" onClick={router.pop}><ChevronLeft size={22} /></IconButton>
-  const info = bot && session?.bots ? <IconButton label={`About ${bot.name}`} onClick={() => setAbout(true)}><Info /></IconButton> : undefined
+  const more = bot && session?.bots
+    ? <IconButton label="Bot menu" onClick={() => setMenu({ open: true, view: 'menu' })}><MoreHorizontal /></IconButton>
+    : undefined
+
+  const openThread = useCallback((threadId: string) => {
+    router.push({ name: 'thread', nodeId, threadId })
+  }, [router, nodeId])
+
+  const openMemory = useCallback((focus?: string) => {
+    setMemory({ open: true, ...(focus ? { focus } : {}) })
+  }, [])
+
+  const askAboutMemory = useCallback((text: string) => {
+    setPrefill({ text: `"${text}"\n\n`, key: Date.now(), append: true })
+  }, [])
 
   let body: ReactNode
   if (link === 'removed') {
@@ -444,20 +521,94 @@ function BotPane({ nodeId, botId, name, labelled, wide }: { nodeId: string; botI
   } else if (session && bot && !session.bots) {
     body = <div className="m-scroll"><div className="m-content"><Notice tone="info">{`Update Mousse on ${name} to chat with ${bot.name} from this phone.`}</Notice></div></div>
   } else if (session && bot && session.bots) {
+    const botsApi = session.bots
     body = <>
       {error && <div className="m-content"><Notice>{error}</Notice></div>}
       <BotBoundary resetKey={botId} fallback={(retry) => (
         <div className="m-scroll"><div className="m-content"><Notice>{`Couldn't show ${bot.name}'s chat.`}</Notice><Button onClick={retry}>Try again</Button></div></div>
       )}>
         <Suspense fallback={<div className="m-scroll"><div className="m-content"><div className="m-loading"><Spinner label="Loading" /></div></div></div>}>
-          <BotChat bot={bot} bots={session.bots} />
+          <BotChat
+            bot={bot}
+            allBots={lists?.bots ?? []}
+            bots={botsApi}
+            findSignal={findSignal}
+            prefill={prefill}
+            onOpenMemory={openMemory}
+            onOpenAbout={() => setAbout(true)}
+            onOpenThread={openThread}
+          />
         </Suspense>
       </BotBoundary>
       <BotBoundary resetKey={about}>
         <Suspense fallback={null}>
-          <BotAboutSheet open={about} bot={bot} bots={session.bots} onClose={() => setAbout(false)} onError={setError} />
+          <BotAboutSheet
+            open={about}
+            bot={bot}
+            bots={botsApi}
+            onClose={() => setAbout(false)}
+            onError={setError}
+            onOpenMemory={() => openMemory()}
+            onOpenRename={() => setMenu({ open: true, view: 'rename' })}
+            onOpenLook={() => setMenu({ open: true, view: 'look' })}
+          />
         </Suspense>
       </BotBoundary>
+      {memory.open && (
+        <BotBoundary resetKey={memory.open}>
+          <Suspense fallback={null}>
+            <BotMemorySheet
+              open={memory.open}
+              bot={bot}
+              bots={botsApi}
+              focus={memory.focus}
+              onClose={() => setMemory({ open: false })}
+              onAskAbout={askAboutMemory}
+            />
+          </Suspense>
+        </BotBoundary>
+      )}
+      {presenceOpen && (
+        <BotBoundary resetKey={presenceOpen}>
+          <Suspense fallback={null}>
+            <BotPresenceSheet
+              open={presenceOpen}
+              bot={bot}
+              onClose={() => setPresenceOpen(false)}
+              onStopWork={(workId) => void botsApi.stopWork(bot.id, workId).catch((failure) => setError(failure instanceof Error ? failure.message : 'Something went wrong.'))}
+              onOpenThread={openThread}
+            />
+          </Suspense>
+        </BotBoundary>
+      )}
+      {tasksOpen && (
+        <BotBoundary resetKey={tasksOpen}>
+          <Suspense fallback={null}>
+            <BotTasksSheet
+              open={tasksOpen}
+              botName={bot.name}
+              tasks={bot.tasks}
+              onClose={() => setTasksOpen(false)}
+            />
+          </Suspense>
+        </BotBoundary>
+      )}
+      {menu.open && (
+        <BotBoundary resetKey={`${menu.open}:${menu.view}`}>
+          <Suspense fallback={null}>
+            <BotMenuSheet
+              open={menu.open}
+              initialView={menu.view}
+              bot={bot}
+              bots={botsApi}
+              existing={lists?.bots ?? []}
+              onClose={() => setMenu({ open: false, view: 'menu' })}
+              onAbout={() => setAbout(true)}
+              onFind={() => setFindSignal((value) => value + 1)}
+            />
+          </Suspense>
+        </BotBoundary>
+      )}
     </>
   } else {
     const failed = link === 'error' || link === 'closed'
@@ -469,11 +620,20 @@ function BotPane({ nodeId, botId, name, labelled, wide }: { nodeId: string; botI
       </div></div>
     )
   }
-  // The header shows only the name, as on the desktop (what it does is in About); with several computers, whose it is.
   const title = bot?.name ?? 'Bot'
   const subtitle = !bot || labelled ? name : undefined
-  // The bot's face in a glass circle, its name in a pill under it.
-  const header = <BotHeader bot={bot} name={title} {...(subtitle ? { computer: subtitle } : {})} leading={back} trailing={info} />
+  const header = (
+    <BotHeader
+      bot={bot}
+      name={title}
+      {...(subtitle ? { computer: subtitle } : {})}
+      leading={back}
+      trailing={more}
+      onAbout={bot && session?.bots ? () => setAbout(true) : undefined}
+      onPresence={bot ? () => setPresenceOpen(true) : undefined}
+      onTasks={bot ? () => setTasksOpen(true) : undefined}
+    />
+  )
   if (wide) return <div className="bot-screen">{header}{body}</div>
   return (
     <main className="m-screen bot-screen">
