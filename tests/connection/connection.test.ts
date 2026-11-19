@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMousseConnection, type ConnectionDeps } from '../../src/connection'
 import { manualNetworkSignals } from '../../src/connection/networkSignals'
+import { ENDPOINTS_METHOD } from '../../src/connection/pathSession'
 import { memoryThreadCacheBackend, ThreadCache, type CachedThread } from '../../src/connection/threadCache'
 import type { EnrollmentProgress } from '../../src/connection/types'
 import type { FetchLike } from '../../src/mousseId/http'
@@ -13,7 +14,7 @@ import { lanKey, sealAdvertisement } from '../../src/net/lan'
 import type { NativeLan } from '../../src/net/nativeLan'
 import { encodeInvite, type Enrollment, type NodeInviteAuthorization, type RedeemOptions } from '../../src/net/enrollment'
 import { NetError } from '../../src/net/errors'
-import { MemoryKeyStorage } from '../../src/net/keys'
+import { MemoryKeyStorage, writeJson } from '../../src/net/keys'
 import { streamPair } from '../../src/net/stream'
 import { delegate, roster, testComputer, testUser, type TestComputer, type TestUser } from '../net/fixtures'
 import { channelOf, fakeComputer, until } from './helpers'
@@ -852,6 +853,11 @@ function testLan() {
 
 const noLifecycle = { onPause() {}, onResume() {} }
 
+/** Waits for an asynchronous storage write. */
+async function settled(check: () => Promise<boolean>): Promise<void> {
+  for (let i = 0; i < 50 && !(await check()); i++) await new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 describe('real connection on the same Wi-Fi without the internet', () => {
   it('lists and opens the computer on the LAN after the app restarts with Mousse ID out of reach', async () => {
     const before = testLan()
@@ -899,6 +905,8 @@ describe('real connection on the same Wi-Fi without the internet', () => {
     const session = await connection.openComputer(w.computer.node)
     expect(session.state()).toBe('open')
     expect(targets).toEqual([{ node: w.computer.node, host: '192.168.1.20', port: 40123 }])
+    // A LAN path asks for the computer's current LAN addresses; an answer without them is no news.
+    await remote!.answer(ENDPOINTS_METHOD, { endpoints: [] })
     const projects = session.listProjects()
     await remote!.answer('projects.list', { projects: [{ id: 'p1', name: 'Site' }] })
     expect(await projects).toEqual([{ id: 'p1', name: 'Site' }])
@@ -915,5 +923,104 @@ describe('real connection on the same Wi-Fi without the internet', () => {
     const phoneAgree = ((await stored(storage))[0] as { keys: { agree: string } }).keys.agree
     lan.advertise(w.computer, phoneAgree)
     expect((await connection.listComputers()).find((c) => c.nodeId === w.computer.node)?.online).toBe(true)
+  })
+
+  it('opens on the LAN addresses the computer reported before, with no advertisement and no relay, and forgets one that answers with another key', async () => {
+    const lan = testLan()
+    const { w, storage, deps } = await enrolled(undefined, { lan: lan.lan, lifecycle: noLifecycle })
+    const phoneAgree = ((await stored(storage))[0] as { keys: { agree: string } }).keys.agree
+    const computerAt = (targets: string[], refuse: (host: string) => Error | undefined = () => undefined) => {
+      const remotes: Array<ReturnType<typeof fakeComputer>> = []
+      const open: ConnectionDeps['openLanChannel'] = async (target) => {
+        targets.push(`${target.host}:${target.port}`)
+        const refused = refuse(target.host)
+        if (refused) throw refused
+        const [a, b] = streamPair()
+        const remote = fakeComputer(b, w.user, w.computer, roster(w.user, w.computer.node))
+        remotes.push(remote)
+        void remote.handshake()
+        return channelOf(a, w.computer.keys.transport.spki)
+      }
+      return { open, remotes }
+    }
+    // A session on the LAN learns the computer's addresses: only private IPv4 and unique local IPv6 on its Net path count.
+    const first: string[] = []
+    const one = computerAt(first)
+    const connection = await createMousseConnection({ ...deps, storage, lan: lan.lan, lifecycle: noLifecycle, openLanChannel: one.open })
+    lan.advertise(w.computer, phoneAgree)
+    const session = await connection.openComputer(w.computer.node)
+    await one.remotes[0].answer(ENDPOINTS_METHOD, {
+      endpoints: [],
+      lan: {
+        v: 1,
+        addresses: ['ws://192.168.1.30:41000/mousse-net', 'ws://10.0.0.5:41000/mousse-net', 'ws://[fd12:3456::1]:41000/mousse-net', 'ws://8.8.8.8:41000/mousse-net', 'wss://192.168.1.31:41000/mousse-net'],
+      },
+    })
+    const saved = async () => JSON.parse((await storage.getItem('net.lanAddresses')) ?? '{}') as Record<string, { addresses: Array<{ host: string }> }>
+    await settled(async () => !!(await saved())[w.computer.node])
+    expect((await saved())[w.computer.node].addresses.map((row) => row.host)).toEqual(['192.168.1.30', '10.0.0.5', '[fd12:3456::1]'])
+    session.close()
+
+    // The app starts again on a Wi-Fi that blocks multicast and has no internet: the remembered addresses are dialed at once.
+    const later: string[] = []
+    const two = computerAt(later, (host) => (host === '10.0.0.5' ? new NetError('peer_key_mismatch', 'another device') : undefined))
+    const requests: string[] = []
+    const offline = await createMousseConnection({
+      ...deps,
+      storage,
+      lan: testLan().lan,
+      lifecycle: noLifecycle,
+      fetcher: async (input) => {
+        requests.push(new URL(input).pathname)
+        throw new TypeError('Network request failed')
+      },
+      openChannel: async () => {
+        requests.push('relay')
+        throw new Error('The relay must not be dialed.')
+      },
+      openLanChannel: two.open,
+    })
+    const again = await offline.openComputer(w.computer.node)
+    expect(again.state()).toBe('open')
+    // Both IPv4 addresses at once; the IPv6 one is kept for when the phone can dial it.
+    expect(later.sort()).toEqual(['10.0.0.5:41000', '192.168.1.30:41000'])
+    expect(requests.filter((path) => path === 'relay' || path.startsWith('/v1/net/registrations'))).toEqual([])
+    await settled(async () => (await saved())[w.computer.node].addresses.length === 2)
+    expect((await saved())[w.computer.node].addresses.map((row) => row.host)).toEqual(['192.168.1.30', '[fd12:3456::1]'])
+    again.close()
+  })
+
+  it('opens the relay as before when no remembered LAN address answers', async () => {
+    const lan = testLan()
+    const { w, storage, deps } = await enrolled(undefined, { lan: lan.lan, lifecycle: noLifecycle })
+    const computer = w.computer.node
+    await writeJson(storage, 'net.lanAddresses', {
+      [computer]: { transport: b64url(w.computer.keys.transport.spki), addresses: [{ host: '192.168.1.30', port: 41000 }], savedAt: Date.now() },
+    })
+    const order: string[] = []
+    let remote: ReturnType<typeof fakeComputer> | undefined
+    const connection = await createMousseConnection({
+      ...deps,
+      storage,
+      lan: lan.lan,
+      lifecycle: noLifecycle,
+      openLanChannel: async (target) => {
+        order.push(`lan ${target.host}`)
+        throw new NetError('route_unreachable', 'not here')
+      },
+      openChannel: async () => {
+        order.push('relay')
+        const [a, b] = streamPair()
+        remote = fakeComputer(b, w.user, w.computer, roster(w.user, w.computer.node))
+        void remote.handshake()
+        return channelOf(a, w.computer.keys.transport.spki)
+      },
+    })
+    const session = await connection.openComputer(computer)
+    expect(session.state()).toBe('open')
+    expect(order).toEqual(['lan 192.168.1.30', 'relay'])
+    // An address that did not answer is kept: the phone may simply be away from that network.
+    expect(JSON.parse((await storage.getItem('net.lanAddresses'))!)[computer].addresses).toEqual([{ host: '192.168.1.30', port: 41000 }])
+    session.close()
   })
 })

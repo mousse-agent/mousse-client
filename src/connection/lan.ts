@@ -5,7 +5,8 @@
 // computer still proves its pinned key, and the session its roster membership.
 import { fromB64url } from '../net/bytes'
 import { currentNode, verifyDelegation } from '../net/identity'
-import { LanHints, lanReceiveKey, type LanPeerKey } from '../net/lan'
+import { NetError } from '../net/errors'
+import { isPrivateIPv4, LanHints, lanReceiveKey, type LanHint, type LanPeerKey } from '../net/lan'
 import type { NativeLan } from '../net/nativeLan'
 import type { TransportKey } from '../net/cert'
 import { connectTls, type SecureChannel } from '../net/tls13/client'
@@ -15,11 +16,13 @@ import type { NetworkSignals } from './networkSignals'
 
 /** How long one LAN attempt may take to connect the socket; a computer on the same network answers at once. */
 export const LAN_CONNECT_TIMEOUT_MS = 3_000
+/** The same for an address the computer reported earlier: it may be on another network now, and the relay waits. */
+export const REMEMBERED_CONNECT_TIMEOUT_MS = 1_500
 /** How long the TLS handshake may take over the LAN. */
 export const LAN_TLS_TIMEOUT_MS = 5_000
 /** Computers advertise every five seconds: how long to wait for one after the relay failed. */
 export const LAN_WAIT_MS = 6_000
-/** Addresses tried per attempt, freshest first. */
+/** Addresses dialed at once per attempt, freshest first; the computer admits four unauthenticated connections from one address. */
 const ADDRESSES_PER_ATTEMPT = 3
 /** The computer's peer keys of at most this many devices; a computer advertises to at most 64. */
 const PEERS_MAX = 64
@@ -103,21 +106,50 @@ export class LanConnector {
   }
 
   /**
-   * A TLS channel to `node` over the LAN, pinned to `expectedSpki`, or undefined when the computer
-   * was not seen here or none of its addresses answered. Errors never carry an address.
+   * A TLS channel to `node` over the LAN, pinned to `expectedSpki`, or undefined when none of its
+   * addresses answered. The addresses are where the computer was seen advertising, freshest first,
+   * then `remembered` (what it last reported itself); at most three are dialed at once and the
+   * first to finish the TLS handshake wins. `wrongKey` hears of an address where something else
+   * answered with another key. Errors never carry an address.
    */
-  async open(node: string, transport: TransportKey, expectedSpki: Uint8Array): Promise<SecureChannel | undefined> {
-    for (const hint of this.hints.routes(node).slice(0, ADDRESSES_PER_ATTEMPT)) {
-      try {
-        if (this.options.openChannel) return await this.options.openChannel({ node, ...hint, expectedSpki })
-        const socket = await this.options.native.dial(hint.host, hint.port, LAN_CONNECT_TIMEOUT_MS)
-        const bytes = await openWebSocket(socket, hint.host, hint.port)
-        return await connectTls(bytes, { transport, expectedServerSpki: expectedSpki, timeoutMs: LAN_TLS_TIMEOUT_MS })
-      } catch {
-        // The next address, or the relay.
-      }
+  async open(
+    node: string,
+    transport: TransportKey,
+    expectedSpki: Uint8Array,
+    options: { remembered?: LanHint[]; wrongKey?: (hint: LanHint) => void } = {},
+  ): Promise<SecureChannel | undefined> {
+    const candidates: Array<LanHint & { connectMs: number }> = []
+    const add = (hint: LanHint, connectMs: number) => {
+      if (!candidates.some((row) => row.host === hint.host && row.port === hint.port)) candidates.push({ ...hint, connectMs })
     }
-    return undefined
+    for (const hint of this.hints.routes(node)) add(hint, LAN_CONNECT_TIMEOUT_MS)
+    // The native socket reaches private IPv4 addresses only.
+    for (const hint of options.remembered ?? []) if (isPrivateIPv4(hint.host)) add(hint, REMEMBERED_CONNECT_TIMEOUT_MS)
+    let winner: SecureChannel | undefined
+    let won: (channel: SecureChannel) => void = () => {}
+    const first = new Promise<SecureChannel>((resolve) => (won = resolve))
+    const attempt = async (hint: LanHint & { connectMs: number }): Promise<void> => {
+      let channel: SecureChannel
+      try {
+        if (this.options.openChannel) channel = await this.options.openChannel({ node, host: hint.host, port: hint.port, expectedSpki })
+        else {
+          const socket = await this.options.native.dial(hint.host, hint.port, hint.connectMs)
+          if (winner) return socket.close()
+          const bytes = await openWebSocket(socket, hint.host, hint.port)
+          if (winner) return bytes.close()
+          channel = await connectTls(bytes, { transport, expectedServerSpki: expectedSpki, timeoutMs: LAN_TLS_TIMEOUT_MS })
+        }
+      } catch (error) {
+        if (error instanceof NetError && error.code === 'peer_key_mismatch') options.wrongKey?.({ host: hint.host, port: hint.port })
+        return
+      }
+      // A slower address that also answered is closed at once: the computer counts unauthenticated connections.
+      if (winner) channel.close()
+      else won((winner = channel))
+    }
+    // The first channel is used at once; the other attempts finish (and close) on their own.
+    const all = Promise.all(candidates.slice(0, ADDRESSES_PER_ATTEMPT).map(attempt)).then(() => winner)
+    return Promise.race([first, all])
   }
 
   private start(): void {
