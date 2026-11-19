@@ -2,6 +2,8 @@ import { act, createElement, type ReactElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BotFace, normalizeFaceProps, type BotFaceState } from '../../src/ui/bots/face/BotFace'
+import { LazyBotFace, resetLazyFaces } from '../../src/ui/bots/face/LazyBotFace'
+import { currentFaceDiagnosticsLines } from '../../src/ui/bots/face/faceDiagnosticsText'
 import { faceShot, resetFaceShots, saveFaceShot, type FaceFrameStore, type SavedFrameImage } from '../../src/ui/bots/face/faceShots'
 import { FaceMotion, faceUniforms, hop, stillPose, type FaceUniforms } from '../../src/ui/bots/face/facePoses'
 import {
@@ -12,13 +14,16 @@ import {
   FaceRenderer,
   faceDrawSide,
   faceRendererStats,
+  FRAME_TIMEOUT_MS,
   IDLE_LIVE_SECONDS,
   IDLE_RELEASE_MS,
   LOST_CONTEXT_TIMEOUT_MS,
+  MAX_NULL_FRAMES,
   READY_POLL_MS,
   resetSharedFaceRenderer,
   SAMPLE_BUDGET,
   sharedFaceRendererStatus,
+  STARTUP_TIMEOUT_MS,
   stillFrameKey,
   UNFOCUSED_LIVE_SECONDS,
   WAKE_LEAD_MS,
@@ -71,6 +76,8 @@ afterEach(() => {
   act(() => root.unmount())
   host.remove()
   resetSharedFaceRenderer()
+  resetLazyFaces()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
   setVisibility('visible')
@@ -82,6 +89,7 @@ function render(element: ReactElement | null) {
 
 function setVisibility(state: DocumentVisibilityState) {
   Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state })
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => state === 'hidden' })
   document.dispatchEvent(new Event('visibilitychange'))
 }
 
@@ -307,10 +315,10 @@ const spec = (overrides: Partial<Parameters<FaceRenderer['register']>[1]> = {}) 
 })
 
 describe('BotFace fallback', () => {
-  it('rests on the placeholder when there is no WebGL, without throwing', () => {
+  it('shows the still face when there is no WebGL, without throwing', () => {
     render(createElement(BotFace, { look: { colour: 'blue', accessory: 'glasses' }, state: 'working', size: 40, view: 'head', label: 'Inbox helper' }))
-    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
-    expect(host.querySelector('.bot-face-placeholder')!.hasAttribute('data-loading')).toBe(false)
+    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).toBeNull()
     const svg = host.querySelector('.bot-face')!
     expect(svg.getAttribute('data-colour')).toBe('blue')
     expect(svg.getAttribute('data-accessory')).toBe('glasses')
@@ -318,14 +326,14 @@ describe('BotFace fallback', () => {
     expect(sharedFaceRendererStatus()).toBe('unavailable')
   })
 
-  it('rests on the placeholder when context creation throws', () => {
+  it('shows the still face when context creation throws', () => {
     webgl = 'throws'
     render(createElement(BotFace, { look: coral, state: 'idle', size: 34, view: 'head' }))
-    expect(host.querySelector('.bot-face')?.getAttribute('aria-hidden')).toBe('true')
+    expect(host.querySelector('svg.bot-face-still')?.getAttribute('aria-hidden')).toBe('true')
     expect(host.querySelector('canvas')).toBeNull()
   })
 
-  it('rests on the placeholder when the shader fails to compile', () => {
+  it('shows the still face when the shader fails to compile', () => {
     let status: ReturnType<FaceGpu['status']> = 'pending'
     const fake = fakeEnv({ status: () => status })
     resetSharedFaceRenderer(() => fake.env)
@@ -334,10 +342,11 @@ describe('BotFace fallback', () => {
     status = 'failed'
     fake.tick()
     expect(host.querySelector('canvas')).toBeNull()
-    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
+    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).toBeNull()
   })
 
-  it('is not ready while the context is lost, and rests on the placeholder when it does not come back', () => {
+  it('is not ready while the context is lost, and shows the still face when it does not come back', () => {
     let status: ReturnType<FaceGpu['status']> = 'ready'
     const fake = fakeEnv({ status: () => status })
     resetSharedFaceRenderer(() => fake.env)
@@ -351,7 +360,8 @@ describe('BotFace fallback', () => {
     fake.tick(LOST_CONTEXT_TIMEOUT_MS)
     expect(sharedFaceRendererStatus()).toBe('failed')
     expect(host.querySelector('canvas')).toBeNull()
-    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
+    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).toBeNull()
   })
 
   it('draws again when a lost context comes back in time', () => {
@@ -377,37 +387,37 @@ describe('BotFace fallback', () => {
     renderer.dispose()
   })
 
-  it('rests on the placeholder when WebGL is refused as software', () => {
+  it('shows the still face when WebGL is refused as software', () => {
     webgl = 'software'
     render(createElement(BotFace, { look: coral, state: 'idle', size: 40, view: 'head' }))
     expect(sharedFaceRendererStatus()).toBe('unavailable')
-    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
+    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
     expect(host.querySelector('canvas')).toBeNull()
   })
 
-  it('keeps the loader moving however long the shader compiles, and goes live within READY_POLL_MS of it being ready', () => {
+  it('keeps the loader moving while the shader compiles within the deadline, and goes live within READY_POLL_MS of it being ready', () => {
     let status: ReturnType<FaceGpu['status']> = 'pending'
     // Off screen as far as the observer knows, so no tick runs to look at the compile.
     const fake = fakeEnv({ observer: true, status: () => status })
     resetSharedFaceRenderer(() => fake.env)
     render(createElement(BotFace, { look: coral, state: 'idle', size: 40, view: 'head' }))
     expect(sharedFaceRendererStatus()).toBe('pending')
-    // A compile in the background may take many seconds: the face waits for it, with its loader.
-    fake.tick(20_000)
+    // A slow compile within the startup deadline keeps the loader.
+    fake.tick(8_000)
     expect(sharedFaceRendererStatus()).toBe('pending')
     expect(host.querySelector('canvas.bot-face-canvas')).not.toBeNull()
     expect(host.querySelector('.bot-face-placeholder[data-loading]')).not.toBeNull()
     status = 'ready'
     fake.tick(READY_POLL_MS)
     expect(sharedFaceRendererStatus()).toBe('ready')
-    expect(faceRendererStats()?.compileMs).toBe(20_000 + READY_POLL_MS)
+    expect(faceRendererStats()?.compileMs).toBe(8_000 + READY_POLL_MS)
     FakeObserver.last!.fire(true)
     fake.tick()
     expect(host.querySelector('.bot-face[data-drawn]')).not.toBeNull()
     expect(host.querySelector('.bot-face-placeholder')).toBeNull()
   })
 
-  it('rests on the placeholder when a compile in progress then fails', () => {
+  it('shows the still face when a compile in progress then fails', () => {
     let status: ReturnType<FaceGpu['status']> = 'pending'
     const fake = fakeEnv({ status: () => status })
     resetSharedFaceRenderer(() => fake.env)
@@ -418,10 +428,11 @@ describe('BotFace fallback', () => {
     fake.tick(READY_POLL_MS)
     expect(sharedFaceRendererStatus()).toBe('failed')
     expect(host.querySelector('canvas')).toBeNull()
-    expect(host.querySelector('.bot-face-placeholder:not([data-loading])')).not.toBeNull()
+    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).toBeNull()
   })
 
-  it('rests on the placeholder when the first frame reads back empty', () => {
+  it('shows the still face when the first frame reads back empty', () => {
     const fake = fakeEnv()
     resetSharedFaceRenderer(() => fake.env)
     const readBack = vi.fn((_x: number, _y: number, w: number, h: number) => ({ data: new Uint8ClampedArray(w * h * 4) }))
@@ -436,7 +447,8 @@ describe('BotFace fallback', () => {
     expect(fake.draws).toHaveLength(1)
     expect(readBack).toHaveBeenCalledTimes(1)
     expect(sharedFaceRendererStatus()).toBe('failed')
-    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
+    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).toBeNull()
   })
 
   it('reads back only the first frame, and keeps a face that has pixels', () => {
@@ -454,12 +466,13 @@ describe('BotFace fallback', () => {
     renderer.dispose()
   })
 
-  it('rests on the placeholder when a canvas has no 2D context', () => {
+  it('shows the still face when a canvas has no 2D context', () => {
     const fake = fakeEnv()
     resetSharedFaceRenderer(() => fake.env)
     vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValue(null)
     render(createElement(BotFace, { look: coral, state: 'idle', size: 40, view: 'head' }))
-    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
+    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).toBeNull()
   })
 })
 
@@ -524,7 +537,7 @@ describe('releasing the WebGL context while no face shows', () => {
     expect(host.querySelector('.bot-face[data-drawn]')).not.toBeNull()
   })
 
-  it('rests on the placeholder when the new context fails to compile', () => {
+  it('shows the still face when the new context fails to compile', () => {
     let status: ReturnType<FaceGpu['status']> = 'ready'
     const fake = fakeEnv({ status: () => status })
     resetSharedFaceRenderer(() => fake.env)
@@ -536,7 +549,8 @@ describe('releasing the WebGL context while no face shows', () => {
     render(face())
     // Found failed at its first check, as it is made: no 3D faces until the next launch.
     expect(sharedFaceRendererStatus()).toBe('unavailable')
-    expect(host.querySelector('.bot-face-placeholder:not([data-loading])')).not.toBeNull()
+    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).toBeNull()
   })
 
   it('has nothing to release without WebGL', () => {
@@ -1066,7 +1080,7 @@ describe('face poses', () => {
 })
 
 describe('saved face pictures', () => {
-  it('shows a face drawn on an earlier visit at once, and the resting placeholder for a pose with no picture', () => {
+  it('shows a face drawn on an earlier visit at once, and the still face for a pose with no picture', () => {
     const look = normalizeFaceProps({ look: coral, state: 'idle', size: 40, view: 'head' }).look
     const key = stillFrameKey({ look, state: 'idle', view: 'head', size: 40 }, 40 * Math.min(2, window.devicePixelRatio || 1))
     const canvas = document.createElement('canvas')
@@ -1077,10 +1091,12 @@ describe('saved face pictures', () => {
     render(createElement(BotFace, { look: coral, state: 'idle', size: 40, view: 'head' }))
     expect(host.querySelector<HTMLImageElement>('img.bot-face-shot')?.src).toBe(picture)
     expect(host.querySelector('.bot-face-placeholder')).toBeNull()
-    // Another pose has no picture yet: the resting placeholder.
+    expect(host.querySelector('svg.bot-face-still')).toBeNull()
+    // Another pose has no picture yet: the still face, not a loader.
     render(createElement(BotFace, { look: coral, state: 'working', size: 40, view: 'head' }))
     expect(host.querySelector('img.bot-face-shot')).toBeNull()
-    expect(host.querySelector('.bot-face-placeholder')).not.toBeNull()
+    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).toBeNull()
     resetFaceShots()
   })
 })
@@ -1254,6 +1270,124 @@ describe('drawing in a Worker', () => {
     expect(renderer.status()).toBe('ready')
     renderer.dispose()
   })
+
+  it('recovers from an unanswered frame request after drawing a frame and stays live when the next reply arrives', async () => {
+    const { fake, worker } = workerEnv()
+    const renderer = new FaceRenderer(fake.env)
+    const canvas = document.createElement('canvas')
+    renderer.register(canvas, spec({ state: 'working' }))
+    fake.tick()
+    await worker.answer()
+    expect(fake2d(canvas).drawImage).toHaveBeenCalledTimes(1)
+    // Next frame request goes unanswered past FRAME_TIMEOUT_MS: counts as a miss, does not fail.
+    fake.tick()
+    expect(worker.sent).toHaveLength(1)
+    worker.sent.shift()
+    fake.tick(FRAME_TIMEOUT_MS)
+    expect(renderer.status()).toBe('ready')
+    expect(worker.gpu.dispose).not.toHaveBeenCalled()
+    // Rescheduled tick sends a fresh request; when it replies, the face draws and stays live.
+    fake.tick()
+    expect(worker.sent).toHaveLength(1)
+    const fresh = await worker.answer()
+    expect(lastDrawn(canvas)).toBe(fresh![0])
+    expect(fake2d(canvas).drawImage).toHaveBeenCalledTimes(2)
+    expect(renderer.status()).toBe('ready')
+    expect(renderer.running).toBe(true)
+    renderer.dispose()
+  })
+
+  it('drops a stale late reply after a timeout, closing its pictures without disturbing the newer request', async () => {
+    const { fake, worker } = workerEnv()
+    const renderer = new FaceRenderer(fake.env)
+    const canvas = document.createElement('canvas')
+    renderer.register(canvas, spec({ state: 'working' }))
+    fake.tick()
+    await worker.answer()
+    expect(fake2d(canvas).drawImage).toHaveBeenCalledTimes(1)
+    // Second request times out and a third request is sent.
+    fake.tick()
+    const stale = worker.sent.shift()!
+    fake.tick(FRAME_TIMEOUT_MS)
+    fake.tick()
+    expect(worker.sent).toHaveLength(1)
+    // Late reply for the timed-out request arrives while the third is still in flight.
+    const stalePicture = { close: vi.fn() } as unknown as CanvasImageSource
+    stale.resolve([stalePicture])
+    await settle()
+    expect((stalePicture as unknown as { close: () => void }).close).toHaveBeenCalledTimes(1)
+    expect(fake2d(canvas).drawImage).toHaveBeenCalledTimes(1)
+    // Newer request is still in flight: ticking does not send a duplicate request.
+    fake.tick()
+    expect(worker.sent).toHaveLength(1)
+    // Answering the newer request draws normally.
+    const fresh = await worker.answer()
+    expect(lastDrawn(canvas)).toBe(fresh![0])
+    expect(fake2d(canvas).drawImage).toHaveBeenCalledTimes(2)
+    expect(renderer.status()).toBe('ready')
+    renderer.dispose()
+  })
+
+  it('fails after MAX_NULL_FRAMES consecutive unanswered requests once live', async () => {
+    const { fake, worker } = workerEnv()
+    const renderer = new FaceRenderer(fake.env)
+    const canvas = document.createElement('canvas')
+    renderer.register(canvas, spec({ state: 'working' }))
+    fake.tick()
+    await worker.answer()
+    for (let i = 0; i < MAX_NULL_FRAMES; i++) {
+      fake.tick()
+      expect(worker.sent).toHaveLength(i + 1)
+      fake.tick(FRAME_TIMEOUT_MS)
+      if (i < MAX_NULL_FRAMES - 1) {
+        expect(renderer.status()).toBe('ready')
+        expect(worker.gpu.dispose).not.toHaveBeenCalled()
+      }
+    }
+    expect(renderer.status()).toBe('failed')
+    expect(worker.gpu.dispose).toHaveBeenCalledTimes(1)
+    renderer.dispose()
+  })
+
+  it('does not count frame or startup timeouts while the document is hidden', async () => {
+    // Frame timer does not count misses while hidden, and re-arms on returning to visible.
+    const { fake, worker } = workerEnv()
+    const renderer = new FaceRenderer(fake.env)
+    const canvas = document.createElement('canvas')
+    renderer.register(canvas, spec({ state: 'working' }))
+    fake.tick()
+    await worker.answer()
+    fake.tick()
+    expect(worker.sent).toHaveLength(1)
+    setVisibility('hidden')
+    fake.tick(FRAME_TIMEOUT_MS * (MAX_NULL_FRAMES + 2))
+    expect(renderer.status()).toBe('ready')
+    expect(worker.gpu.dispose).not.toHaveBeenCalled()
+    expect(worker.sent).toHaveLength(1)
+    setVisibility('visible')
+    fake.tick(FRAME_TIMEOUT_MS - 1)
+    expect(worker.sent).toHaveLength(1)
+    const pictures = await worker.answer()
+    expect(lastDrawn(canvas)).toBe(pictures![0])
+    expect(renderer.status()).toBe('ready')
+    renderer.dispose()
+
+    // Startup deadline does not expire while hidden, and restarts on becoming visible.
+    let status: ReturnType<FaceGpu['status']> = 'pending'
+    const startup = workerEnv(() => status)
+    const pendingRenderer = new FaceRenderer(startup.fake.env)
+    pendingRenderer.register(document.createElement('canvas'), spec())
+    setVisibility('hidden')
+    startup.fake.tick(STARTUP_TIMEOUT_MS * 2)
+    expect(pendingRenderer.status()).toBe('pending')
+    setVisibility('visible')
+    startup.fake.tick(STARTUP_TIMEOUT_MS - READY_POLL_MS)
+    expect(pendingRenderer.status()).toBe('pending')
+    status = 'ready'
+    startup.fake.tick(READY_POLL_MS)
+    expect(pendingRenderer.status()).toBe('ready')
+    pendingRenderer.dispose()
+  })
 })
 
 /** A Worker that records what it is sent and answers as the test says. */
@@ -1334,5 +1468,126 @@ describe('the Worker GPU', () => {
       throw new Error('blocked')
     })).toBeNull()
     expect(faceDiagnostics().problem).toBe('the background renderer could not start')
+  })
+})
+
+describe('LazyBotFace stalled Worker fallback', () => {
+  /** Sets up a visible LazyBotFace with an empty shot cache, fake timers, and a FakeWorker. */
+  function mountLazyWithWorker(onMessage?: (worker: FakeWorker, message: FaceWorkerRequest) => void) {
+    vi.useFakeTimers()
+    resetFaceShots()
+    resetLazyFaces()
+    const observers: FakeObserver[] = []
+    class TrackingObserver extends FakeObserver {
+      constructor(callback: IntersectionObserverCallback) {
+        super(callback)
+        observers.push(this)
+      }
+      override observe(target: Element) {
+        super.observe(target)
+        this.fire(true, target)
+      }
+    }
+    vi.stubGlobal('IntersectionObserver', TrackingObserver)
+    let worker: FakeWorker | null = null
+    class ScriptedWorker extends FakeWorker {
+      override postMessage(message: FaceWorkerRequest) {
+        super.postMessage(message)
+        onMessage?.(this, message)
+      }
+    }
+    resetSharedFaceRenderer(() => ({
+      createGpu: () => createWorkerGpu(() => {
+        worker = new ScriptedWorker()
+        return worker as unknown as Worker
+      }),
+      createCanvas: () => document.createElement('canvas'),
+      requestFrame: (callback) => window.requestAnimationFrame(callback),
+      cancelFrame: (id) => window.cancelAnimationFrame(id),
+      now: () => performance.now(),
+      pixelRatio: () => 1,
+      setTimer: (callback, ms) => {
+        const handle = window.setTimeout(callback, ms)
+        return () => window.clearTimeout(handle)
+      },
+      document,
+      IntersectionObserver: TrackingObserver as unknown as typeof IntersectionObserver
+    }))
+    render(createElement(LazyBotFace, { look: coral, state: 'idle', size: 40, view: 'head', label: 'Helper' }))
+    return { getWorker: () => worker!, observers }
+  }
+
+  it('shows a still face and terminates the worker when it never replies to start', async () => {
+    const { getWorker } = mountLazyWithWorker()
+    const worker = getWorker()
+    expect(worker.sent).toEqual([{ type: 'start' }])
+    expect(host.querySelector('.bot-face-placeholder[data-loading]')).not.toBeNull()
+    // Slow compiles up to STARTUP_TIMEOUT_MS stay pending.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+    expect(worker.terminated).toBe(false)
+    expect(sharedFaceRendererStatus()).toBe('pending')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(STARTUP_TIMEOUT_MS - 15_000 + READY_POLL_MS)
+    })
+    expect(worker.terminated).toBe(true)
+    expect(sharedFaceRendererStatus()).toBe('failed')
+    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('[data-loading]')).toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).toBeNull()
+    expect(currentFaceDiagnosticsLines()[0]).toMatch(/^Off:.*start/i)
+  })
+
+  it('shows a still face and terminates the worker when it sends ready and then ignores frame', async () => {
+    const { getWorker } = mountLazyWithWorker()
+    const worker = getWorker()
+    worker.reply({ type: 'ready', compileMs: 40 })
+    // Let ready poll + LazyBotFace warming commit so BotFaceCanvas mounts, then run the first frame tick.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100)
+    })
+    expect(worker.sent.some((m) => m.type === 'frame')).toBe(true)
+    // Diagnostics must not report "On" while no frame has drawn.
+    expect(currentFaceDiagnosticsLines()[0]).not.toBe('On')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000)
+    })
+    expect(worker.terminated).toBe(true)
+    expect(sharedFaceRendererStatus()).toBe('failed')
+    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('[data-loading]')).toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).toBeNull()
+    expect(currentFaceDiagnosticsLines()[0]).toMatch(/^Off:.*first 3D frame/i)
+  })
+
+  it('shows a still face and terminates the worker when it always returns null frames', async () => {
+    const { getWorker } = mountLazyWithWorker((w, message) => {
+      if (message.type === 'frame') {
+        queueMicrotask(() => {
+          if (!w.terminated) w.reply({ type: 'frame', id: message.id, pictures: null })
+        })
+      }
+    })
+    const worker = getWorker()
+    worker.reply({ type: 'ready', compileMs: 40 })
+    // Let ready poll + LazyBotFace warming commit so BotFaceCanvas mounts, then advance through retries.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000)
+    })
+    const framesSent = worker.sent.filter((m) => m.type === 'frame')
+    expect(framesSent.length).toBeGreaterThanOrEqual(2)
+    expect(worker.terminated).toBe(true)
+    expect(sharedFaceRendererStatus()).toBe('failed')
+    expect(host.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(host.querySelector('[data-loading]')).toBeNull()
+    expect(host.querySelector('.bot-face-placeholder')).toBeNull()
+    expect(currentFaceDiagnosticsLines()[0]).toMatch(/^Off:.*first frame/i)
   })
 })
