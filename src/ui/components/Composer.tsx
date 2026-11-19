@@ -59,6 +59,8 @@ export interface ComposerProps {
    * it switches and never sends. Without it a message written during a run is queued.
    */
   sendMode?: { mode: SendMode; onSwitch(): void }
+  /** Extra slash commands when `controls` is absent (for example, a bot chat's `/stop`, `/status`, `/pause`). */
+  slashCommands?: ComposerCommand[]
   /** The reader scrolled up: an empty, unfocused composer folds to its one input line. */
   folded?: boolean
 }
@@ -98,7 +100,7 @@ function modelLabel(controls: ComposerControls): { title: string; context?: stri
  * the desktop's model picker. Menus open as bottom sheets. On touch screens Return inserts a new line and the button sends; with a hardware
  * keyboard and fine pointer, Enter sends and Shift+Enter breaks.
  */
-export function Composer({ active, disabled = false, placeholder, draftKey, prefill, controls, speech, onSend, onStop, onSteer, onNewThread, sendMode, folded = false }: ComposerProps) {
+export function Composer({ active, disabled = false, placeholder, draftKey, prefill, controls, speech, onSend, onStop, onSteer, onNewThread, sendMode, slashCommands, folded = false }: ComposerProps) {
   const [text, setText] = useState(() => (draftKey ? loadDraft(draftKey) : ''))
   const [images, setImages] = useState<PendingImage[]>([])
   const [skill, setSkill] = useState<ComposerSkill>()
@@ -184,7 +186,10 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
     field.current?.focus()
   }, [prefill])
 
-  const commands = useMemo(() => (controls?.commands ?? []).filter((command) => !DESKTOP_ONLY_COMMANDS.has(command.name)), [controls?.commands])
+  const commands = useMemo(
+    () => (slashCommands ?? (controls?.commands ?? []).filter((command) => !DESKTOP_ONLY_COMMANDS.has(command.name))),
+    [slashCommands, controls?.commands],
+  )
   const suggestions = useMemo(() => {
     if (!text.startsWith('/') || /\s/.test(text) || text === dismissedFor) return []
     const query = text.slice(1).toLowerCase()
@@ -244,7 +249,7 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
     const draft = expandQuotes(sentQuotes, typed)
     const restoreQuotes = () => { if (sentQuotes.length) setQuotes((current) => current.length ? current : sentQuotes) }
     sentQuotes.forEach(registerQuote)
-    const command = !images.length && !skill && !sentQuotes.length ? parseCommand(draft, commands) : undefined
+    const command = !slashCommands && !images.length && !skill && !sentQuotes.length ? parseCommand(draft, commands) : undefined
     if (command) {
       setText('')
       const handled = await runCommand(command)
@@ -276,7 +281,7 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
   }
 
   function applySuggestion(command: ComposerCommand) {
-    if (command.name === 'skills') { setText(''); openSkills(''); return }
+    if (!slashCommands && command.name === 'skills') { setText(''); openSkills(''); return }
     if (command.argsHint) {
       setText(`/${command.name} `)
       field.current?.focus()
@@ -285,7 +290,7 @@ export function Composer({ active, disabled = false, placeholder, draftKey, pref
     setText(`/${command.name}`)
     void (async () => {
       setText('')
-      if (!(await runCommand({ name: command.name, args: '' }))) {
+      if (slashCommands || !(await runCommand({ name: command.name, args: '' }))) {
         const sent = await onSend(`/${command.name}`, extras())
         if (!sent) setText(`/${command.name}`)
       }

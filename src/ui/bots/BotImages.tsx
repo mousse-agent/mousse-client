@@ -128,9 +128,18 @@ function FileThumb({ bots, botId, messageId, index, name }: { bots: ComputerBots
 }
 
 /** A message's attached images: one large, several in a small grid. A computer that can't send them shows name pills. */
-export function BotImageFiles({ files, bots, botId, messageId }: { files: BotChatFile[]; bots: ComputerBots; botId: string; messageId: string }) {
+export function BotImageFiles({ files, indexedFiles, skipIndices, bots, botId, messageId }: {
+  files?: BotChatFile[]
+  indexedFiles?: ReadonlyArray<{ name: string; index: number }>
+  skipIndices?: ReadonlySet<number>
+  bots: ComputerBots
+  botId: string
+  messageId: string
+}) {
   // The index is the file's place among all of the message's files, as the computer counts them.
-  const images = files.flatMap((file, index) => (isImageAttachment(file) ? [{ file, index }] : []))
+  const images = indexedFiles
+    ? indexedFiles.map((entry) => ({ file: { name: entry.name, image: true as const }, index: entry.index }))
+    : (files ?? []).flatMap((file, index) => (isImageAttachment(file) && !skipIndices?.has(index) ? [{ file, index }] : []))
   if (!images.length) return null
   if (noAttachments.has(bots)) return <BotOtherFiles files={images.map((entry) => entry.file)} images={false} />
   return (
