@@ -216,10 +216,10 @@ export const LOST_CONTEXT_TIMEOUT_MS = 5_000
 /** How often a compile in progress is checked, so faces go live within this of the shader being ready. */
 export const READY_POLL_MS = 100
 /** A renderer still starting after this long fails, so faces show a still face instead of waiting forever. */
-export const STARTUP_TIMEOUT_MS = 12_000
-/** A frame request unanswered for this long fails and terminates the Worker. */
+export const STARTUP_TIMEOUT_MS = 20_000
+/** A frame request unanswered for this long fails before the first frame, or counts as a missed frame once live. */
 export const FRAME_TIMEOUT_MS = 5_000
-/** Consecutive null-picture replies from the Worker before giving up on live frames. */
+/** Consecutive missed frames (null pictures, errors, or unanswered live requests) before giving up on live frames. */
 export const MAX_NULL_FRAMES = 3
 /**
  * With no face shown for this long, the shared renderer lets its WebGL context (and its Worker) go, so
@@ -366,12 +366,14 @@ export class FaceRenderer {
   private frameId: number | null = null
   /** A tick's frames are being drawn in the Worker: no other tick runs until they are back. */
   private inFlight = false
+  /** Generation of the active Worker frame request; incremented on send, timeout, loss, fail, or dispose so stale replies are dropped. */
+  private frameGen = 0
   /** The timer a sleeping loop waits on, and when it asks for a frame (env ms). */
   private wake: { at: number; cancel: () => void } | null = null
   private failed = false
   private ready = false
   private readonly createdAt: number
-  /** When the current compile/startup wait began (env ms); reset on context restore. */
+  /** When the current compile/startup wait began (env ms); reset on context restore or returning to visible. */
   private pendingSince: number
   private compileMs: number | null = null
   /** Cancels the wait for a lost context to come back. */
@@ -380,15 +382,24 @@ export class FaceRenderer {
   private cancelReadyPoll: (() => void) | null = null
   /** Cancels the deadline timer for an in-flight Worker frame request. */
   private cancelFrameTimer: (() => void) | null = null
+  /** Re-arms the deadline timer for the active Worker frame request when the document becomes visible again. */
+  private rearmFrameTimer: (() => void) | null = null
   /** Whether the first drawn face has been read back to check that it is not empty. */
   private verified = false
   /** Whether this renderer has drawn at least one verified live frame. */
   private hasDrawn = false
   /** When the first frame request was sent before any frame has drawn (env ms). */
   private firstFrameSince: number | null = null
-  /** Consecutive ticks where the Worker returned null pictures or rejected. */
+  /** Consecutive missed frames (null pictures, rejections, or unanswered live requests). */
   private nullFrames = 0
-  private readonly onVisibility = () => this.schedule()
+  private readonly onVisibility = () => {
+    if (!this.hidden()) {
+      this.pendingSince = this.env.now()
+      if (this.firstFrameSince !== null) this.firstFrameSince = this.env.now()
+      this.rearmFrameTimer?.()
+    }
+    this.schedule()
+  }
   private readonly stopRatioWatch: (() => void) | null
   private readonly stopFocusWatch: (() => void) | null
   private focused: boolean
@@ -566,12 +577,14 @@ export class FaceRenderer {
   dispose(): void {
     this.stop()
     this.inFlight = false
+    this.frameGen++
     this.cancelLostTimer?.()
     this.cancelLostTimer = null
     this.cancelReadyPoll?.()
     this.cancelReadyPoll = null
     this.cancelFrameTimer?.()
     this.cancelFrameTimer = null
+    this.rearmFrameTimer = null
     for (const slot of this.slots.values()) slot.cancelHold?.()
     this.observer?.disconnect()
     this.env.document?.removeEventListener('visibilitychange', this.onVisibility)
@@ -630,7 +643,8 @@ export class FaceRenderer {
   }
 
   private hidden(): boolean {
-    return this.env.document?.visibilityState === 'hidden'
+    const doc = this.env.document
+    return Boolean(doc?.hidden || doc?.visibilityState === 'hidden')
   }
 
   /** Whether the face draws its still pose at `t`: asked to, or settled (see the cost notes above). */
@@ -806,12 +820,14 @@ export class FaceRenderer {
     if (this.failed) return
     this.failed = true
     this.inFlight = false
+    this.frameGen++
     this.cancelReadyPoll?.()
     this.cancelReadyPoll = null
     this.cancelLostTimer?.()
     this.cancelLostTimer = null
     this.cancelFrameTimer?.()
     this.cancelFrameTimer = null
+    this.rearmFrameTimer = null
     this.stop()
     if (problem && !diagnostics.problem) noteDiagnostics({ problem })
     const gpu = this.gpu
@@ -850,7 +866,7 @@ export class FaceRenderer {
     if (status === 'failed') return this.fail()
     // Lost: the poll starts again when the context is back.
     if (status === 'lost') return this.lost()
-    if (this.env.now() - this.pendingSince >= STARTUP_TIMEOUT_MS) {
+    if (!this.hidden() && this.env.now() - this.pendingSince >= STARTUP_TIMEOUT_MS) {
       return this.fail('timed out while starting the face renderer')
     }
     this.startReadyPoll()
@@ -876,8 +892,11 @@ export class FaceRenderer {
   /** The context is lost: not ready until it is back, and failed when it does not come back in time. Faces keep what they show. */
   private lost(): void {
     if (this.failed) return
+    this.inFlight = false
+    this.frameGen++
     this.cancelFrameTimer?.()
     this.cancelFrameTimer = null
+    this.rearmFrameTimer = null
     if (this.ready) {
       this.ready = false
       this.notify()
@@ -1041,14 +1060,10 @@ export class FaceRenderer {
    */
   private drawInWorker(gpu: WorkerFaceGpu, jobs: Job[], alike: [Slot, string, number][], started: number): void {
     const batches = this.pack(jobs)
+    const gen = ++this.frameGen
+    let settled = false
     this.inFlight = true
     if (!this.hasDrawn && this.firstFrameSince === null) this.firstFrameSince = this.env.now()
-    this.cancelFrameTimer?.()
-    this.cancelFrameTimer = this.env.setTimer?.(() => {
-      this.cancelFrameTimer = null
-      if (this.gpu !== gpu || this.failed || !this.inFlight) return
-      this.fail(this.hasDrawn ? 'timed out waiting for a 3D frame' : 'timed out waiting for the first 3D frame')
-    }, FRAME_TIMEOUT_MS) ?? null
     const sent = batches.map((batch) => ({
       width: batch.width,
       height: batch.height,
@@ -1057,28 +1072,62 @@ export class FaceRenderer {
     const forgetSaves = () => {
       for (const job of jobs) if (job.saveOnly) this.stillsTaken.delete(job.cacheKey!)
     }
+    const clearFrameTimer = () => {
+      this.cancelFrameTimer?.()
+      this.cancelFrameTimer = null
+      this.rearmFrameTimer = null
+    }
     const onMissedFrame = () => {
       forgetSaves()
       const gpuStatus = gpu.status()
       if (gpuStatus === 'failed') return this.fail()
       if (gpuStatus === 'lost') return this.lost()
       this.nullFrames++
-      const firstFrameExpired = !this.hasDrawn && this.firstFrameSince !== null && this.env.now() - this.firstFrameSince >= FRAME_TIMEOUT_MS
+      const firstFrameExpired = !this.hasDrawn && !this.hidden() && this.firstFrameSince !== null && this.env.now() - this.firstFrameSince >= FRAME_TIMEOUT_MS
       if (this.nullFrames >= MAX_NULL_FRAMES || firstFrameExpired) {
         return this.fail(this.hasDrawn ? 'the background renderer stopped drawing frames' : 'the background renderer could not draw the first frame')
       }
       this.schedule()
     }
-    gpu.drawBatches(sent).then(
-      (pictures) => {
-        if (this.gpu !== gpu || this.failed) {
-          for (const picture of pictures ?? []) (picture as { close?(): void }).close?.()
-          forgetSaves()
+    const armFrameTimer = () => {
+      this.cancelFrameTimer?.()
+      this.cancelFrameTimer = this.env.setTimer?.(() => {
+        this.cancelFrameTimer = null
+        if (settled || this.gpu !== gpu || this.failed || !this.inFlight || this.frameGen !== gen) return
+        if (this.hidden()) {
+          armFrameTimer()
           return
         }
+        if (!this.hasDrawn) {
+          settled = true
+          this.rearmFrameTimer = null
+          this.fail('timed out waiting for the first 3D frame')
+          return
+        }
+        settled = true
+        this.frameGen++
         this.inFlight = false
-        this.cancelFrameTimer?.()
-        this.cancelFrameTimer = null
+        this.rearmFrameTimer = null
+        onMissedFrame()
+      }, FRAME_TIMEOUT_MS) ?? null
+    }
+    this.rearmFrameTimer = () => {
+      if (!settled && this.gpu === gpu && !this.failed && this.inFlight && this.frameGen === gen) armFrameTimer()
+    }
+    armFrameTimer()
+    gpu.drawBatches(sent).then(
+      (pictures) => {
+        if (settled || this.gpu !== gpu || this.failed || this.frameGen !== gen) {
+          for (const picture of pictures ?? []) (picture as { close?(): void }).close?.()
+          if (!settled) {
+            settled = true
+            forgetSaves()
+          }
+          return
+        }
+        settled = true
+        this.inFlight = false
+        clearFrameTimer()
         if (!pictures || pictures.length < batches.length) {
           for (const picture of pictures ?? []) (picture as { close?(): void }).close?.()
           onMissedFrame()
@@ -1105,13 +1154,16 @@ export class FaceRenderer {
         this.schedule()
       },
       () => {
-        if (this.gpu !== gpu || this.failed) {
-          forgetSaves()
+        if (settled || this.gpu !== gpu || this.failed || this.frameGen !== gen) {
+          if (!settled) {
+            settled = true
+            forgetSaves()
+          }
           return
         }
+        settled = true
         this.inFlight = false
-        this.cancelFrameTimer?.()
-        this.cancelFrameTimer = null
+        clearFrameTimer()
         onMissedFrame()
       }
     )

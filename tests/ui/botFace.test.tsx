@@ -14,13 +14,16 @@ import {
   FaceRenderer,
   faceDrawSide,
   faceRendererStats,
+  FRAME_TIMEOUT_MS,
   IDLE_LIVE_SECONDS,
   IDLE_RELEASE_MS,
   LOST_CONTEXT_TIMEOUT_MS,
+  MAX_NULL_FRAMES,
   READY_POLL_MS,
   resetSharedFaceRenderer,
   SAMPLE_BUDGET,
   sharedFaceRendererStatus,
+  STARTUP_TIMEOUT_MS,
   stillFrameKey,
   UNFOCUSED_LIVE_SECONDS,
   WAKE_LEAD_MS,
@@ -86,6 +89,7 @@ function render(element: ReactElement | null) {
 
 function setVisibility(state: DocumentVisibilityState) {
   Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state })
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => state === 'hidden' })
   document.dispatchEvent(new Event('visibilitychange'))
 }
 
@@ -1266,6 +1270,124 @@ describe('drawing in a Worker', () => {
     expect(renderer.status()).toBe('ready')
     renderer.dispose()
   })
+
+  it('recovers from an unanswered frame request after drawing a frame and stays live when the next reply arrives', async () => {
+    const { fake, worker } = workerEnv()
+    const renderer = new FaceRenderer(fake.env)
+    const canvas = document.createElement('canvas')
+    renderer.register(canvas, spec({ state: 'working' }))
+    fake.tick()
+    await worker.answer()
+    expect(fake2d(canvas).drawImage).toHaveBeenCalledTimes(1)
+    // Next frame request goes unanswered past FRAME_TIMEOUT_MS: counts as a miss, does not fail.
+    fake.tick()
+    expect(worker.sent).toHaveLength(1)
+    worker.sent.shift()
+    fake.tick(FRAME_TIMEOUT_MS)
+    expect(renderer.status()).toBe('ready')
+    expect(worker.gpu.dispose).not.toHaveBeenCalled()
+    // Rescheduled tick sends a fresh request; when it replies, the face draws and stays live.
+    fake.tick()
+    expect(worker.sent).toHaveLength(1)
+    const fresh = await worker.answer()
+    expect(lastDrawn(canvas)).toBe(fresh![0])
+    expect(fake2d(canvas).drawImage).toHaveBeenCalledTimes(2)
+    expect(renderer.status()).toBe('ready')
+    expect(renderer.running).toBe(true)
+    renderer.dispose()
+  })
+
+  it('drops a stale late reply after a timeout, closing its pictures without disturbing the newer request', async () => {
+    const { fake, worker } = workerEnv()
+    const renderer = new FaceRenderer(fake.env)
+    const canvas = document.createElement('canvas')
+    renderer.register(canvas, spec({ state: 'working' }))
+    fake.tick()
+    await worker.answer()
+    expect(fake2d(canvas).drawImage).toHaveBeenCalledTimes(1)
+    // Second request times out and a third request is sent.
+    fake.tick()
+    const stale = worker.sent.shift()!
+    fake.tick(FRAME_TIMEOUT_MS)
+    fake.tick()
+    expect(worker.sent).toHaveLength(1)
+    // Late reply for the timed-out request arrives while the third is still in flight.
+    const stalePicture = { close: vi.fn() } as unknown as CanvasImageSource
+    stale.resolve([stalePicture])
+    await settle()
+    expect((stalePicture as unknown as { close: () => void }).close).toHaveBeenCalledTimes(1)
+    expect(fake2d(canvas).drawImage).toHaveBeenCalledTimes(1)
+    // Newer request is still in flight: ticking does not send a duplicate request.
+    fake.tick()
+    expect(worker.sent).toHaveLength(1)
+    // Answering the newer request draws normally.
+    const fresh = await worker.answer()
+    expect(lastDrawn(canvas)).toBe(fresh![0])
+    expect(fake2d(canvas).drawImage).toHaveBeenCalledTimes(2)
+    expect(renderer.status()).toBe('ready')
+    renderer.dispose()
+  })
+
+  it('fails after MAX_NULL_FRAMES consecutive unanswered requests once live', async () => {
+    const { fake, worker } = workerEnv()
+    const renderer = new FaceRenderer(fake.env)
+    const canvas = document.createElement('canvas')
+    renderer.register(canvas, spec({ state: 'working' }))
+    fake.tick()
+    await worker.answer()
+    for (let i = 0; i < MAX_NULL_FRAMES; i++) {
+      fake.tick()
+      expect(worker.sent).toHaveLength(i + 1)
+      fake.tick(FRAME_TIMEOUT_MS)
+      if (i < MAX_NULL_FRAMES - 1) {
+        expect(renderer.status()).toBe('ready')
+        expect(worker.gpu.dispose).not.toHaveBeenCalled()
+      }
+    }
+    expect(renderer.status()).toBe('failed')
+    expect(worker.gpu.dispose).toHaveBeenCalledTimes(1)
+    renderer.dispose()
+  })
+
+  it('does not count frame or startup timeouts while the document is hidden', async () => {
+    // Frame timer does not count misses while hidden, and re-arms on returning to visible.
+    const { fake, worker } = workerEnv()
+    const renderer = new FaceRenderer(fake.env)
+    const canvas = document.createElement('canvas')
+    renderer.register(canvas, spec({ state: 'working' }))
+    fake.tick()
+    await worker.answer()
+    fake.tick()
+    expect(worker.sent).toHaveLength(1)
+    setVisibility('hidden')
+    fake.tick(FRAME_TIMEOUT_MS * (MAX_NULL_FRAMES + 2))
+    expect(renderer.status()).toBe('ready')
+    expect(worker.gpu.dispose).not.toHaveBeenCalled()
+    expect(worker.sent).toHaveLength(1)
+    setVisibility('visible')
+    fake.tick(FRAME_TIMEOUT_MS - 1)
+    expect(worker.sent).toHaveLength(1)
+    const pictures = await worker.answer()
+    expect(lastDrawn(canvas)).toBe(pictures![0])
+    expect(renderer.status()).toBe('ready')
+    renderer.dispose()
+
+    // Startup deadline does not expire while hidden, and restarts on becoming visible.
+    let status: ReturnType<FaceGpu['status']> = 'pending'
+    const startup = workerEnv(() => status)
+    const pendingRenderer = new FaceRenderer(startup.fake.env)
+    pendingRenderer.register(document.createElement('canvas'), spec())
+    setVisibility('hidden')
+    startup.fake.tick(STARTUP_TIMEOUT_MS * 2)
+    expect(pendingRenderer.status()).toBe('pending')
+    setVisibility('visible')
+    startup.fake.tick(STARTUP_TIMEOUT_MS - READY_POLL_MS)
+    expect(pendingRenderer.status()).toBe('pending')
+    status = 'ready'
+    startup.fake.tick(READY_POLL_MS)
+    expect(pendingRenderer.status()).toBe('ready')
+    pendingRenderer.dispose()
+  })
 })
 
 /** A Worker that records what it is sent and answers as the test says. */
@@ -1400,8 +1522,14 @@ describe('LazyBotFace stalled Worker fallback', () => {
     const worker = getWorker()
     expect(worker.sent).toEqual([{ type: 'start' }])
     expect(host.querySelector('.bot-face-placeholder[data-loading]')).not.toBeNull()
+    // Slow compiles up to STARTUP_TIMEOUT_MS stay pending.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(15_000)
+    })
+    expect(worker.terminated).toBe(false)
+    expect(sharedFaceRendererStatus()).toBe('pending')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(STARTUP_TIMEOUT_MS - 15_000 + READY_POLL_MS)
     })
     expect(worker.terminated).toBe(true)
     expect(sharedFaceRendererStatus()).toBe('failed')
