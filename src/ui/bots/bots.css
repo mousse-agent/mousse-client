@@ -1,72 +1,249 @@
 /* Bots on the phone, after the desktop's mousse/src/renderer/styles/bots.css, sized for touch:
- * buttons are at least 36px, Reply shows without hover, and About opens as a sheet. */
+ * buttons are at least 36px, Reply and Copy show without hover, and side panels / dialogs open as bottom sheets. */
 
 /* Bot buttons draw their own look: no browser border or fill. */
-:where(.bot-roster, .bot-chat, .bot-about, .bot-new) button:where(:not(.m-button):not(.m-icon-button)) { border: 0; background: none; -webkit-tap-highlight-color: transparent; }
+:where(.bot-list, .bot-chat, .bot-about, .bot-new, .bot-memory-sheet, .bot-presence-sheet, .bot-tasks-sheet, .bot-header, .bot-thread-banner) button:where(:not(.m-button):not(.m-icon-button)) {
+  border: 0;
+  background: none;
+  -webkit-tap-highlight-color: transparent;
+}
 
-/* ---------- Chats tab: the roster of faces and bot rows ---------- */
-.bot-roster { display: flex; gap: 4px; overflow-x: auto; padding: 2px 2px 8px; scrollbar-width: none; }
-.bot-roster::-webkit-scrollbar { display: none; }
-.bot-roster > button { flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px; width: 68px; padding: 6px 2px; border-radius: 14px; color: var(--text-secondary); font-size: 12px; }
-.bot-roster > button > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bot-roster > button:active { background: var(--ui-pressed); }
-.bot-roster > button.is-active > span { color: var(--text-primary); font-weight: 600; }
-/* The open bot: a subtle tint, no edge marks. A bot with unread messages: a small dot by its face. */
-.bot-roster > button { position: relative; }
-.bot-roster > button.is-active { background: color-mix(in srgb, var(--accent) 10%, var(--ui-raised, transparent)); }
-.bot-roster .bot-roster-unread { position: absolute; top: 5px; right: 9px; z-index: 1; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--bg-primary, #000); pointer-events: none; }
-.bot-roster__new { justify-content: center; }
-.bot-roster__new > i { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 50%; border: 1.5px dashed color-mix(in srgb, var(--text-secondary) 45%, transparent); font-style: normal; }
-.bot-unread { flex: none; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; display: grid; place-items: center; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--surface-strong); background: var(--accent); }
+/* ---------- Chats tab: foldable sections, bot rows with state in words, sleeping idle faces, mascot ---------- */
+.bot-section-heading h2 { margin: 0; }
+.bot-section-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 2px 4px 2px 0;
+  border: 0;
+  background: none;
+  color: var(--ui-faint);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.bot-section-chevron { transition: transform 140ms ease; }
+.bot-section-chevron.is-open { transform: rotate(90deg); }
+
+.bot-list-row {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.bot-row-face { position: relative; flex: none; display: inline-flex; }
+/* Idle bots sleep (paused pose + floating z) at full colour, without the fade a paused bot has. */
+.bot-row-face.is-resting .bot-face[data-state='paused'][data-drawn] .bot-face-canvas,
+.bot-row-face.is-resting .bot-face[data-state='paused'] .bot-face-shot { opacity: 1; }
+.bot-row-dot {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--app-window-bg);
+  pointer-events: none;
+}
+.bot-row-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.bot-row-head .m-chat-row__name { flex: 1; min-width: 0; }
+.bot-row-time { flex: none; font-size: 11.5px; color: var(--ui-faint); font-variant-numeric: tabular-nums; }
+.bot-row-state[data-tone='working'] { color: var(--accent); }
+.bot-row-state[data-tone='needs'] { color: var(--status-waiting, #e5a94c); }
+.bot-row-state[data-tone='idle'] { color: var(--ui-faint); }
+.bot-row-computer { color: var(--ui-faint); }
+.bot-unread {
+  flex: none;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ui-on-accent, #fff);
+  background: var(--accent);
+}
 .m-chat-row .bot-face { margin: -2px 0; }
 
+/* ---------- Empty Bots page & Mascot (#1579) ---------- */
+.bot-empty-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 20px 16px 24px;
+}
+.bot-empty-page__title { margin: 0; font-size: 18px; font-weight: 600; color: var(--text-primary); }
+.bot-empty-page__body { margin: 0 0 6px; max-width: 32ch; font-size: 13.5px; line-height: 1.45; color: var(--text-secondary); }
+
+.bot-mascot {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  margin: 0 auto 6px;
+  padding: 4px;
+  border: 0;
+  background: none;
+  border-radius: 50%;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.bot-mascot::before {
+  content: '';
+  position: absolute;
+  inset: 60% 10% -4%;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(var(--accent-rgb), 0.3), transparent);
+  pointer-events: none;
+}
+.bot-mascot__body { position: relative; display: block; animation: bot-mascot-float 4.2s ease-in-out infinite; will-change: transform; }
+.bot-mascot__hopper { display: block; transform-origin: 50% 90%; will-change: transform; }
+.bot-mascot__svg { display: block; }
+@keyframes bot-mascot-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+
 /* ---------- A bot's chat ---------- */
-/* The thread's type scale: messages at the chat body size, the owner's with a prompt's line height and the bot's with
-   a reply's; names, times, labels and day lines at the small meta size. */
 .bot-chat { --bot-text: var(--chat-font-size); --bot-meta: 12.5px; }
 .bot-transcript { max-width: 760px; margin: 0 auto; padding: 8px 14px 20px; display: flex; flex-direction: column; }
 
-/* Messages in groups (messageGroups.ts): one sender's messages close in time sit tight, the bot's face and name on the
-   first, one small time under the last on the sender's side. */
+/* Find in chat bar. */
+.bot-find-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--ui-line);
+  background: color-mix(in srgb, var(--app-window-bg) 92%, var(--ui-raised));
+}
+.bot-find-bar__icon { flex: none; color: var(--ui-faint); }
+.bot-find-bar input {
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  padding: 4px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 15px;
+  outline: none;
+}
+.bot-find-bar__count { flex: none; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; padding: 0 4px; }
+.bot-find-bar button { flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; color: var(--text-secondary); }
+.bot-find-bar button:disabled { opacity: 0.35; }
+.bot-find-bar button:active:not(:disabled) { background: var(--ui-pressed); color: var(--text-primary); }
+
+/* Messages in groups. */
 .bot-msg { display: flex; gap: 10px; min-width: 0; color: var(--text-primary); margin-top: 0; }
-.bot-msg.is-group-start { margin-top: 20px; }
-.bot-msg--bot:not(.is-group-start) { margin-top: 10px; }
+.bot-msg.is-group-start { margin-top: 18px; }
+.bot-msg--bot:not(.is-group-start) { margin-top: 8px; }
 .bot-msg.bot-you:not(.is-group-start) { margin-top: 3px; }
 .bot-msg.is-quoted:not(.is-group-start) { margin-top: 14px; }
 .bot-transcript > :first-child.bot-msg, .bot-transcript > .bot-day:first-child { margin-top: 4px; }
 .bot-msg--bot > .bot-msg__face { margin-top: -1px; }
 .bot-msg__gutter { flex: none; width: 32px; }
-.bot-msg__body { flex: 1; min-width: 0; }
+.bot-msg__body { flex: 1; min-width: 0; position: relative; }
 .bot-msg__text { font-size: var(--bot-text); line-height: var(--chat-line-height); }
 .bot-msg__meta { display: flex; align-items: center; gap: 6px; min-height: 22px; margin-bottom: 3px; font-size: var(--bot-meta); line-height: 18px; color: var(--text-secondary); }
 .bot-msg__meta strong { font-weight: 600; color: var(--text-primary); }
 .bot-msg__meta--later { margin-bottom: 4px; }
 .bot-msg__meta--later:not(:has(.bot-message-label)) { position: absolute; right: 0; margin: 0; }
+.bot-msg__tools { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; }
 .bot-msg--bot { position: relative; }
 .bot-msg.is-report .bot-msg__body { padding: 10px 12px; border-radius: 12px; background: color-mix(in srgb, var(--text-secondary) 6%, transparent); }
+
+/* Message from another of the owner's bots (#1543): tinted with sender's colour. */
+.bot-msg.is-from-bot .bot-msg__body {
+  padding: 9px 12px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--from-colour, var(--accent)) 28%, transparent);
+  background: color-mix(in srgb, var(--from-colour, var(--accent)) 8%, transparent);
+}
+.bot-from-name { color: var(--from-colour, var(--accent)) !important; }
+
+.bot-msg.is-found {
+  border-radius: 12px;
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.55);
+  background: rgba(var(--accent-rgb), 0.08);
+}
+
 .bot-group-time { margin-top: 5px; font-size: var(--bot-meta); line-height: 16px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .bot-group-time[data-author='owner'] { text-align: right; padding-right: 6px; }
 .bot-group-time[data-author='bot'] { padding-left: 42px; }
-/* A new day: its name, small and centred on a faint tint. */
-.bot-day { display: flex; justify-content: center; margin-top: 24px; }
+.bot-day { display: flex; justify-content: center; margin-top: 22px; }
 .bot-day > span { padding: 2px 10px; border-radius: 999px; font-size: var(--bot-meta); line-height: 18px; color: var(--text-secondary); background: color-mix(in srgb, var(--text-secondary) 8%, transparent); }
-/* A reminder or a work report says so in a small label. */
 .bot-message-label { padding: 1px 7px; border-radius: 6px; font-size: var(--bot-meta); line-height: 18px; font-weight: 500; color: var(--text-secondary); background: color-mix(in srgb, var(--text-secondary) 10%, transparent); }
 
-/* The owner's are right-aligned bubbles; in a group, the bubbles under the first square their top corner. */
-.bot-msg.bot-you { flex-direction: column; align-items: flex-end; gap: 3px; padding-left: 12%; }
+/* Quiet centred system lines (started work, answered ask, tapped answer, slash command result). */
+.bot-system-line {
+  display: flex;
+  justify-content: center;
+  margin: 12px 0 4px;
+  text-align: center;
+  font-size: var(--bot-meta);
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+.bot-system-line > span {
+  max-width: 90%;
+  white-space: pre-line;
+  padding: 2px 10px;
+  border-radius: 10px;
+}
+.bot-system-line.is-note > span {
+  background: color-mix(in srgb, var(--text-secondary) 9%, transparent);
+  padding: 6px 12px;
+  text-align: left;
+}
+.bot-system-line.is-error > span {
+  color: var(--error, var(--danger, #e79090));
+  background: color-mix(in srgb, var(--danger, #e79090) 12%, transparent);
+}
+
+/* Expired schedule action reviews fold. */
+.bot-expired-actions { margin: 12px 0 4px; }
+.bot-expired-actions > summary {
+  list-style: none;
+  text-align: center;
+  font-size: var(--bot-meta);
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px 10px;
+}
+.bot-expired-actions > summary::-webkit-details-marker { display: none; }
+
+/* The owner's bubbles. */
+.bot-msg.bot-you { flex-direction: column; align-items: flex-end; gap: 3px; padding-left: 10%; }
 .bot-msg.bot-you.is-pending { opacity: .7; }
 .bot-you-line { display: flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
 .bot-you-content { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; min-width: 0; max-width: 100%; }
-.bot-you-bubble { max-width: 100%; padding: 7px 13px; border-radius: 18px 18px 5px 18px; background: rgba(var(--accent-rgb), .2); color: var(--text-primary); font-size: var(--bot-text); line-height: 1.5; overflow-wrap: anywhere; }
+.bot-you-bubble { position: relative; max-width: 100%; padding: 7px 13px; border-radius: 18px 18px 5px 18px; background: rgba(var(--accent-rgb), .2); color: var(--text-primary); font-size: var(--bot-text); line-height: 1.5; overflow-wrap: anywhere; }
 .bot-you:not(.is-group-start) .bot-you-bubble { border-top-right-radius: 6px; }
 .bot-you-bubble .m-md-p { margin: 0 0 8px; }
 .bot-you-bubble .m-md-p:last-child { margin-bottom: 0; }
+.bot-receipt { margin: 2px 6px 0 0; font-size: 11.5px; color: var(--text-secondary); }
+.bot-reaction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 13px;
+  background: var(--ui-raised);
+  border: 1px solid var(--ui-line);
+}
+.bot-you-bubble .bot-reaction { position: absolute; right: 6px; bottom: -14px; margin: 0; }
 .bot-msg.is-shown { animation: bot-message-shown 1.4s ease-out; border-radius: 12px; }
 @keyframes bot-message-shown { from { background: rgba(var(--accent-rgb), .16); } to { background: transparent; } }
 
-/* Replies: a one-line quote of the message one answers, and the same quote above the composer. The owner's are
-   tinted with the accent and carry no name; the bot's with its own colour (--bot-colour) and carry its name. */
+/* Replies & quotes. */
 .bot-quote {
   --quote-bg: color-mix(in srgb, var(--bot-colour, var(--text-secondary)) 13%, transparent);
   --quote-bg-pressed: color-mix(in srgb, var(--bot-colour, var(--text-secondary)) 20%, transparent);
@@ -85,18 +262,17 @@
 .bot-you > .bot-reply-quote { margin-bottom: 3px; }
 .bot-reply-quote:not(:disabled):active { background: var(--quote-bg-pressed); }
 .bot-reply-quote:disabled > span { font-style: italic; color: var(--text-secondary); }
-/* Touch screens have no hover: Reply stays visible, quietly. */
-.bot-reply-button { flex: none; display: grid; place-items: center; width: 32px; height: 32px; margin: -6px 0; border-radius: 8px; color: var(--text-secondary); opacity: .5; }
+.bot-reply-button { flex: none; display: grid; place-items: center; width: 32px; height: 32px; margin: -6px 0; border-radius: 8px; color: var(--text-secondary); opacity: .55; }
 .bot-reply-button:active { opacity: 1; background: color-mix(in srgb, var(--text-secondary) 12%, transparent); }
 .bot-replying { padding: 4px 4px 4px 10px; border-radius: 12px; }
 .bot-replying button { flex-shrink: 0; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; color: var(--text-secondary); }
 .bot-replying button:active { background: var(--quote-bg-pressed); color: var(--text-primary); }
-.bot-you-files { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.bot-you-files { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 4px; }
 .bot-msg--bot .bot-you-files { justify-content: flex-start; }
 .bot-file-pill { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 9px; border-radius: 8px; font-size: var(--bot-meta); color: var(--text-secondary); background: color-mix(in srgb, var(--text-secondary) 9%, transparent); overflow-wrap: anywhere; }
 
-/* Pictures (BotImages.tsx): rounded thumbnails in fixed boxes, so nothing moves when one loads. One alone is large;
-   two or four sit in a square grid; three put the first across the top. Sized for a phone's width. */
+/* Pictures & media. */
+.bot-message-media { margin-bottom: 6px; }
 .bot-images { --thumb: min(38vw, 150px); display: grid; grid-template-columns: repeat(2, var(--thumb)); gap: 4px; }
 .bot-images[data-count='1'] { grid-template-columns: min(66vw, 260px); }
 .bot-images[data-count='3'] > :first-child { grid-column: span 2; }
@@ -107,35 +283,259 @@
 .bot-image.is-failed { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 8px; font-size: var(--bot-meta); color: var(--text-secondary); text-align: center; }
 .bot-image.is-inline.is-failed { display: inline-flex; }
 .bot-image.is-failed > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bot-message-files { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 8px; }
-.bot-message-files:empty { display: none; }
-/* A web image is never loaded (it would tell its server who read the chat): a quiet link opens it in the browser. */
 .bot-image-link { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 9px; border-radius: 8px; font-size: var(--bot-meta); line-height: 20px; color: var(--text-secondary); background: color-mix(in srgb, var(--text-secondary) 9%, transparent); text-decoration: none; vertical-align: middle; }
 .bot-image-link.is-blocked { padding-inline: 0; background: none; opacity: .75; }
 .bot-image-link > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 a.bot-image-link:active { color: var(--text-primary); background: color-mix(in srgb, var(--text-secondary) 15%, transparent); }
 
-/* The chat's first load: a quiet line in the middle, or what failed with Retry. */
+/* First load state. */
 .bot-load-state { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 40vh; font-size: 13px; color: var(--text-secondary); }
 .bot-load-state > svg { color: var(--accent); }
 .bot-load-state.is-failed button { min-height: 36px; padding: 6px 14px; border-radius: 9px; font-size: 13px; font-weight: 500; color: var(--text-primary); background: color-mix(in srgb, var(--text-secondary) 12%, transparent); }
 .bot-loading-older { margin: 4px 0 0; text-align: center; font-size: var(--bot-meta); color: var(--text-secondary); }
 
-/* One-line activity chips: quiet, never a tool log. */
-.bot-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.bot-chip { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 6px 11px; border-radius: 9px; background: color-mix(in srgb, var(--text-secondary) 9%, transparent); color: var(--text-secondary); font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; }
-.bot-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bot-chip svg { flex: none; }
-.bot-chip b { font-weight: 500; color: var(--accent); }
-.bot-chip.is-live svg { animation: m-spin 1s steps(12) infinite; }
+/* Typing dots bubble (#1275). */
+.bot-typing-bubble {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 8px 13px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--text-secondary) 9%, transparent);
+  color: var(--text-secondary);
+  font-size: var(--bot-meta);
+}
+.bot-typing-row { display: inline-flex; align-items: center; gap: 9px; }
+.bot-typing-dots { display: inline-flex; align-items: center; gap: 4px; }
+.bot-typing-dots > i {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: bot-typing-dot 1.2s ease-in-out infinite;
+}
+.bot-typing-dots > i:nth-child(2) { animation-delay: 0.18s; }
+.bot-typing-dots > i:nth-child(3) { animation-delay: 0.36s; }
+.bot-typing-row.is-still .bot-typing-dots > i { animation: none; opacity: 0.7; }
+@keyframes bot-typing-dot {
+  0%, 80%, 100% { opacity: 0.35; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-3px); }
+}
 
-/* Its chat turn running, or waiting for internet. */
-.bot-run-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 16px; font-size: var(--bot-meta); color: var(--text-secondary); }
-.bot-run-status .bot-chip { margin-left: 2px; }
-.bot-run-status > svg { color: var(--accent); }
+/* Worked for / Steps & memory tag. */
+.bot-bubble-foot { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.bot-worked {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 28px;
+  padding: 2px 6px 2px 0;
+  font-size: var(--bot-meta);
+  color: var(--text-secondary);
+}
+.bot-worked__chevron { transition: transform 140ms ease; }
+.bot-worked__chevron.is-open { transform: rotate(90deg); }
+.bot-steps {
+  list-style: none;
+  margin: 8px 0 2px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text-secondary) 7%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--bot-meta);
+  color: var(--text-secondary);
+}
+.bot-steps > li { display: flex; align-items: center; gap: 8px; }
+.bot-steps > li > span { flex: 1; min-width: 0; }
+.bot-step-open {
+  flex: none;
+  min-height: 28px;
+  padding: 2px 10px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.14);
+}
+.bot-memory-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  min-height: 28px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-secondary) 9%, transparent);
+}
+.bot-memory-tag:active { color: var(--text-primary); background: color-mix(in srgb, var(--text-secondary) 16%, transparent); }
 
-/* What waits on the owner (an open ask, the bot's error), pinned above the composer as one line each; a tap shows
-   the full message. */
+/* Quick replies: asks, questions, reminders, held tool action cards. */
+.bot-bubble-ask {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 8px 0 0;
+  font-size: 13.5px;
+  color: var(--text-primary);
+}
+.bot-bubble-ask svg { flex: none; margin-top: 2px; color: var(--accent); }
+.bot-ask-replies { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.bot-ask-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.bot-ask-buttons > button {
+  min-height: 38px;
+  padding: 7px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--ui-line-strong) !important;
+  background: var(--ui-raised) !important;
+  color: var(--text-primary);
+  font-size: 13.5px;
+  font-weight: 550;
+  text-align: left;
+  display: inline-flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+.bot-ask-buttons > button.is-primary {
+  border-color: transparent !important;
+  color: var(--ui-on-accent, #fff);
+  background: var(--gradient-accent, var(--accent)) !important;
+}
+.bot-ask-buttons > button:disabled { opacity: 0.5; }
+.bot-ask-buttons > button:active:not(:disabled) { filter: brightness(1.08); }
+.bot-question-replies[data-status='moved_on'] .bot-ask-buttons > button,
+.bot-question-replies[data-status='defaulted'] .bot-ask-buttons > button { opacity: 0.8; }
+.bot-question-detail { font-size: 12px; font-weight: 400; color: var(--text-secondary); }
+.bot-question-settled { margin: 6px 0 0; font-size: var(--bot-meta); color: var(--text-secondary); }
+.bot-ask-refusal { margin: 0; font-size: var(--bot-meta); color: var(--text-secondary); }
+.bot-ask-details {
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text-secondary) 8%, transparent);
+  font-size: var(--bot-meta);
+  line-height: 1.45;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.bot-ask-details p { margin: 0; }
+
+/* Held tool action review card (#1390, #1556, #1545). */
+.bot-action-card {
+  margin-top: 4px;
+  padding: 12px 13px;
+  border-radius: 14px;
+  border: 1px solid rgba(var(--accent-rgb), 0.28);
+  background: rgba(var(--accent-rgb), 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bot-action-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.bot-action-server { font-weight: 500; color: var(--text-secondary); }
+.bot-action-outcome, .bot-action-meta { margin: 0; font-size: var(--bot-meta); color: var(--text-secondary); }
+.bot-action-identification, .bot-action-result {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 2px solid var(--ui-line-strong);
+  font-size: 13px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.bot-action-arguments {
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--app-window-bg) 55%, var(--ui-raised));
+  font-size: 13px;
+  line-height: 1.45;
+}
+.bot-action-arguments dl { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.bot-action-arguments dt { font-size: 11.5px; font-weight: 600; color: var(--text-secondary); }
+.bot-action-arguments dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+.bot-action-text { margin: 0; white-space: pre-wrap; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; }
+.bot-action-empty, .bot-action-hidden { font-style: italic; color: var(--text-secondary); }
+.bot-action-alphabet { display: block; margin-top: 2px; font-size: 11.5px; color: var(--status-waiting, #e5a94c); }
+.bot-action-notice { display: flex; align-items: flex-start; gap: 6px; margin: 0; font-size: var(--bot-meta); color: var(--status-waiting, #e5a94c); }
+.bot-action-notice svg { flex: none; margin-top: 2px; }
+.bot-action-review > summary { cursor: pointer; font-size: var(--bot-meta); color: var(--text-secondary); }
+
+/* Structured cards (BotCards.tsx). */
+.bot-cards { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.bot-card {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--ui-line);
+  background: color-mix(in srgb, var(--text-secondary) 6%, transparent);
+}
+.bot-card-title { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.bot-facts-rows { margin: 0; display: flex; flex-direction: column; gap: 5px; }
+.bot-facts-row { display: flex; gap: 10px; font-size: 13.5px; line-height: 1.4; }
+.bot-facts-row dt { flex: none; width: 34%; max-width: 120px; color: var(--text-secondary); font-weight: 500; overflow-wrap: anywhere; }
+.bot-facts-row dd { flex: 1; min-width: 0; margin: 0; color: var(--text-primary); overflow-wrap: anywhere; }
+.bot-facts-row dd a { color: var(--accent); text-decoration: underline; }
+.bot-card-code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--text-secondary) 12%, transparent); }
+.bot-checklist ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.bot-checklist li { display: flex; align-items: flex-start; gap: 8px; font-size: 13.5px; line-height: 1.4; }
+.bot-checklist li svg { flex: none; margin-top: 2px; color: var(--text-secondary); }
+.bot-checklist li.is-done svg { color: var(--success, #4fc283); }
+.bot-checklist li.is-doing svg { color: var(--accent); }
+.bot-checklist li.is-skipped { opacity: 0.65; text-decoration: line-through; }
+.bot-progress-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 0 6px; font-size: 13.5px; }
+.bot-progress-label { font-weight: 550; }
+.bot-progress-count { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.bot-progress-track { height: 7px; border-radius: 999px; background: color-mix(in srgb, var(--text-secondary) 16%, transparent); overflow: hidden; }
+.bot-progress-fill { height: 100%; border-radius: 999px; background: var(--accent); }
+.bot-progress-note { margin: 6px 0 0; font-size: 12.5px; color: var(--text-secondary); }
+
+/* Started cards: background command & automation rows. */
+.bot-started-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: 12px;
+  border: 1px solid var(--ui-line);
+  background: var(--ui-raised);
+}
+.bot-started-card__icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: rgba(var(--accent-rgb), 0.14);
+  color: var(--accent);
+}
+.bot-started-card__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.bot-started-card__head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.bot-started-card__title { font-size: 13.5px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bot-started-card__tag { flex: none; font-size: 11px; color: var(--text-secondary); padding: 1px 6px; border-radius: 6px; background: color-mix(in srgb, var(--text-secondary) 12%, transparent); }
+.bot-started-card__line { font-size: 12.5px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bot-started-card__note { color: var(--status-waiting, #e5a94c); font-weight: 500; }
+.bot-started-card__action {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-secondary) 12%, transparent);
+}
+
+/* Composer pins, jump pill, error notice. */
 .bot-chat__composer { position: relative; }
 .bot-pins { display: flex; flex-direction: column; gap: 6px; }
 .bot-pinned { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 38px; padding: 6px 12px 6px 11px; border-radius: 12px; font-size: 13px; line-height: 18px; text-align: left; color: var(--text-primary); background: rgba(var(--accent-rgb), .12); }
@@ -144,46 +544,34 @@ a.bot-image-link:active { color: var(--text-primary); background: color-mix(in s
 .bot-pinned:not(:disabled):active { background: rgba(var(--accent-rgb), .2); }
 .bot-pinned[data-kind='error'] { color: var(--error, #e79090); background: color-mix(in srgb, var(--error, #e79090) 12%, transparent); }
 .bot-pinned[data-kind='error'] > svg { color: inherit; }
-/* Scrolled up when a message arrives: one small pill floating above the composer. */
 .bot-jump { position: absolute; z-index: 2; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 6px 14px 6px 12px; border-radius: 999px; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .bot-chat .bot-jump { color: var(--text-primary); background: var(--ui-raised); border: 1px solid var(--ui-line-strong); box-shadow: var(--ui-raised-shadow); }
 .bot-jump > svg { color: var(--accent); }
-/* A failure of the phone's own request (a send, a stop): one line with Dismiss. */
 .bot-notice { display: flex; align-items: center; gap: 9px; padding: 6px 6px 6px 12px; border-radius: 12px; font-size: 13px; line-height: 1.4; color: var(--error, #e79090); background: color-mix(in srgb, var(--error, #e79090) 12%, transparent); }
 .bot-notice > svg { flex: none; }
 .bot-notice > span { flex: 1; min-width: 0; }
 .bot-notice > button { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; color: inherit; }
 
-/* The composer: one pill, the field and send inside, one line high and growing with the words. Its sheen is dimmer
-   than the thread composer's. */
+/* Pill composer. */
 .bot-chat .m-composer { padding: 5px 5px 5px 18px; border-radius: 24px; background-size: 40% 1px, 100% 100%; }
 .bot-chat .m-composer__row { align-items: flex-end; }
 .bot-chat .m-composer__input { min-height: 34px; padding: 6px 0; font-size: var(--bot-text); line-height: 22px; }
 .bot-chat .m-composer__action { border-radius: 50%; width: 38px; height: 38px; }
 
-/* Asking for something, inside the bot's message; the approval look. */
-.bot-ask { margin-top: 12px; max-width: 520px; padding: 12px 14px; border-radius: 14px; border: 1px solid rgba(var(--accent-rgb), .28); background: rgba(var(--accent-rgb), .06); }
-.bot-ask__title { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; line-height: 1.4; color: var(--text-primary); }
-.bot-ask__title svg { color: var(--accent); flex-shrink: 0; margin-top: 1px; }
-.bot-ask__title strong { font-weight: 600; }
-.bot-ask__note { margin: 6px 0 0 24px; font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; }
-.bot-ask__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
-.bot-ask__answer { display: inline-flex; align-items: center; gap: 6px; margin: 8px 0 0 24px; font-size: 12.5px; color: var(--text-secondary); }
-
-/* Something went wrong: one red line and one way out. */
+/* Error line (#1630). */
 .bot-error { display: flex; align-items: center; gap: 10px; margin-top: 10px; max-width: 520px; padding: 10px 12px 10px 14px; border-radius: 12px; background: color-mix(in srgb, var(--error, #e79090) 12%, transparent); color: var(--error, #e79090); font-size: 13px; line-height: 1.4; }
+.bot-error.is-settled { background: color-mix(in srgb, var(--text-secondary) 8%, transparent); color: var(--text-secondary); }
 .bot-error > svg { flex: none; }
 .bot-error span { flex: 1; }
 .bot-error button { flex: none; min-height: 34px; color: var(--text-primary); font-weight: 500; font-size: 13px; padding: 6px 12px; border-radius: 8px; background: color-mix(in srgb, var(--text-secondary) 14%, transparent); }
 .bot-paused-line { margin: 12px 0 0; font-size: 13px; color: var(--text-secondary); }
 .bot-paused-line button { color: var(--accent); font-weight: 500; padding: 6px 2px; }
 
-/* The empty chat: its face, name and what it does. */
 .bot-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 40px 16px 8px; }
 .bot-empty h2 { margin: 8px 0 0; font-size: 18px; font-weight: 600; }
 .bot-empty p { margin: 0; max-width: 34ch; font-size: 14px; line-height: 1.5; color: var(--text-secondary); }
 
-/* Work beside the chat: one quiet line each above the composer, with Stop. */
+/* Work lines above composer. */
 .bot-work { list-style: none; display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 4px; border-radius: 12px; background: color-mix(in srgb, var(--text-secondary) 6%, transparent); }
 .bot-work-line { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 0 0 8px; font-size: 13px; color: var(--text-secondary); }
 .bot-work-line svg { flex: none; }
@@ -194,25 +582,218 @@ a.bot-image-link:active { color: var(--text-primary); background: color-mix(in s
 .bot-work-line button { flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; color: var(--text-secondary); }
 .bot-work-line button:active { background: color-mix(in srgb, var(--text-secondary) 12%, transparent); color: var(--text-primary); }
 
-/* About this bot, in a sheet. */
-.bot-about { display: flex; flex-direction: column; }
-.bot-about__head { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding-bottom: 16px; border-bottom: 1px solid rgba(var(--accent-pale-rgb), .1); }
-.bot-about__head h2 { margin: 0; font-size: 17px; font-weight: 600; }
-.bot-about__head p { margin: 0; font-size: 14px; line-height: 1.5; color: var(--text-secondary); }
-.bot-about h3 { margin: 18px 0 6px; font-size: 12px; font-weight: 500; letter-spacing: .075em; text-transform: uppercase; color: var(--text-secondary); }
+/* ---------- About sheet (BotAboutSheet.tsx) ---------- */
+.bot-about { display: flex; flex-direction: column; gap: 10px; }
+.bot-about__head { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 5px; padding-bottom: 14px; border-bottom: 1px solid var(--ui-line); }
+.bot-about__head h2 { margin: 4px 0 0; font-size: 18px; font-weight: 600; }
+.bot-about__doing { margin: 0; font-size: 13px; color: var(--accent); font-weight: 500; }
+.bot-about__desc { margin: 2px 0 0; font-size: 13.5px; line-height: 1.5; color: var(--text-secondary); }
+.bot-about__quick { display: flex; gap: 8px; margin-top: 6px; }
+.bot-about__quick > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-secondary) 12%, transparent);
+}
+.bot-about-fold { border-bottom: 1px solid var(--ui-line); padding-bottom: 8px; }
+.bot-about-fold__head, .bot-about-memory-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 6px 2px;
+  text-align: left;
+  color: var(--text-primary);
+}
+.bot-about-fold__icon, .bot-about-memory-row > svg:first-child { flex: none; color: var(--text-secondary); }
+.bot-about-fold__title { font-size: 14px; font-weight: 600; }
+.bot-about-fold__summary { flex: 1; min-width: 0; text-align: right; font-size: 12.5px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bot-about-fold__chevron { flex: none; color: var(--text-secondary); transition: transform 140ms ease; }
+.bot-about-fold.is-open .bot-about-fold__chevron { transform: rotate(90deg); }
+.bot-about-fold__body { padding: 4px 0 4px; }
+.bot-about-surface { display: flex; flex-direction: column; gap: 4px; }
 .bot-about__row { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; font-size: 14px; }
+.bot-about__row.is-indent { padding-left: 22px; }
+.bot-about__row.is-off > span { opacity: 0.65; }
 .bot-about__row > svg { color: var(--text-secondary); flex-shrink: 0; margin-top: 2px; }
-.bot-about__row > span { flex: 1; min-width: 0; }
+.bot-about__row > span { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.bot-about__title-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.bot-about__badge { font-size: 11px; font-weight: 500; padding: 1px 6px; border-radius: 6px; color: var(--status-waiting, #e5a94c); background: color-mix(in srgb, var(--status-waiting, #e5a94c) 14%, transparent); }
 .bot-about__clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
-.bot-about__row > button { flex: none; min-height: 34px; margin: -7px -6px -7px 0; padding: 6px 8px; border-radius: 8px; font-size: 13px; color: var(--text-secondary); }
-.bot-about__row > button:active { color: var(--text-primary); background: color-mix(in srgb, var(--text-secondary) 12%, transparent); }
+.bot-about__controls { flex: none; display: inline-flex; align-items: center; gap: 8px; }
+.bot-about__row > button, .bot-about__controls > button:not(.bot-switch) {
+  flex: none;
+  min-height: 34px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.bot-about__row > button:active, .bot-about__controls > button:not(.bot-switch):active { color: var(--text-primary); background: color-mix(in srgb, var(--text-secondary) 12%, transparent); }
 .bot-about__row small { display: block; font-size: 12.5px; color: var(--text-secondary); }
 .bot-about__empty { font-size: 13px; color: var(--text-secondary); margin: 0; line-height: 1.5; }
-.bot-about__hint { margin-top: 20px; }
 .bot-about__foot { display: flex; gap: 8px; }
 .bot-about__foot > * { flex: 1; }
 
-/* New bot, in a sheet. */
+/* Per-permission switch (#1140). */
+.bot-switch {
+  position: relative;
+  width: 40px;
+  height: 24px;
+  padding: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-secondary) 28%, transparent) !important;
+  transition: background-color 140ms ease;
+}
+.bot-switch.is-on { background: var(--accent) !important; }
+.bot-switch:disabled { opacity: 0.5; }
+.bot-switch__thumb {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 140ms ease;
+}
+.bot-switch.is-on .bot-switch__thumb { transform: translateX(16px); }
+
+/* Context & cache bar inside About. */
+.bot-about-context { display: flex; flex-direction: column; gap: 6px; padding: 6px 0; }
+.bot-about-context__top { display: flex; justify-content: space-between; font-size: 13px; color: var(--text-secondary); }
+.bot-about-context__top strong { color: var(--text-primary); }
+.bot-context-bar { display: flex; height: 8px; border-radius: 999px; overflow: hidden; background: color-mix(in srgb, var(--text-secondary) 16%, transparent); }
+.bot-context-breakdown { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 12px; font-size: 12px; color: var(--text-secondary); }
+.bot-context-breakdown li { display: inline-flex; align-items: center; gap: 5px; }
+.bot-context-swatch { width: 8px; height: 8px; border-radius: 50%; }
+.bot-about-stat-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; font-size: 13.5px; }
+.bot-about-stat-row > span:first-child { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.bot-about-stat-row small { font-size: 12px; color: var(--text-secondary); }
+.bot-about-stat { flex: none; font-size: 12.5px; font-weight: 550; color: var(--text-secondary); }
+.bot-about-stat.is-ok { color: var(--success, #4fc283); }
+.bot-about-stat.is-warn { color: var(--status-waiting, #e5a94c); }
+
+/* ---------- Memory sheet (BotMemorySheet.tsx) ---------- */
+.bot-memory-sheet { display: flex; flex-direction: column; gap: 12px; }
+.bot-memory-list { display: flex; flex-direction: column; gap: 14px; }
+.bot-memory-group h3 { margin: 0 0 8px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ui-faint); }
+.bot-memory-group ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.bot-memory-entry {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--ui-line);
+  background: var(--ui-raised);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bot-memory-entry.is-focused { border-color: rgba(var(--accent-rgb), 0.55); background: rgba(var(--accent-rgb), 0.08); }
+.bot-memory-text { margin: 0; font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bot-memory-edit {
+  width: 100%;
+  min-height: 76px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--ui-line-strong);
+  background: var(--app-window-bg);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 15px;
+  resize: vertical;
+}
+.bot-memory-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.bot-memory-date { font-size: 12px; color: var(--ui-faint); }
+.bot-memory-actions { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.bot-memory-actions > button {
+  min-height: 32px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+}
+.bot-memory-actions > button.is-strong { color: var(--accent); background: rgba(var(--accent-rgb), 0.14); }
+.bot-memory-actions > button.is-danger { color: var(--danger, #e79090); background: color-mix(in srgb, var(--danger, #e79090) 14%, transparent); }
+.bot-memory-ask { font-size: 12.5px; color: var(--text-secondary); }
+.bot-memory-error { margin: 0; font-size: 12.5px; color: var(--danger, #e79090); }
+
+/* ---------- Presence & Tasks sheets ---------- */
+.bot-presence-sheet, .bot-tasks-sheet { display: flex; flex-direction: column; gap: 14px; }
+.bot-sheet-heading { margin: 0 0 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ui-faint); }
+.bot-presence-list, .bot-tasks-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.bot-presence-work {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--ui-raised);
+  border: 1px solid var(--ui-line);
+}
+.bot-presence-work__text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.bot-presence-work__text strong { font-size: 14px; font-weight: 550; }
+.bot-presence-work__text small { font-size: 12.5px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.bot-presence-stop { flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; color: var(--text-secondary); }
+.bot-presence-stop:active { background: var(--ui-pressed); color: var(--text-primary); }
+.bot-thread-line {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  text-align: left;
+  background: var(--ui-raised);
+  border: 1px solid var(--ui-line);
+}
+.bot-thread-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.bot-thread-title { font-size: 14px; font-weight: 550; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bot-thread-state { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+.bot-thread-line[data-tone='working'] .bot-thread-state { color: var(--status-running, var(--accent)); }
+.bot-thread-line[data-tone='waiting'] .bot-thread-state { color: var(--status-waiting, #e5a94c); }
+.bot-thread-line[data-tone='done'] .bot-thread-state { color: var(--status-done, var(--success)); }
+.bot-thread-line[data-tone='failed'] .bot-thread-state { color: var(--status-error, var(--danger)); }
+.bot-thread-meta { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-secondary); }
+.bot-thread-hidden { display: inline-flex; align-items: center; gap: 3px; }
+.bot-presence-fold-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.bot-presence-fold-toggle svg { transition: transform 140ms ease; }
+.bot-presence-fold-toggle svg.is-open { transform: rotate(90deg); }
+.bot-presence-count { font-size: 12px; color: var(--ui-faint); }
+
+.bot-tasks-progress { margin: 0; font-size: 13px; color: var(--text-secondary); }
+.bot-tasks-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: 12px;
+  background: var(--ui-raised);
+  border: 1px solid var(--ui-line);
+  font-size: 14px;
+}
+.bot-tasks-item > svg { flex: none; margin-top: 2px; color: var(--text-secondary); }
+.bot-tasks-item.is-completed > svg { color: var(--success, #4fc283); }
+.bot-tasks-item.is-in_progress > svg { color: var(--accent); }
+.bot-tasks-item.is-failed > svg { color: var(--danger, #e79090); }
+.bot-tasks-item__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.bot-tasks-item__note { font-size: 12.5px; color: var(--text-secondary); }
+
+/* ---------- New bot sheet ---------- */
 .bot-new { display: flex; flex-direction: column; gap: 6px; }
 .bot-new .bot-look-picker { margin-bottom: 12px; }
 .bot-new label { font-size: 13px; font-weight: 550; color: var(--text-secondary); margin-top: 8px; }
@@ -221,36 +802,28 @@ a.bot-image-link:active { color: var(--text-primary); background: color-mix(in s
 .bot-new input::placeholder, .bot-new textarea::placeholder { color: var(--text-secondary); }
 .bot-new__hint { margin: 4px 0 0; font-size: 12.5px; color: var(--text-secondary); }
 
-.bot-chat button:focus-visible, .bot-about button:focus-visible, .bot-roster button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-@media (prefers-reduced-motion: reduce) {
-  .bot-msg.is-shown { animation: none; }
-  .bot-chip.is-live svg { animation: none; }
-}
-
-/* The look picker's Shuffle, as a quiet pill. */
 .bot-look-picker__shuffle { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 6px 14px; border-radius: 999px; font-size: 13px; font-weight: 500; color: var(--text-primary); background: color-mix(in srgb, var(--text-secondary) 12%, transparent); }
 .bot-look-picker__shuffle:active { background: var(--ui-pressed); }
 
-/* ---------- The top of a bot's chat: its face in a glass circle, its name in a pill ---------- */
+/* ---------- The top of a bot's chat (BotHeader.tsx) ---------- */
 .bot-screen { display: flex; flex-direction: column; min-height: 0; flex: 1; position: relative; }
 .bot-header {
   flex: none;
   position: relative;
   z-index: 3;
   display: grid;
-  grid-template-columns: var(--touch-target) minmax(0, 1fr) var(--touch-target);
+  grid-template-columns: minmax(var(--touch-target), auto) minmax(0, 1fr) minmax(var(--touch-target), auto);
   align-items: start;
+  gap: 4px;
   padding: calc(var(--safe-top) + 8px) 12px 6px;
   background: linear-gradient(var(--app-window-bg) 82%, color-mix(in srgb, var(--app-window-bg) 0%, transparent));
 }
-.bot-header__side { display: flex; align-items: center; height: 44px; margin-top: 18px; }
+.bot-header__side { display: flex; align-items: center; gap: 6px; height: 44px; margin-top: 18px; }
 .bot-header__side--end { justify-content: flex-end; }
-/* Back and About, the circle behind the face and the name pill: the composer's surface (raised fill,
-   strong line, the glint along the top edge and its specular shadow), with no reflections of their own. */
 .bot-header__side .m-icon-button,
 .bot-header__glass,
-.bot-header__name {
+.bot-header__name,
+.bot-header-tasks {
   border: 1px solid var(--ui-line-strong);
   background-color: var(--ui-raised);
   background-image: linear-gradient(90deg, transparent, var(--ui-glint), transparent), var(--ui-sheen);
@@ -261,14 +834,42 @@ a.bot-image-link:active { color: var(--text-primary); background: color-mix(in s
   box-shadow: var(--ui-raised-shadow);
 }
 .bot-header__side .m-icon-button { width: 40px; height: 40px; border-radius: 50%; }
+.bot-header-tasks {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
 .bot-header__who { display: flex; flex-direction: column; align-items: center; min-width: 0; }
-/* The circle sits behind the face: the face is drawn over it, never clipped by it. */
+.bot-header__identity { display: flex; flex-direction: column; align-items: center; max-width: 100%; padding: 0; }
 .bot-header__glass {
   position: relative;
   display: grid; place-items: center;
   width: 76px; height: 76px; border-radius: 50%;
 }
 .bot-header__glass > * { position: relative; z-index: 1; }
+.bot-sticker {
+  position: absolute !important;
+  right: 2px;
+  bottom: 4px;
+  z-index: 3 !important;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--ui-raised);
+  border: 1px solid var(--ui-line-strong);
+  color: var(--accent);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+.bot-sticker[data-kind='paused'] { color: var(--text-secondary); }
 .bot-header__name {
   position: relative; z-index: 2;
   margin: -12px 0 0;
@@ -279,4 +880,49 @@ a.bot-image-link:active { color: var(--text-primary); background: color-mix(in s
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   color: var(--text-primary);
 }
-.bot-header__computer { margin: 3px 0 0; font-size: 11.5px; color: var(--text-secondary); }
+.bot-header__presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 3px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  max-width: 100%;
+}
+.bot-header__presence > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bot-header__presence[data-kind='typing'],
+.bot-header__presence[data-kind='busy'] { color: var(--accent); }
+.bot-header__presence.is-button:active { background: var(--ui-pressed); }
+.bot-header__computer { margin: 2px 0 0; font-size: 11.5px; color: var(--text-secondary); }
+
+/* Bot thread banner (BotThreadHeader.tsx). */
+.bot-thread-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--ui-line);
+  background: color-mix(in srgb, var(--bot-colour, var(--accent)) 8%, var(--app-window-bg));
+  font-size: 12.5px;
+}
+.bot-thread-banner__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.bot-thread-banner__meta { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.bot-chat button:focus-visible, .bot-about button:focus-visible, .bot-list button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bot-msg.is-shown { animation: none; }
+  .bot-mascot__body { animation: none; }
+  .bot-typing-dots > i { animation: none; }
+  .bot-section-chevron, .bot-about-fold__chevron, .bot-worked__chevron, .bot-switch, .bot-switch__thumb { transition: none; }
+}

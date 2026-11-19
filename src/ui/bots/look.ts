@@ -23,6 +23,8 @@ export interface BotLook {
   kind?: string
   /** Missing means the pill eyes. */
   eyes?: string
+  /** Missing means the default for the character and colour. */
+  eyeColour?: string
 }
 
 /** A look whose values this build knows. */
@@ -33,6 +35,8 @@ export interface KnownBotLook {
   kind?: BotKind
   /** Present only when not the pill eyes. */
   eyes?: BotEyes
+  /** Present only when picked. */
+  eyeColour?: 'black' | 'white'
 }
 
 export const DEFAULT_BOT_LOOK: KnownBotLook = { colour: 'coral', accessory: 'none' }
@@ -111,6 +115,7 @@ export function normalizeBotLook(look: Partial<BotLook> | null | undefined): Kno
   }
   if (isKind(look?.kind) && look.kind !== 'mouse') known.kind = look.kind
   if (isEyes(look?.eyes) && look.eyes !== 'pill') known.eyes = look.eyes
+  if (look?.eyeColour === 'black' || look?.eyeColour === 'white') known.eyeColour = look.eyeColour
   return known
 }
 
@@ -119,9 +124,15 @@ export const botKindOf = (look: Pick<KnownBotLook, 'kind'>): BotKind => look.kin
 /** The look's eye shape; looks without one have pill eyes. */
 export const botEyesOf = (look: Pick<KnownBotLook, 'eyes'>): BotEyes => look.eyes ?? 'pill'
 
-/** Only the fields a look stores (colour, accessory, and kind and eyes when given). */
+/** Only the fields a look stores (colour, accessory, and kind, eyes and eye colour when given). */
 export function lookFields(look: BotLook): BotLook {
-  return { colour: look.colour, accessory: look.accessory, ...(look.kind !== undefined ? { kind: look.kind } : {}), ...(look.eyes !== undefined ? { eyes: look.eyes } : {}) }
+  return {
+    colour: look.colour,
+    accessory: look.accessory,
+    ...(look.kind !== undefined ? { kind: look.kind } : {}),
+    ...(look.eyes !== undefined ? { eyes: look.eyes } : {}),
+    ...(look.eyeColour !== undefined ? { eyeColour: look.eyeColour } : {}),
+  }
 }
 
 /** `look` with `kind` and `eyes` set, dropping either when it is the default. */

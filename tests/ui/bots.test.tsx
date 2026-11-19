@@ -202,18 +202,24 @@ describe('bots on the phone', () => {
     expect(document.querySelectorAll('.bot-msg--bot.is-group-start').length).toBeLessThan(document.querySelectorAll('.bot-msg--bot').length)
   })
 
-  it('lists reminders and memory in About, each removable', async () => {
+  it('lists reminders, permissions, automations and opens Memory from About', async () => {
     renderApp({ signedIn: true, routes: [{ name: 'home' }, { name: 'bot', nodeId: 'node-studio', botId: 'bot-inbox' }] })
     fireEvent.click(await screen.findByRole('button', { name: 'About Pip' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel reminder: Pay the electricity bill' }))
     await waitFor(() => expect(screen.queryByText('Pay the electricity bill')).not.toBeInTheDocument())
-    fireEvent.click(await screen.findByRole('button', { name: 'Remove memory: No em dashes in summaries.' }))
-    await waitFor(() => expect(screen.queryByText('No em dashes in summaries.')).not.toBeInTheDocument())
-    expect(screen.getByText('Mail from the bank always needs me.')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Remove search the web' }))
     await waitFor(() => expect(screen.queryByText('Search the web')).not.toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: 'Remove every day · 08:00' }))
     expect(await screen.findByText(/Only when you message it/)).toBeInTheDocument()
+    // Open the dedicated Memory sheet from About and forget one entry with confirmation.
+    fireEvent.click(screen.getByTestId('bot-about-memory-open'))
+    const entryText = await screen.findByText('No em dashes in summaries.')
+    const entryRow = entryText.closest('li')!
+    fireEvent.click(within(entryRow).getByRole('button', { name: 'Forget' }))
+    const confirmGroup = within(entryRow).getByRole('group', { name: 'Forget this?' })
+    fireEvent.click(within(confirmGroup).getByRole('button', { name: 'Forget' }))
+    await waitFor(() => expect(screen.queryByText('No em dashes in summaries.')).not.toBeInTheDocument())
+    expect(screen.getByText('Mail from the bank always needs me.')).toBeInTheDocument()
   })
 
   it('lists the bots in the Chats tab and opens a bot’s chat', async () => {
@@ -241,7 +247,8 @@ describe('bots on the phone', () => {
     renderApp({ signedIn: true, routes: [{ name: 'home' }, { name: 'bot', nodeId: 'node-studio', botId: 'bot-inbox' }] })
     const ask = await screen.findByRole('group', { name: 'Pip wants to read your Gmail' })
     fireEvent.click(within(ask).getByRole('button', { name: 'Allow' }))
-    expect(await within(ask).findByText('Allowed')).toBeInTheDocument()
+    expect(await screen.findByText('You let Pip read your Gmail')).toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Pip wants to read your Gmail' })).not.toBeInTheDocument()
   })
 
   it('makes a new bot and opens its chat', async () => {

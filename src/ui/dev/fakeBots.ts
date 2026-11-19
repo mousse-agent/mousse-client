@@ -1,6 +1,20 @@
 // Bots for the demo build (VITE_FAKE_CONNECTION=1) and the UI tests: two bots with a chat each, an
 // open ask, a piece of work, a reminder, pictures, and replies that arrive a moment after a message.
-import type { BotAttachmentImage, BotChatMessage, BotChatPage, BotDetail, BotLook, BotMemoryItem, BotPermissionItem, BotReminderItem, BotRunItem, ComputerBots, ListBot } from '../../connection/bots'
+import type {
+  BotActionRefusal,
+  BotAttachmentImage,
+  BotChatMessage,
+  BotChatPage,
+  BotDetail,
+  BotLook,
+  BotMemoryItem,
+  BotPermissionItem,
+  BotReminderItem,
+  BotRunItem,
+  BotSnoozeChoice,
+  ComputerBots,
+  ListBot,
+} from '../../connection/bots'
 
 /** A message's reply quotes (each a paragraph in double quotes, as the desktop and the phone send them) and its other words. */
 export function demoQuotesOf(text: string): { quotes: string[]; words: string } {
@@ -27,19 +41,28 @@ function initialBots(): FakeBot[] {
     {
       bot: {
         id: 'bot-inbox', name: 'Pip', description: 'Sorts my inbox every morning and tells me what needs me.',
-        look: { colour: 'teal', accessory: 'headphones' }, state: 'needs_you', stateText: 'Wants to read your Gmail',
-        last: { text: 'I need to read your Gmail to sort it.', at: minutesAgo(12), author: 'bot' }, unread: 1, createdAt: minutesAgo(60 * 24 * 3),
+        look: { colour: 'teal', accessory: 'headphones' }, state: 'needs_you', needsOwner: true, stateText: 'Wants to read your Gmail',
+        last: { text: 'I need to read your Gmail to sort it.', at: minutesAgo(12), author: 'bot' },
+        lastReply: 'Sure. I need to read your Gmail to sort it, so I asked.',
+        unread: 1, createdAt: minutesAgo(60 * 24 * 3),
+        tasks: [
+          { id: 'tk-1', text: 'Scan unread bank emails', status: 'completed' },
+          { id: 'tk-2', text: 'Draft reply list for morning summary', status: 'in_progress', note: 'Waiting on Gmail access' },
+        ],
       },
-      schedules: [{ id: 's1', label: 'every day · 08:00', nextAt: minutesAgo(-600), kind: 'schedule' }],
-      permissions: [{ id: 'p1', title: 'search the web', note: 'Only reading pages.', grantedAt: minutesAgo(60 * 24 * 3) }],
+      schedules: [{ id: 's1', name: 'Morning inbox sort', label: 'every day · 08:00', nextAt: minutesAgo(-600), kind: 'schedule', does: 'Check unread mail and flag anything urgent.' }],
+      permissions: [{ id: 'p1', title: 'search the web', note: 'Only reading pages.', grantedAt: minutesAgo(60 * 24 * 3), enabled: true }],
       reminders: [{ id: 'rem_1', dueAt: minutesAgo(-60 * 26), text: 'Pay the electricity bill' }],
-      memory: [{ id: 'm1', text: 'Mail from the bank always needs me.', kind: 'owner' }, { id: 'm2', text: 'No em dashes in summaries.', kind: 'owner' }],
+      memory: [
+        { id: 'm1', ref: 'm1', version: 1, text: 'Mail from the bank always needs me.', kind: 'owner', learnedAt: minutesAgo(60 * 24 * 2) },
+        { id: 'm2', ref: 'm2', version: 1, text: 'No em dashes in summaries.', kind: 'owner', learnedAt: minutesAgo(60 * 24) },
+      ],
       messages: [
         { seq: 1, id: 'm1', at: minutesAgo(60 * 24 * 3), author: 'bot', kind: 'text', text: "Hi! I'm **Pip**. Each morning at 8 I'll sort your inbox and tell you what needs you.", chips: [{ icon: 'name', text: 'Picked a name', highlight: 'Pip' }] },
         { seq: 2, id: 'm1b', at: minutesAgo(60 * 24 * 3 - 1), author: 'bot', kind: 'text', text: 'Tell me what matters most, and I’ll remember it.', chips: [] },
         { seq: 3, id: 'm1c', at: minutesAgo(60 * 24 * 2), author: 'owner', kind: 'text', text: 'Here’s the receipt from the bank, keep an eye out for more like it.', chips: [], attachments: [{ name: 'receipt.png', mime: 'image/png', image: true }, { name: 'statement.pdf', mime: 'application/pdf' }] },
         { seq: 4, id: 'm1d', at: minutesAgo(60 * 24 * 2 - 2), author: 'bot', kind: 'text', text: `Got it. This week so far:\n\n![Mail this week](data:image/png;base64,${PICTURE})\n\nMore on [the bank’s site](https://example.com/statements).`, chips: [{ icon: 'memory', text: 'Remembered', highlight: 'bank receipts' }] },
-        { seq: 5, id: 'bm_rem_0', at: minutesAgo(60 * 20), author: 'bot', kind: 'run_report', text: 'Reminder: water the plants.', chips: [] },
+        { seq: 5, id: 'bm_rem_0', at: minutesAgo(60 * 20), author: 'bot', kind: 'run_report', text: 'Reminder: water the plants.', chips: [], reminder: { expiresAt: minutesAgo(-120) } },
         { seq: 6, id: 'm2', at: minutesAgo(15), author: 'owner', kind: 'text', text: 'Can you start today?', chips: [] },
         { seq: 7, id: 'm2b', at: minutesAgo(14), author: 'owner', kind: 'text', text: 'Only the inbox, not the archive.', chips: [] },
         {
@@ -54,11 +77,13 @@ function initialBots(): FakeBot[] {
       bot: {
         id: 'bot-release', name: 'Juno', description: 'Watches the Mousse nightly and tells me when it breaks.',
         look: { colour: 'purple', accessory: 'goggles', kind: 'mousse', eyes: 'star' }, state: 'working', stateText: 'Working on Check tonight’s nightly',
-        last: { text: 'Checking the nightly now.', at: minutesAgo(3), author: 'bot' }, unread: 0, createdAt: minutesAgo(60 * 24 * 9),
+        last: { text: 'Checking the nightly now.', at: minutesAgo(3), author: 'bot' },
+        lastReply: 'Checking the nightly now. I’ll tell you here when I know.',
+        unread: 0, createdAt: minutesAgo(60 * 24 * 9),
         work: [{ id: 'act-9', title: 'Check tonight’s nightly', status: 'running', startedAt: minutesAgo(4) }],
       },
       schedules: [],
-      permissions: [{ id: 'p1', title: 'search the web', note: 'Only reading pages.', grantedAt: minutesAgo(60 * 24 * 9) }],
+      permissions: [{ id: 'p1', title: 'search the web', note: 'Only reading pages.', grantedAt: minutesAgo(60 * 24 * 9), enabled: true }],
       reminders: [],
       memory: [],
       messages: [
@@ -91,7 +116,7 @@ export class FakeBots implements ComputerBots {
   private push(entry: FakeBot, message: Omit<BotChatMessage, 'seq' | 'id' | 'at'>): BotChatMessage {
     const full: BotChatMessage = { ...message, seq: ++this.seq, id: `fm-${this.seq}`, at: new Date().toISOString() }
     entry.messages.push(full)
-    entry.bot = { ...entry.bot, last: { text: full.text, at: full.at, author: full.author } }
+    entry.bot = { ...entry.bot, last: { text: full.text, at: full.at, author: full.author }, ...(full.author === 'bot' && full.text ? { lastReply: full.text } : {}) }
     return full
   }
 
@@ -130,7 +155,13 @@ export class FakeBots implements ComputerBots {
   async stopWork(botId: string, workId: string): Promise<void> {
     const entry = this.find(botId)
     const work = (entry.bot.work ?? []).filter((item) => item.id !== workId)
-    entry.bot = { ...entry.bot, work, ...(work.length || entry.bot.chat ? {} : { state: 'idle' as const, stateText: '' }) }
+    const watchers = (entry.bot.watchers ?? []).filter((item) => item.id !== workId)
+    entry.bot = {
+      ...entry.bot,
+      work,
+      ...(entry.bot.watchers ? { watchers } : {}),
+      ...(work.length || entry.bot.chat ? {} : { state: 'idle' as const, stateText: '' }),
+    }
     this.changed()
   }
 
@@ -147,7 +178,60 @@ export class FakeBots implements ComputerBots {
     if (index < 0) throw new Error('This ask was already answered.')
     const updated = { ...entry.messages[index], ask: { ...entry.messages[index].ask!, status: answer === 'allow' ? 'allowed' as const : 'not_now' as const } }
     entry.messages[index] = updated
-    entry.bot = { ...entry.bot, state: 'idle', stateText: '' }
+    const { needsOwner: _needs, ...rest } = entry.bot
+    entry.bot = { ...rest, state: 'idle', stateText: '' }
+    this.changed()
+    return updated
+  }
+
+  async answerAction(botId: string, actionId: string, _digest: string, answer: 'send' | 'not_now'): Promise<BotActionRefusal | null> {
+    const entry = this.find(botId)
+    const index = entry.messages.findIndex((message) => message.action?.actionId === actionId)
+    if (index < 0) return { reason: 'bot_action_gone', text: "This can't be sent any more." }
+    const card = entry.messages[index]!.action!
+    if (card.status !== 'open') return { reason: 'bot_action_settled', text: 'This was already answered.' }
+    entry.messages[index] = {
+      ...entry.messages[index]!,
+      action: { ...card, status: answer === 'send' ? 'done' : 'declined', at: new Date().toISOString() },
+    }
+    this.changed()
+    return null
+  }
+
+  async answerQuestion(botId: string, questionId: string, choice: string, clientRequestId?: string): Promise<{ message: BotChatMessage; question?: BotChatMessage }> {
+    const entry = this.find(botId)
+    const index = entry.messages.findIndex((message) => message.question?.questionId === questionId)
+    if (index < 0) throw new Error('This question is gone.')
+    const q = entry.messages[index]!.question!
+    const updatedQuestion: BotChatMessage = {
+      ...entry.messages[index]!,
+      question: { ...q, status: 'answered', answer: choice, answeredWith: 'choice' },
+    }
+    entry.messages[index] = updatedQuestion
+    const ownerMsg = this.push(entry, {
+      author: 'owner',
+      kind: 'text',
+      text: choice,
+      chips: [],
+      answers: { questionId, tapped: true },
+      replyTo: { id: updatedQuestion.id, author: 'bot', text: updatedQuestion.text.split('\n')[0] ?? '' },
+      ...(clientRequestId ? { clientRequestId } : {}),
+    })
+    this.changed()
+    return { message: ownerMsg, question: updatedQuestion }
+  }
+
+  async snoozeReminder(botId: string, messageId: string, choice: BotSnoozeChoice): Promise<BotChatMessage> {
+    const entry = this.find(botId)
+    const index = entry.messages.findIndex((message) => message.id === messageId)
+    if (index < 0) throw new Error('This reminder is gone.')
+    const ms = choice === '10m' ? 10 * 60_000 : choice === '1h' ? 60 * 60_000 : 24 * 60 * 60_000
+    const due = new Date(Date.now() + ms).toISOString()
+    const updated: BotChatMessage = {
+      ...entry.messages[index]!,
+      reminder: { ...entry.messages[index]!.reminder, snoozedUntil: due },
+    }
+    entry.messages[index] = updated
     this.changed()
     return updated
   }
@@ -177,6 +261,18 @@ export class FakeBots implements ComputerBots {
     entry.memory = entry.memory.filter((item) => item.id !== id)
   }
 
+  async editMemory(botId: string, id: string, text: string): Promise<BotMemoryItem | undefined> {
+    const entry = this.find(botId)
+    const baseId = id.replace(/v[0-9]+$/, '')
+    const index = entry.memory.findIndex((item) => item.id === baseId || item.ref === id)
+    if (index < 0) throw new Error('This memory is gone.')
+    const current = entry.memory[index]!
+    const nextVersion = (current.version ?? 1) + 1
+    const updated: BotMemoryItem = { ...current, text: text.trim(), version: nextVersion, ref: `${current.id}v${nextVersion}` }
+    entry.memory[index] = updated
+    return updated
+  }
+
   async attachment(botId: string, messageId: string, index: number): Promise<BotAttachmentImage> {
     const message = this.find(botId).messages.find((candidate) => candidate.id === messageId)
     if (!message?.attachments?.[index]?.image) throw new Error('This picture is gone.')
@@ -189,12 +285,17 @@ export class FakeBots implements ComputerBots {
     return this.get(botId)
   }
 
+  async setPermission(botId: string, permissionId: string, enabled: boolean): Promise<BotDetail> {
+    const entry = this.find(botId)
+    entry.permissions = entry.permissions.map((item) => (item.id === permissionId ? { ...item, enabled } : item))
+    return this.get(botId)
+  }
+
   async revokePermission(botId: string, permissionId: string): Promise<BotDetail> {
     const entry = this.find(botId)
     entry.permissions = entry.permissions.filter((item) => item.id !== permissionId)
     return this.get(botId)
   }
-
 
   async pause(botId: string): Promise<ListBot> {
     const entry = this.find(botId)
@@ -206,6 +307,17 @@ export class FakeBots implements ComputerBots {
   async resume(botId: string): Promise<ListBot> {
     const entry = this.find(botId)
     entry.bot = { ...entry.bot, state: 'idle', stateText: '' }
+    this.changed()
+    return { ...entry.bot }
+  }
+
+  async update(botId: string, change: { name?: string; look?: BotLook }): Promise<ListBot> {
+    const entry = this.find(botId)
+    entry.bot = {
+      ...entry.bot,
+      ...(change.name !== undefined ? { name: change.name.trim() } : {}),
+      ...(change.look !== undefined ? { look: change.look } : {}),
+    }
     this.changed()
     return { ...entry.bot }
   }

@@ -11,6 +11,7 @@
 | File read/write and Git | Full core | `files.*`, `git.*`; paths are server-relative |
 | Terminal | Full core | `pty.*`; native terminal is represented by remote PTY controls |
 | Scheduled jobs | Full core | `scheduled.*` |
+| Personal bots | Full remote | `bots.*` (chat, cards, held action reviews, quick-reply asks/questions/reminders, slash commands, Find in chat, presence/tasks/menu/memory/About sheets, per-permission switches, rename/look, empty-page mascot). Computer-only features (`bots.model.*`, `bots.files.*`, `bots.browser.*`, `bots.chat.react`, `secrets.*`, applets, prompt/device/delete/clear/forget/reset) are not exposed remotely by MMS |
 | Channel activity/configuration | Full core | `channels.*` |
 | Providers, MCP, skills and settings | Full core | `providers.*`, `mcp.*`, `skills.*`, `settings.*`; credentials remain write-only |
 | Offline/reconnect and event replay | Full | Reconnecting SSE, last event ID, reset snapshot reload, lifecycle suspension |
