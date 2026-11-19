@@ -2,7 +2,7 @@
 // requests or QR offers, and sessions with the user's computers over the hosted relay.
 import { Capacitor } from '@capacitor/core'
 import { MousseIdError, checkedOrigin, type FetchLike, MousseIdHttp } from '../mousseId/http'
-import { MousseIdNet, type ControlIdentity, type InventoryBinding, type InventoryRegistration, type Registration, type RegistrationGrant } from '../mousseId/net'
+import { MousseIdNet, type ControlIdentity, type Inventory, type InventoryBinding, type InventoryRegistration, type Registration, type RegistrationGrant } from '../mousseId/net'
 import { MOUSSE_ID_ORIGIN } from '../mousseId/origin'
 import { matchCode, openOfferSeal, openRequestSeal, parseJoinQr } from '../mousseId/seal'
 import { MousseIdSession, type AuthBrowser } from '../mousseId/session'
@@ -17,10 +17,12 @@ import { dialRelay, type RelaySocketFactory } from '../net/relay'
 import { LeafSession, type LeafIdentity } from '../net/session'
 import { browserPeerConnectionFactory, dialWebRtc, type PeerConnectionFactory } from '../net/webrtc'
 import { connectTls, type SecureChannel } from '../net/tls13/client'
+import { nativeLan, type NativeLan } from '../net/nativeLan'
+import { LanConnector } from './lan'
 import { RealComputerSession } from './computerSession'
 import { indexedDbThreadCacheBackend, ThreadCache } from './threadCache'
 import { EnrollmentStore, type LoadedEnrollment, type StoredEnrollment } from './enrollmentStore'
-import type { NetworkSignals } from './networkSignals'
+import { deviceNetworkSignals, type NetworkSignals } from './networkSignals'
 import { DIRECT_OPEN_TIMEOUT_MS, DIRECT_PING_INTERVAL_MS, PathSession, type DirectLink, type PathSessionOptions } from './pathSession'
 import type { AccountState, Computer, ComputerSession, EnrollmentProgress, JoinPlan, MousseConnection, SessionEndReason } from './types'
 import { isUnreachable, unreachable } from './types'
@@ -54,6 +56,10 @@ const REREGISTER = new Set(['not_found', 'forbidden', 'expired', 'unauthorized']
  * Mousse ID when it renews or registers a phone whose roster revokes it.
  */
 const REMOVED = new Set(['revoked', 'not_member'])
+/** The computers Mousse ID last listed, per account: shown, with what the LAN sees, while Mousse ID is out of reach. */
+const COMPUTERS_KEY = 'net.lastComputers'
+/** The longest wait before renewing again while Mousse ID is out of reach. */
+const RENEW_OFFLINE_RETRY_MS = 30_000
 /** Mousse ID refusals that concern the account session, never this phone's membership. */
 const ACCOUNT_SESSION = new Set(['forbidden', 'unauthorized'])
 /** Codes that say nothing about this phone's membership; the phone tries again later. */
@@ -97,6 +103,15 @@ export interface ConnectionDeps {
   renewMs?: number
   /** Saved thread contents; defaults to one in the webview's IndexedDB. */
   threadCache?: ThreadCache
+  /**
+   * Native sockets for reaching computers on the phone's own network without the internet; defaults
+   * to the MousseLan plugin where the app has it (Android). Null switches LAN connections off.
+   */
+  lan?: NativeLan | null
+  /** Tests replace the WebSocket and TLS layers of a LAN path to a computer. */
+  openLanChannel?: (target: { node: string; host: string; port: number; expectedSpki: Uint8Array }) => Promise<SecureChannel>
+  /** Tests replace the app's pause and resume events, which pause LAN discovery. */
+  lifecycle?: { onPause(listener: () => void): void; onResume(listener: () => void): void }
 }
 
 const defaultOpenBrowser: AuthBrowser = async (url) => (await import('../authBrowser')).openAuthBrowser(url)
@@ -155,6 +170,9 @@ class RealConnection implements MousseConnection {
   private readonly threads: ThreadCache
   /** The signed-in account, to clear its saved threads once it signs out. */
   private signedInAs?: string
+  /** Computers on the phone's own network; absent where the app has no native sockets. */
+  private readonly lan?: LanConnector
+  private readonly computerListeners = new Set<() => void>()
 
   constructor(
     private readonly deps: ConnectionDeps,
@@ -165,6 +183,20 @@ class RealConnection implements MousseConnection {
     this.storage = storage
     this.store = new EnrollmentStore(storage)
     this.threads = deps.threadCache ?? new ThreadCache(indexedDbThreadCacheBackend())
+    const native = deps.lan === null ? undefined : (deps.lan ?? nativeLan())
+    if (native) {
+      this.lan = new LanConnector({
+        native,
+        network: deps.network ?? deviceNetworkSignals,
+        now: this.now,
+        ...(deps.lifecycle ? { lifecycle: deps.lifecycle } : {}),
+        ...(deps.openLanChannel ? { openChannel: deps.openLanChannel } : {}),
+      })
+      // A computer showing up on this network, or moving to a new port after it restarted, is news to the computer list.
+      this.lan.hints.onChange(() => {
+        for (const listener of [...this.computerListeners]) listener()
+      })
+    }
     if (configError) return
     this.session = new MousseIdSession(new MousseIdHttp(deps.origin ?? MOUSSE_ID_ORIGIN!, deps.fetcher), storage, this.now)
     this.net = new MousseIdNet(this.session, this.now)
@@ -181,6 +213,23 @@ class RealConnection implements MousseConnection {
   async load(): Promise<void> {
     await this.session?.load()
     this.signedInAs = this.session?.current()?.account.id
+    await this.refreshLan()
+  }
+
+  onComputersChange(listener: () => void): () => void {
+    this.computerListeners.add(listener)
+    return () => this.computerListeners.delete(listener)
+  }
+
+  /** Looks on the phone's network for the computers of the signed-in account's enrollments. */
+  private async refreshLan(): Promise<void> {
+    if (!this.lan) return
+    const accountId = this.session?.current()?.account.id
+    try {
+      this.lan.update(accountId ? (await this.store.loaded(accountId)).filter((entry) => !removesSelf(entry)) : [])
+    } catch {
+      // Discovery is best effort; the relay still works.
+    }
   }
 
   /** The same object until the state changes: React's useSyncExternalStore re-renders forever otherwise. */
@@ -231,7 +280,16 @@ class RealConnection implements MousseConnection {
   async listComputers(): Promise<Computer[]> {
     const { net } = this.signedIn()
     const accountId = this.accountId()
-    const inventory = await net.inventory()
+    void this.refreshLan()
+    let inventory: Inventory
+    try {
+      inventory = await net.inventory()
+    } catch (error) {
+      // Without the internet, the computers listed last time are shown, online when they are seen on this network.
+      const offline = this.lan && error instanceof MousseIdError && error.retryable ? await this.lastComputers(accountId) : undefined
+      if (!offline) throw error
+      return offline
+    }
     this.setDevices(inventory.devices)
     await this.adoptRosters(inventory.bindings)
     await this.forgetRemoved(accountId)
@@ -253,7 +311,7 @@ class RealConnection implements MousseConnection {
     }
     const now = this.now()
     const authority = chooseNetwork(inventory.bindings, now)?.roster.authorityNode
-    return [...rows.values()].map((row) => ({
+    const computers: Computer[] = [...rows.values()].map((row) => ({
       nodeId: row.nodeId,
       name: row.deviceName || (row.kind === 'phone' ? 'Phone' : 'Computer'),
       kind: row.kind,
@@ -261,6 +319,23 @@ class RealConnection implements MousseConnection {
       enrolled: row.kind === 'computer' && enrollments.some((entry) => reaches(entry, row.nodeId, now)),
       ...(row.kind === 'computer' && row.nodeId === authority ? { authority: true } : {}),
     }))
+    await writeJson(this.storage, COMPUTERS_KEY, { accountId, computers }).catch(() => undefined)
+    // A computer that cannot reach Mousse ID but is on this phone's network is still online here.
+    return computers.map((computer) => (!computer.online && computer.kind === 'computer' && this.lan?.seen(computer.nodeId) ? { ...computer, online: true } : computer))
+  }
+
+  /** The computers Mousse ID listed last for this account, each online when the LAN sees it. */
+  private async lastComputers(accountId: string): Promise<Computer[] | undefined> {
+    const saved = await readJson<{ accountId?: unknown; computers?: unknown }>(this.storage, COMPUTERS_KEY).catch(() => undefined)
+    if (!saved || saved.accountId !== accountId || !Array.isArray(saved.computers)) return undefined
+    const now = this.now()
+    const enrollments = (await this.store.loaded(accountId)).filter((entry) => !removesSelf(entry))
+    return (saved.computers as Computer[])
+      .filter((row) => row && typeof row.nodeId === 'string' && typeof row.name === 'string' && (row.kind === 'computer' || row.kind === 'phone'))
+      .map((row) => {
+        const enrolled = row.kind === 'computer' && enrollments.some((entry) => reaches(entry, row.nodeId, now))
+        return { ...row, enrolled, online: enrolled && !!this.lan?.seen(row.nodeId) }
+      })
   }
 
   /**
@@ -398,33 +473,46 @@ class RealConnection implements MousseConnection {
     const peer = currentNode(entry.roster, nodeId, now).delegation
     const name = peer.name || 'The computer'
     const identity = controlIdentity(entry, now)
-    let grant: RegistrationGrant
-    try {
-      grant = await this.ensureGrant(entry, identity, accountId)
-    } catch (error) {
-      if (await this.confirmRemoved(entry, accountId, error)) throw removedError(name)
-      throw new Error(`Mousse ID did not admit this phone: ${errorMessage(error)}`)
-    }
     const expectedSpki = fromB64url(peer.keys.transport)
-    const route = `${grant.relayAudience}?node=${nodeId}`
+    await this.refreshLan()
+    // On the phone's own network the computer is reached directly, and Mousse ID is not needed.
+    const lanChannel = async (): Promise<SecureChannel | undefined> => this.lan?.open(nodeId, entry.keys.transport, expectedSpki)
+    /** After the relay failed: the computer may still be here, and advertises within a few seconds. */
+    const lanFallback = async (): Promise<SecureChannel | undefined> => ((await this.lan?.waitFor(nodeId)) ? lanChannel() : undefined)
+    let grant: RegistrationGrant | undefined
+    let channel = await lanChannel()
+    const firstKind = channel ? 'direct' : 'relay'
+    if (!channel) {
+      try {
+        grant = await this.ensureGrant(entry, identity, accountId)
+      } catch (error) {
+        if (await this.confirmRemoved(entry, accountId, error)) throw removedError(name)
+        channel = await lanFallback()
+        if (!channel) throw new Error(`Mousse ID did not admit this phone: ${errorMessage(error)}`)
+      }
+    }
     const relayChannel = async (grant: RegistrationGrant): Promise<SecureChannel> =>
       this.deps.openChannel
-        ? await this.deps.openChannel({ route, nodeId, expectedSpki, grant })
+        ? await this.deps.openChannel({ route: `${grant.relayAudience}?node=${nodeId}`, nodeId, expectedSpki, grant })
         : await connectTls(
             await dialRelay({
-              route,
+              route: `${grant.relayAudience}?node=${nodeId}`,
               identity: { node: identity.node, signKey: entry.keys.public.sign, signSecret: entry.keys.signSecret },
               registration: { registrationId: grant.registration.id, generation: grant.registration.generation },
               socketFactory: this.deps.socketFactory,
             }),
             { transport: entry.keys.transport, expectedServerSpki: expectedSpki },
           )
-    let channel: SecureChannel
-    try {
-      channel = await relayChannel(grant)
-    } catch (error) {
-      throw (await this.confirmRemoved(entry, accountId, error)) ? removedError(name) : connectFailure(error, name)
+    if (!channel) {
+      try {
+        channel = await relayChannel(grant!)
+      } catch (error) {
+        if (await this.confirmRemoved(entry, accountId, error)) throw removedError(name)
+        channel = await lanFallback()
+        if (!channel) throw connectFailure(error, name)
+      }
     }
+    const opened = channel
     const user = entry.stored.enrollment.user
     const ownNode = entry.stored.enrollment.node
     // Set when the computer sends a roster that removes this phone; the session then fails its own checks.
@@ -444,9 +532,9 @@ class RealConnection implements MousseConnection {
     }
     let first: LeafSession
     try {
-      first = new LeafSession(channel, { identity: { ...leafIdentity }, peerNode: nodeId, now: this.now, onRoster })
+      first = new LeafSession(opened, { identity: { ...leafIdentity }, peerNode: nodeId, now: this.now, onRoster, ...(firstKind === 'direct' ? { pingIntervalMs: DIRECT_PING_INTERVAL_MS } : {}) })
     } catch (error) {
-      channel.close?.()
+      opened.close?.()
       throw connectFailure(error, name)
     }
     try {
@@ -481,12 +569,27 @@ class RealConnection implements MousseConnection {
     const direct = this.directSettings(net).catch(() => undefined)
     let stun: string[] | undefined
     void direct.then((settings) => (stun = settings?.stun))
+    // The registration is renewed only once the phone has one: a session that opened on the LAN registers when it first needs the relay.
+    let startRenewal = () => {}
     const leaf = new PathSession({
       first,
+      firstKind,
       network: this.deps.network,
       ...this.deps.paths,
       open: {
-        relay: async () => openLeaf(await relayChannel(await this.ensureGrant(entry, identity, accountId))),
+        relay: async () => {
+          const fresh = await this.ensureGrant(entry, identity, accountId)
+          startRenewal()
+          return openLeaf(await relayChannel(fresh))
+        },
+        ...(this.lan
+          ? {
+              lan: async () => {
+                const lan = await lanChannel()
+                return lan ? openLeaf(lan, DIRECT_PING_INTERVAL_MS) : undefined
+              },
+            }
+          : {}),
         directAllowed: async () => !!(await direct),
         directTimeoutMs: (endpoint) => DIRECT_OPEN_TIMEOUT_MS[endpoint.kind][stun?.length === 0 ? 'sameNetwork' : 'stun'],
         direct: async (_endpoint, signal, link) => {
@@ -530,11 +633,15 @@ class RealConnection implements MousseConnection {
     // open, on every path, so falling back to the relay never waits for Mousse ID.
     let renewal: ReturnType<typeof setTimeout> | undefined
     let stopped = false
-    let expiresAt = grant.registration.expiresAt
-    const scheduleRenewal = (failed = false) => {
+    let renewing = false
+    let expiresAt = grant?.registration.expiresAt ?? 0
+    const scheduleRenewal = (failed?: string) => {
       if (stopped) return
-      const wait = Math.max(RENEW_MIN_MS, (expiresAt - this.now()) / 3, failed ? RENEW_RETRY_MS : 0)
-      renewal = setTimeout(renew, Math.min(this.deps.renewMs ?? RENEW_INTERVAL_MS, wait))
+      renewing = true
+      // Without the internet a renewal cannot succeed; try again now and then rather than every two seconds.
+      const retry = failed === undefined ? 0 : failed === 'offline' ? RENEW_OFFLINE_RETRY_MS : RENEW_RETRY_MS
+      const wait = Math.max(RENEW_MIN_MS, (expiresAt - this.now()) / 3, retry)
+      renewal = setTimeout(renew, Math.min(Math.max(this.deps.renewMs ?? RENEW_INTERVAL_MS, retry), wait))
     }
     const renew = () => {
       void this.renewOnce(entry, identity, accountId, net).then(
@@ -544,7 +651,7 @@ class RealConnection implements MousseConnection {
         },
         async (error: unknown) => {
           const code = codeOf(error) ?? ''
-          if (!REREGISTER.has(code) && !REMOVED.has(code)) return scheduleRenewal(true)
+          if (!REREGISTER.has(code) && !REMOVED.has(code)) return scheduleRenewal(code)
           const removed = await this.confirmRemoved(entry, accountId, error).catch(() => false)
           leaf.close(
             removed
@@ -554,7 +661,17 @@ class RealConnection implements MousseConnection {
         },
       )
     }
-    scheduleRenewal()
+    startRenewal = () => {
+      if (renewing) return
+      const stored = entry.stored.grant
+      if (stored) expiresAt = stored.registration.expiresAt
+      scheduleRenewal()
+    }
+    if (grant) scheduleRenewal()
+    // A computer that shows up on this network (or comes back on a new port) takes the session there at once.
+    const offLan = this.lan?.hints.onChange((node) => {
+      if (node === nodeId) void leaf.probe()
+    })
     const endReason = (error?: Error): SessionEndReason => {
       if (!removedByRoster && !(error instanceof NetError && REMOVED.has(error.code)))
         return isUnreachable(error) ? 'lost' : 'ended'
@@ -565,6 +682,7 @@ class RealConnection implements MousseConnection {
     const stopRenewal = () => {
       stopped = true
       clearTimeout(renewal)
+      offLan?.()
     }
     return new RealComputerSession({ nodeId, leaf, endReason, onClose: stopRenewal, threadCache: this.threads.scope(accountId, nodeId) })
   }
@@ -587,6 +705,7 @@ class RealConnection implements MousseConnection {
     await this.markRemoved()
     await this.forgetThreads(node).catch(() => undefined)
     await this.store.forget(node)
+    await this.refreshLan()
   }
 
   /** Clears the saved threads of every computer the forgotten enrollment reached. */
@@ -716,6 +835,7 @@ class RealConnection implements MousseConnection {
       socketFactory: this.deps.socketFactory,
     })
     await this.store.add({ accountId, enrollment, keys: serializeNodeKeys(keys) })
+    await this.refreshLan()
     const identity: ControlIdentity = {
       user: enrollment.user,
       rootKey: enrollment.rootKey,

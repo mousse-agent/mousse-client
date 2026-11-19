@@ -55,4 +55,7 @@
     <!-- Dictation: the composer's microphone. Android asks the first time it records. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Finding a paired computer on the same Wi-Fi without the internet (multicast adverts, LAN sockets). -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 </manifest>

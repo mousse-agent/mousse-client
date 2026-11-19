@@ -68,7 +68,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** A session on the relay whose direct path opens on demand. */
 async function setup(
-  options: { relayPong?: number; directPong?: number | false; allowed?: boolean; timeoutMs?: number; hang?: boolean; signal?: boolean } = {},
+  options: { relayPong?: number; directPong?: number | false; allowed?: boolean; timeoutMs?: number; hang?: boolean; signal?: boolean; lan?: boolean } = {},
 ) {
   const w = world()
   const relay = await w.path({ pong: options.relayPong ?? 30 })
@@ -80,7 +80,21 @@ async function setup(
   let directFailure: Error | undefined
   const links: DirectLink[] = []
   const signals: AbortSignal[] = []
+  /** Whether the computer is seen on the phone's network. */
+  let lanUp = false
+  const lans: Array<Awaited<ReturnType<typeof w.path>>> = []
   const open: PathOpeners = {
+    ...(options.lan
+      ? {
+          lan: async () => {
+            opened.push('lan')
+            if (!lanUp) return undefined
+            const next = await w.path({ pong: 0, pingIntervalMs: 60_000 })
+            lans.push(next)
+            return next.leaf
+          },
+        }
+      : {}),
     relay: async () => {
       opened.push('relay')
       if (relayFailure) throw relayFailure
@@ -119,6 +133,8 @@ async function setup(
     states,
     failRelay: (error?: Error) => (relayFailure = error),
     failDirect: (error: Error) => (directFailure = error),
+    lans,
+    setLan: (up: boolean) => (lanUp = up),
   }
 }
 
@@ -399,6 +415,39 @@ describe('path session', () => {
     await until(() => direct.session.state === 'closed')
     expect(direct.session.closeReason).toMatchObject({ code: 'revoked' })
     expect(direct.relays).toHaveLength(1)
+  })
+
+  it('moves from the relay to the LAN once the computer is seen there, without signaling through the relay', async () => {
+    const t = await setup({ lan: true })
+    // Not on this network: the probe goes on to ask the computer for its WebRTC endpoints.
+    await upgrade(t, { endpoints: [] })
+    expect(t.session.path).toBe('relay')
+    t.setLan(true)
+    await t.session.probe()
+    expect(t.session.path).toBe('direct')
+    expect(t.opened).toEqual(['lan', 'lan'])
+    const read = t.session.rpc('projects.list', {})
+    const request = await t.lans[0].remote.next('rpc.request')
+    await t.lans[0].remote.send({ t: 'rpc.result', id: request.id, result: { projects: [] } })
+    expect(await read).toEqual({ projects: [] })
+    await until(() => t.relay.leaf.state === 'closed')
+  })
+
+  it('reopens on the LAN after the LAN path drops, and on the relay once the computer is gone from the network', async () => {
+    const t = await setup({ lan: true })
+    t.setLan(true)
+    await t.session.probe()
+    // The computer restarts on a new port: the next path is the LAN again, not the relay.
+    t.lans[0].end.close(new NetError('route_unreachable', 'gone'))
+    await until(() => t.lans.length === 2)
+    expect(t.session.path).toBe('direct')
+    expect(t.relays).toHaveLength(1)
+    // The phone leaves the Wi-Fi: the relay takes over.
+    t.setLan(false)
+    t.lans[1].end.close(new NetError('route_unreachable', 'gone'))
+    await until(() => t.relays.length === 2)
+    expect(t.session.path).toBe('relay')
+    expect(t.session.state).toBe('open')
   })
 
   it('closes every path when the caller closes it', async () => {

@@ -515,6 +515,8 @@ export interface MousseConnection {
   /** Opens the Mousse ID sign-up page in the system browser. */
   openSignUp(): Promise<void>
   listComputers(): Promise<Computer[]>
+  /** Calls `listener` when the computer list may have changed without Mousse ID saying so (a computer seen on this network). */
+  onComputersChange?(listener: () => void): () => void
   enrollWithComputer(
     nodeId: string,
     deviceName: string,
