@@ -21,12 +21,14 @@ export function faceDiagnosticsLines(input: FaceDiagnosticsInput): string[] {
   let headline: string
   if (guard.offBecause === 'setting') headline = 'Off: turned off above, in Bots'
   else if (guard.offBecause === 'tripped') headline = `Off: a start of the 3D faces stopped the app here (renderer ${FACE_RENDERER_REVISION}); the next update with a new renderer tries again`
-  else if (status === 'ready') headline = 'On'
+  else if (guard.offBecause === 'storage') headline = 'Off: could not confirm the safety mark in phone storage'
+  else if (status === 'ready') headline = d.drawn ? 'On' : 'Waiting: shader ready, waiting for the first frame'
   else if (status === 'pending') headline = 'Waiting: the shader is compiling'
   else if (status === 'failed' || status === 'unavailable') headline = `Off: ${d.problem ?? 'the 3D faces failed to start'}`
   else if (guard.phase === 'loading' || guard.phase === 'idle' || guard.phase === 'arming') headline = 'Waiting: starting safely'
   else if (d.problem) headline = `Off: ${d.problem}`
-  else if (d.path) headline = 'On, resting: no bot face is on screen'
+  else if (d.path && d.drawn) headline = 'On, resting: no bot face is on screen'
+  else if (d.path) headline = 'Waiting: no frame drawn yet'
   else headline = 'Not started yet: the first bot face on screen starts them'
   const lines = [headline]
   if (d.renderer) lines.push(`GPU: ${d.renderer}`)

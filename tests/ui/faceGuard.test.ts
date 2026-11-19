@@ -123,6 +123,30 @@ describe('bot face guard', () => {
     resetFaceGuard(null)
     expect(faceRendererAllowed()).toBe(true)
   })
+
+  it('keeps the GPU off when reading native storage stalls', async () => {
+    vi.useFakeTimers()
+    const never = new Promise<string | null>(() => {})
+    resetFaceGuard({ get: () => never, set: async () => {} })
+    expect(faceRendererAllowed()).toBe(false)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(faceMode()).toBe('still')
+    expect(faceRendererAllowed()).toBe(false)
+    expect(faceGuardState().offBecause).toBe('storage')
+  })
+
+  it('keeps the GPU off when saving the start mark stalls', async () => {
+    vi.useFakeTimers()
+    const neverWrite = new Promise<void>(() => {})
+    resetFaceGuard({ get: async () => null, set: () => neverWrite })
+    expect(faceRendererAllowed()).toBe(false)
+    await settle()
+    expect(faceRendererAllowed()).toBe(false)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(faceMode()).toBe('still')
+    expect(faceRendererAllowed()).toBe(false)
+    expect(faceGuardState().offBecause).toBe('storage')
+  })
 })
 
 describe('turning 3D faces off', () => {
@@ -138,7 +162,8 @@ describe('turning 3D faces off', () => {
     expect(view.container.querySelector('canvas.bot-face-canvas')).not.toBeNull()
     await act(() => setFaceMode('still'))
     expect(view.container.querySelector('canvas')).toBeNull()
-    expect(view.container.querySelector('.bot-face-placeholder:not([data-loading])')).not.toBeNull()
+    expect(view.container.querySelector('svg.bot-face-still')).not.toBeNull()
+    expect(view.container.querySelector('.bot-face-placeholder')).toBeNull()
     await act(() => setFaceMode('live'))
     expect(view.container.querySelector('canvas.bot-face-canvas')).not.toBeNull()
     view.unmount()
@@ -149,13 +174,13 @@ describe('turning 3D faces off', () => {
 
 describe('the Bot faces row in Settings → Advanced', () => {
   const base: FaceDiagnosticsInput = {
-    diagnostics: { path: null, renderer: null, parallelCompile: null, highp: null, compileMs: null, problem: null },
+    diagnostics: { path: null, renderer: null, parallelCompile: null, highp: null, compileMs: null, drawn: false, problem: null },
     status: 'none',
     guard: { guarded: true, phase: 'armed', offBecause: null, retrying: false, confirmed: false },
     readyMs: null,
     webView: '131.0.6778.200'
   }
-  const worker = { path: 'worker' as const, renderer: 'Adreno (TM) 642L', parallelCompile: false, highp: true, compileMs: 840, problem: null }
+  const worker = { path: 'worker' as const, renderer: 'Adreno (TM) 642L', parallelCompile: false, highp: true, compileMs: 840, drawn: true, problem: null }
 
   it('says 3D faces are on, the GPU, where they draw and how long the shader took', () => {
     expect(faceDiagnosticsLines({ ...base, status: 'ready', diagnostics: worker, readyMs: 1210 })).toEqual([
@@ -167,15 +192,20 @@ describe('the Bot faces row in Settings → Advanced', () => {
     ])
   })
 
+  it('does not say On while the shader is ready but no frame has drawn', () => {
+    expect(faceDiagnosticsLines({ ...base, status: 'ready', diagnostics: { ...worker, drawn: false }, readyMs: 840 })[0]).toBe('Waiting: shader ready, waiting for the first frame')
+  })
+
   it('says why they are off', () => {
-    expect(faceDiagnosticsLines({ ...base, status: 'failed', diagnostics: { ...worker, compileMs: null, problem: 'the face shader did not compile: ERROR: 0:1' } })[0]).toBe('Off: the face shader did not compile: ERROR: 0:1')
+    expect(faceDiagnosticsLines({ ...base, status: 'failed', diagnostics: { ...worker, compileMs: null, drawn: false, problem: 'the face shader did not compile: ERROR: 0:1' } })[0]).toBe('Off: the face shader did not compile: ERROR: 0:1')
     expect(faceDiagnosticsLines({ ...base, status: 'unavailable', diagnostics: { ...base.diagnostics, path: 'page', problem: 'WebGL refused as slow or software (Mali-400)' } })[0]).toBe('Off: WebGL refused as slow or software (Mali-400)')
     expect(faceDiagnosticsLines({ ...base, guard: { ...base.guard, phase: 'off', offBecause: 'tripped' } })[0]).toMatch(/^Off: a start of the 3D faces stopped the app here/)
     expect(faceDiagnosticsLines({ ...base, guard: { ...base.guard, phase: 'off', offBecause: 'setting' } })[0]).toBe('Off: turned off above, in Bots')
+    expect(faceDiagnosticsLines({ ...base, guard: { ...base.guard, phase: 'off', offBecause: 'storage' } })[0]).toMatch(/^Off: could not confirm the safety mark/)
   })
 
   it('says when they are waiting, resting, or trying again after an older version stopped', () => {
-    expect(faceDiagnosticsLines({ ...base, status: 'pending', diagnostics: { ...worker, compileMs: null } })[0]).toBe('Waiting: the shader is compiling')
+    expect(faceDiagnosticsLines({ ...base, status: 'pending', diagnostics: { ...worker, compileMs: null, drawn: false } })[0]).toBe('Waiting: the shader is compiling')
     expect(faceDiagnosticsLines({ ...base, guard: { ...base.guard, phase: 'arming' } })[0]).toBe('Waiting: starting safely')
     expect(faceDiagnosticsLines({ ...base, diagnostics: worker })[0]).toBe('On, resting: no bot face is on screen')
     expect(faceDiagnosticsLines(base)[0]).toBe('Not started yet: the first bot face on screen starts them')

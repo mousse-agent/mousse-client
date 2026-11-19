@@ -35,8 +35,11 @@ const KEY = 'mousse.botFaces.v1'
 export const CONFIRM_MS = 2_500
 /** A gap between writing the mark and starting the GPU, so the mark is on disk before any stall. */
 const SETTLE_MS = 250
+/** Max time to wait on native storage before keeping the GPU off. */
+export const GUARD_STORAGE_TIMEOUT_MS = 3_000
 
 type Phase = 'loading' | 'idle' | 'arming' | 'armed' | 'off'
+export type FaceGuardOffReason = 'tripped' | 'setting' | 'storage'
 
 interface GuardStore {
   get(): Promise<string | null>
@@ -50,12 +53,38 @@ const preferencesStore: GuardStore = {
 
 let store: GuardStore | null = Capacitor.isNativePlatform() ? preferencesStore : null
 let phase: Phase = store ? 'loading' : 'armed'
-/** Why faces are off: a start that died (of this revision), or the setting. */
-let offBecause: 'tripped' | 'setting' | null = null
+/** Why faces are off: a start that died (of this revision), the setting, or storage that could not confirm the mark. */
+let offBecause: FaceGuardOffReason | null = null
 /** A start of an older revision died, and this launch tries again. */
 let retrying = false
 let confirmed = false
+let generation = 0
+let settleTimer: ReturnType<typeof setTimeout> | null = null
+let confirmTimer: ReturnType<typeof setTimeout> | null = null
 const listeners = new Set<() => void>()
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('guard storage timed out')), ms)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error) => {
+        clearTimeout(timer)
+        reject(error)
+      }
+    )
+  })
+}
+
+function clearTimers(): void {
+  if (settleTimer) clearTimeout(settleTimer)
+  settleTimer = null
+  if (confirmTimer) clearTimeout(confirmTimer)
+  confirmTimer = null
+}
 
 function emit(): void {
   for (const listener of [...listeners]) listener()
@@ -75,12 +104,18 @@ function revisionOf(value: string): number {
 
 async function load(): Promise<void> {
   if (!store) return
+  const gen = generation
   let value: string | null = null
   try {
-    value = await store.get()
+    value = await withTimeout(store.get(), GUARD_STORAGE_TIMEOUT_MS)
   } catch {
-    value = null
+    if (gen !== generation) return
+    // Storage threw or stalled: without reading the mark we can't start the GPU safely.
+    offBecause = 'storage'
+    setPhase('off')
+    return
   }
+  if (gen !== generation) return
   if (value === 'user-off') {
     offBecause = 'setting'
     setPhase('off')
@@ -90,7 +125,8 @@ async function load(): Promise<void> {
   if (died && revisionOf(value!) === FACE_RENDERER_REVISION) {
     // A start of this revision never confirmed: the app died while faces were starting.
     offBecause = 'tripped'
-    if (!value!.startsWith('tripped')) await store.set(`tripped:${FACE_RENDERER_REVISION}`).catch(() => {})
+    if (!value!.startsWith('tripped')) await withTimeout(store.set(`tripped:${FACE_RENDERER_REVISION}`), GUARD_STORAGE_TIMEOUT_MS).catch(() => {})
+    if (gen !== generation) return
     setPhase('off')
     return
   }
@@ -114,24 +150,33 @@ export function faceRendererAllowed(): boolean {
 
 async function arm(): Promise<void> {
   if (phase !== 'idle' || !store) return
+  const gen = generation
   setPhase('arming')
   try {
-    await store.set(`starting:${FACE_RENDERER_REVISION}`)
+    await withTimeout(store.set(`starting:${FACE_RENDERER_REVISION}`), GUARD_STORAGE_TIMEOUT_MS)
   } catch {
-    // Without a mark the guard can't protect the next launch; the saved pictures are the safe choice.
-    offBecause = 'tripped'
+    if (gen !== generation) return
+    // Without a confirmed start mark the guard can't protect the next launch; keep the GPU off.
+    offBecause = 'storage'
     setPhase('off')
     return
   }
-  setTimeout(() => setPhase('armed'), SETTLE_MS)
+  if (gen !== generation) return
+  settleTimer = setTimeout(() => {
+    settleTimer = null
+    if (gen !== generation || phase !== 'arming') return
+    setPhase('armed')
+  }, SETTLE_MS)
 }
 
 /** The face renderer reached ready and drew; after `CONFIRM_MS` more of life, this phone runs 3D faces. */
 export function faceRendererReady(): void {
   if (!store || confirmed || phase !== 'armed') return
   confirmed = true
-  setTimeout(() => {
-    if (phase === 'armed') void store?.set('ok').catch(() => {})
+  const gen = generation
+  confirmTimer = setTimeout(() => {
+    confirmTimer = null
+    if (gen === generation && phase === 'armed') void withTimeout(store!.set('ok'), GUARD_STORAGE_TIMEOUT_MS).catch(() => {})
   }, CONFIRM_MS)
 }
 
@@ -158,11 +203,13 @@ export function faceGuardTripped(): boolean {
 }
 
 /** Where the guard is, for Settings → Advanced. */
-export function faceGuardState(): { guarded: boolean; phase: Phase; offBecause: 'tripped' | 'setting' | null; retrying: boolean; confirmed: boolean } {
+export function faceGuardState(): { guarded: boolean; phase: Phase; offBecause: FaceGuardOffReason | null; retrying: boolean; confirmed: boolean } {
   return { guarded: !!store, phase, offBecause: phase === 'off' ? offBecause : null, retrying, confirmed }
 }
 
 export async function setFaceMode(mode: FaceMode): Promise<void> {
+  generation++
+  clearTimers()
   if (!store) {
     offBecause = mode === 'still' ? 'setting' : null
     setPhase(mode === 'still' ? 'off' : 'armed')
@@ -171,7 +218,7 @@ export async function setFaceMode(mode: FaceMode): Promise<void> {
   }
   if (mode === 'still') {
     offBecause = 'setting'
-    await store.set('user-off').catch(() => {})
+    await withTimeout(store.set('user-off'), GUARD_STORAGE_TIMEOUT_MS).catch(() => {})
     setPhase('off')
     emit()
     return
@@ -179,7 +226,7 @@ export async function setFaceMode(mode: FaceMode): Promise<void> {
   // Back on: the next start is guarded again, as on a new install.
   offBecause = null
   retrying = false
-  await store.set('ok').catch(() => {})
+  await withTimeout(store.set('ok'), GUARD_STORAGE_TIMEOUT_MS).catch(() => {})
   confirmed = false
   setPhase('idle')
   emit()
@@ -187,6 +234,8 @@ export async function setFaceMode(mode: FaceMode): Promise<void> {
 
 /** For tests: a guard over `next` (null = a browser, no guard). */
 export function resetFaceGuard(next: GuardStore | null): void {
+  generation++
+  clearTimers()
   store = next
   phase = next ? 'loading' : 'armed'
   offBecause = null
