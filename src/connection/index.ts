@@ -18,7 +18,9 @@ import { LeafSession, type LeafIdentity } from '../net/session'
 import { browserPeerConnectionFactory, dialWebRtc, type PeerConnectionFactory } from '../net/webrtc'
 import { connectTls, type SecureChannel } from '../net/tls13/client'
 import { nativeLan, type NativeLan } from '../net/nativeLan'
+import type { LanHint } from '../net/lan'
 import { LanConnector } from './lan'
+import { LanAddresses } from './lanAddresses'
 import { RealComputerSession } from './computerSession'
 import { indexedDbThreadCacheBackend, ThreadCache } from './threadCache'
 import { EnrollmentStore, type LoadedEnrollment, type StoredEnrollment } from './enrollmentStore'
@@ -172,6 +174,8 @@ class RealConnection implements MousseConnection {
   private signedInAs?: string
   /** Computers on the phone's own network; absent where the app has no native sockets. */
   private readonly lan?: LanConnector
+  /** The LAN addresses the computers reported, kept between app starts. */
+  private readonly lanAddresses: LanAddresses
   private readonly computerListeners = new Set<() => void>()
 
   constructor(
@@ -182,6 +186,7 @@ class RealConnection implements MousseConnection {
     const storage = deps.storage ?? new SecureKeyStorage()
     this.storage = storage
     this.store = new EnrollmentStore(storage)
+    this.lanAddresses = new LanAddresses(storage, this.now)
     this.threads = deps.threadCache ?? new ThreadCache(indexedDbThreadCacheBackend())
     const native = deps.lan === null ? undefined : (deps.lan ?? nativeLan())
     if (native) {
@@ -476,7 +481,15 @@ class RealConnection implements MousseConnection {
     const expectedSpki = fromB64url(peer.keys.transport)
     await this.refreshLan()
     // On the phone's own network the computer is reached directly, and Mousse ID is not needed.
-    const lanChannel = async (): Promise<SecureChannel | undefined> => this.lan?.open(nodeId, entry.keys.transport, expectedSpki)
+    // Where the computer was seen advertising, and the addresses it reported itself on an earlier session.
+    const lanChannel = async (): Promise<SecureChannel | undefined> => {
+      if (!this.lan) return undefined
+      const remembered = await this.lanAddresses.read(nodeId, peer.keys.transport)
+      return this.lan.open(nodeId, entry.keys.transport, expectedSpki, {
+        remembered,
+        wrongKey: (hint) => void this.lanAddresses.drop(nodeId, peer.keys.transport, hint),
+      })
+    }
     /** After the relay failed: the computer may still be here, and advertises within a few seconds. */
     const lanFallback = async (): Promise<SecureChannel | undefined> => ((await this.lan?.waitFor(nodeId)) ? lanChannel() : undefined)
     let grant: RegistrationGrant | undefined
@@ -588,6 +601,7 @@ class RealConnection implements MousseConnection {
                 const lan = await lanChannel()
                 return lan ? openLeaf(lan, DIRECT_PING_INTERVAL_MS) : undefined
               },
+              learnLan: (addresses: LanHint[]) => this.lanAddresses.learn(nodeId, peer.keys.transport, addresses),
             }
           : {}),
         directAllowed: async () => !!(await direct),

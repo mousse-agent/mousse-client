@@ -8,6 +8,7 @@ import { NetError } from '../../src/net/errors'
 import { generateNodeKeys } from '../../src/net/keys'
 import { LeafSession, type StreamRecord } from '../../src/net/session'
 import { streamPair, type StreamEndpoint } from '../../src/net/stream'
+import type { LanHint } from '../../src/net/lan'
 import { WEBRTC_OFFER_METHOD } from '../../src/net/webrtc'
 import { delegate, roster, testComputer, testUser } from '../net/fixtures'
 import { channelOf, fakeComputer, until, type Record } from './helpers'
@@ -68,7 +69,17 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** A session on the relay whose direct path opens on demand. */
 async function setup(
-  options: { relayPong?: number; directPong?: number | false; allowed?: boolean; timeoutMs?: number; hang?: boolean; signal?: boolean; lan?: boolean } = {},
+  options: {
+    relayPong?: number
+    directPong?: number | false
+    allowed?: boolean
+    timeoutMs?: number
+    hang?: boolean
+    signal?: boolean
+    lan?: boolean
+    /** The phone keeps the LAN addresses the computer reports; `fresh` says whether they are new to it. */
+    learn?: { fresh: boolean; reachable: boolean }
+  } = {},
 ) {
   const w = world()
   const relay = await w.path({ pong: options.relayPong ?? 30 })
@@ -83,7 +94,18 @@ async function setup(
   /** Whether the computer is seen on the phone's network. */
   let lanUp = false
   const lans: Array<Awaited<ReturnType<typeof w.path>>> = []
+  const learned: LanHint[][] = []
   const open: PathOpeners = {
+    ...(options.learn
+      ? {
+          learnLan: async (addresses: LanHint[]) => {
+            learned.push(addresses)
+            // The reported addresses answer when the phone is on the computer's network.
+            if (options.learn!.reachable) lanUp = true
+            return options.learn!.fresh
+          },
+        }
+      : {}),
     ...(options.lan
       ? {
           lan: async () => {
@@ -134,6 +156,7 @@ async function setup(
     failRelay: (error?: Error) => (relayFailure = error),
     failDirect: (error: Error) => (directFailure = error),
     lans,
+    learned,
     setLan: (up: boolean) => (lanUp = up),
   }
 }
@@ -448,6 +471,38 @@ describe('path session', () => {
     await until(() => t.relays.length === 2)
     expect(t.session.path).toBe('relay')
     expect(t.session.state).toBe('open')
+  })
+
+  it('tries the LAN addresses the computer reports before WebRTC, and sends no offer through the relay when one answers', async () => {
+    const t = await setup({ lan: true, signal: true, learn: { fresh: true, reachable: true } })
+    await upgrade(t, { ...WEBRTC, lan: { v: 1, addresses: ['ws://192.168.1.30:41000/mousse-net', 'ws://8.8.8.8:41000/mousse-net'] } })
+    expect(t.learned).toEqual([[{ host: '192.168.1.30', port: 41000 }]])
+    expect(t.opened).toEqual(['lan', 'lan'])
+    expect(t.session.path).toBe('direct')
+    expect(t.relay.remote.has('rpc.request')).toBe(false)
+    // The LAN path asks for the current addresses itself, so they stay fresh without the relay.
+    await t.lans[0].remote.answer(ENDPOINTS_METHOD, { endpoints: [], lan: { v: 1, addresses: ['ws://192.168.1.31:41000/mousse-net'] } })
+    await until(() => t.learned.length === 2)
+    expect(t.learned[1]).toEqual([{ host: '192.168.1.31', port: 41000 }])
+    await until(() => t.relay.leaf.state === 'closed')
+  })
+
+  it('goes on to WebRTC when the reported LAN addresses do not answer', async () => {
+    const t = await setup({ lan: true, learn: { fresh: true, reachable: false } })
+    await upgrade(t, { ...WEBRTC, lan: { v: 1, addresses: ['ws://192.168.1.30:41000/mousse-net'] } })
+    expect(t.opened).toEqual(['lan', 'lan', 'webrtc'])
+    expect(t.session.path).toBe('direct')
+  })
+
+  it('dials no LAN address again that it already tried, and keeps them when the answer has none', async () => {
+    const known = await setup({ lan: true, learn: { fresh: false, reachable: false } })
+    await upgrade(known, { ...WEBRTC, lan: { v: 1, addresses: ['ws://192.168.1.30:41000/mousse-net'] } })
+    expect(known.opened).toEqual(['lan', 'webrtc'])
+    // An older computer, or one with LAN connections off: nothing is learned and nothing forgotten.
+    const silent = await setup({ lan: true, learn: { fresh: true, reachable: true } })
+    await upgrade(silent, WEBRTC)
+    expect(silent.learned).toEqual([])
+    expect(silent.opened).toEqual(['lan', 'webrtc'])
   })
 
   it('closes every path when the caller closes it', async () => {

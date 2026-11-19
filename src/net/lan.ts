@@ -142,3 +142,63 @@ export class LanHints {
     this.hints.clear()
   }
 }
+
+/** The computer reports `lan: { v: 1, addresses }` in its answer to `net.direct.endpoints`. */
+export const LAN_ENDPOINTS_VERSION = 1
+/** Addresses a computer may report; more are ignored. */
+export const LAN_ENDPOINTS_MAX = 8
+const LAN_ENDPOINT_PATH = '/mousse-net'
+const LAN_ENDPOINT_URL_MAX = 128
+
+/** Whether `host` is a dotted IPv4 literal in 10/8, 172.16/12 or 192.168/16, as the computer's address classes. */
+export function isPrivateIPv4(host: string): boolean {
+  const parts = host.split('.')
+  if (parts.length !== 4 || parts.some((part) => !/^(0|[1-9]\d{0,2})$/.test(part) || Number(part) > 255)) return false
+  const [a, b] = parts.map(Number)
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+}
+
+/** Whether `host` (in brackets, as a URL names it) is a unique local IPv6 literal, fc00::/7 without Tailscale's fd7a:115c:a1e0::/48. */
+function isUla(host: string): boolean {
+  if (!host.startsWith('[') || !host.endsWith(']')) return false
+  const inner = host.slice(1, -1).toLowerCase()
+  if (!/^[0-9a-f:]+$/.test(inner) || !inner.includes(':') || inner.startsWith(':')) return false
+  const first = inner.split(':')[0]
+  if (first.length !== 4 || !/^f[cd]/.test(first)) return false
+  return !inner.startsWith('fd7a:115c:a1e0:')
+}
+
+/**
+ * The LAN addresses in a computer's answer to `net.direct.endpoints`: `ws://<host>:<port>/mousse-net`
+ * with a private IPv4 or unique local IPv6 literal and an explicit port, nothing else. Undefined
+ * when the answer has no `lan` entry (an older computer, or LAN connections off): no news, not an
+ * empty list. Anything malformed is dropped; at most eight are kept.
+ */
+export function parseLanEndpoints(value: unknown): LanHint[] | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const lan = (value as Record<string, unknown>).lan
+  if (typeof lan !== 'object' || lan === null || (lan as Record<string, unknown>).v !== LAN_ENDPOINTS_VERSION) return undefined
+  const addresses = (lan as Record<string, unknown>).addresses
+  if (!Array.isArray(addresses)) return undefined
+  const hints: LanHint[] = []
+  const seen = new Set<string>()
+  for (const address of addresses.slice(0, LAN_ENDPOINTS_MAX)) {
+    if (typeof address !== 'string' || address.length > LAN_ENDPOINT_URL_MAX) continue
+    let url: URL
+    try {
+      url = new URL(address)
+    } catch {
+      continue
+    }
+    if (url.protocol !== 'ws:' || url.username || url.password || url.search || url.hash || url.pathname !== LAN_ENDPOINT_PATH) continue
+    if (address !== `ws://${url.host}${LAN_ENDPOINT_PATH}`) continue
+    const port = Number(url.port)
+    if (!url.port || !Number.isInteger(port) || port < 1 || port > 65535) continue
+    if (!isPrivateIPv4(url.hostname) && !isUla(url.hostname)) continue
+    const key = `${url.hostname}:${port}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    hints.push({ host: url.hostname, port })
+  }
+  return hints
+}

@@ -2,7 +2,7 @@
 import { createCipheriv, hkdfSync, randomBytes } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { generateAgreementKey, x25519Shared } from '../../src/net/crypto'
-import { LanHints, lanReceiveKey, openAdvertisement } from '../../src/net/lan'
+import { LanHints, lanReceiveKey, openAdvertisement, parseLanEndpoints } from '../../src/net/lan'
 
 /** An advertisement sealed exactly as the desktop's `LanDiscovery.announce` seals it, with Node's crypto. */
 function desktopAdvertisement(secret: Uint8Array, sender: string, port: number, issued: number): Uint8Array {
@@ -51,5 +51,52 @@ describe('LAN advertisements', () => {
     expect(hints.routes('nod_computer')).toEqual([{ host: '192.168.1.20', port: 40999 }])
     clock += 30_001
     expect(hints.routes('nod_computer')).toEqual([])
+  })
+})
+
+describe('LAN addresses in the endpoints answer', () => {
+  it('keeps only ws:// addresses on the Net path with a private IPv4 or unique local IPv6 literal and a port', () => {
+    const addresses = [
+      'ws://192.168.1.20:41234/mousse-net',
+      'ws://10.0.0.7:41234/mousse-net',
+      'ws://172.16.4.2:41234/mousse-net',
+      'ws://[fd12:3456::1]:41234/mousse-net',
+      'ws://192.168.1.20:41234/mousse-net',
+      'wss://192.168.1.21:41234/mousse-net',
+      'ws://192.168.1.22:41234/other',
+      'ws://192.168.1.23:41234/mousse-net?x=1',
+      'ws://user@192.168.1.24:41234/mousse-net',
+      'ws://192.168.1.25/mousse-net',
+      'ws://8.8.8.8:41234/mousse-net',
+      'ws://172.32.0.1:41234/mousse-net',
+      'ws://100.64.0.1:41234/mousse-net',
+      'ws://127.0.0.1:41234/mousse-net',
+      'ws://169.254.1.1:41234/mousse-net',
+      'ws://[fe80::1]:41234/mousse-net',
+      'ws://[2001:db8::1]:41234/mousse-net',
+      'ws://[fd7a:115c:a1e0::1]:41234/mousse-net',
+      'ws://3232235777:41234/mousse-net',
+      'ws://computer.local:41234/mousse-net',
+      42,
+    ]
+    expect(parseLanEndpoints({ endpoints: [], lan: { v: 1, addresses } })).toEqual([
+      { host: '192.168.1.20', port: 41234 },
+      { host: '10.0.0.7', port: 41234 },
+      { host: '172.16.4.2', port: 41234 },
+      { host: '[fd12:3456::1]', port: 41234 },
+    ])
+  })
+
+  it('reads at most eight entries', () => {
+    const addresses = Array.from({ length: 12 }, (_, i) => `ws://192.168.1.${i + 1}:41234/mousse-net`)
+    expect(parseLanEndpoints({ lan: { v: 1, addresses } })).toHaveLength(8)
+  })
+
+  it('tells no news (an older computer, another version) from an empty list', () => {
+    expect(parseLanEndpoints({ endpoints: [], webrtc: { v: 1 } })).toBeUndefined()
+    expect(parseLanEndpoints({ lan: { v: 2, addresses: ['ws://192.168.1.20:41234/mousse-net'] } })).toBeUndefined()
+    expect(parseLanEndpoints({ lan: { v: 1 } })).toBeUndefined()
+    expect(parseLanEndpoints(null)).toBeUndefined()
+    expect(parseLanEndpoints({ lan: { v: 1, addresses: [] } })).toEqual([])
   })
 })

@@ -1,7 +1,7 @@
 // One computer session that moves between network paths without the screens noticing. It starts on
 // the Mousse ID relay, or directly on the phone's network when the computer advertises itself
 // there (which needs no internet). From the relay it moves to the LAN as soon as the computer is
-// seen there. When the computer reports that it takes WebRTC offers and a peer-to-peer path
+// seen there, or as soon as the computer names LAN addresses the phone can reach. When the computer reports that it takes WebRTC offers and a peer-to-peer path
 // opens and answers faster than the relay, a full second session opens there and
 // streams and new requests move onto it; the relay session closes once its requests in flight
 // finish. When the direct path stops answering, the session falls back to the relay. Callers see
@@ -19,6 +19,7 @@ import type {
   StreamSnapshot,
   SubscriptionHandlers,
 } from '../net/session'
+import { parseLanEndpoints, type LanHint } from '../net/lan'
 import { parseDirectEndpoints, type DirectEndpoint } from '../net/webrtc'
 import { deviceNetworkSignals, type NetworkSignals } from './networkSignals'
 
@@ -69,6 +70,11 @@ export interface PathOpeners {
    * when the computer was not seen there. Tried before the relay whenever a path is needed.
    */
   lan?(): Promise<LeafSession | undefined>
+  /**
+   * Keeps the LAN addresses the computer reported in its endpoints answer, for `lan` to dial;
+   * resolves true when one of them is new to the phone.
+   */
+  learnLan?(addresses: LanHint[]): Promise<boolean>
   /** Opens a session on one direct endpoint; resolves once it is open. Aborting closes it. */
   direct(endpoint: DirectEndpoint, signal: AbortSignal, link: DirectLink): Promise<LeafSession>
   /** False when direct paths are switched off (Mousse ID's kill switch, no WebRTC on the device). */
@@ -150,6 +156,7 @@ export class PathSession implements SessionLink {
     this.active = this.track(options.firstKind ?? 'relay', options.first)
     this.offNetwork = (options.network ?? deviceNetworkSignals).onChange(() => this.networkChanged())
     if (options.autoProbe !== false) this.probeSoon(0)
+    void this.refreshLan(this.active)
   }
 
   /** Which path carries the session now; for tests and diagnostics only, never shown. */
@@ -250,10 +257,20 @@ export class PathSession implements SessionLink {
         return this.adopt(this.track('direct', lan))
       }
       if (!this.directSupported) return
-      if (this.options.open.directAllowed && !(await this.options.open.directAllowed().catch(() => false))) return
+      const webrtc = !this.options.open.directAllowed || (await this.options.open.directAllowed().catch(() => false))
+      if (!webrtc && !this.options.open.learnLan) return
       if (this.stateValue !== 'open' || this.recovering || this.active !== relay) return
-      await this.discover(relay)
-      if (!this.endpoints.length) return
+      // The computer's answer may name its LAN addresses: new ones are tried before WebRTC, which needs the relay to signal.
+      const reported = await this.discover(relay)
+      if (reported && (await this.learnLan(reported))) {
+        const near = await this.openLan()
+        if (near) {
+          if (this.stateValue !== 'open' || this.recovering || this.active !== relay || near.state !== 'open') return near.close()
+          return this.adopt(this.track('direct', near))
+        }
+      }
+      if (!webrtc || !this.endpoints.length) return
+      if (this.stateValue !== 'open' || this.recovering || this.active !== relay) return
       const next = await this.openDirect(relay)
       if (!next) return
       if (this.stateValue !== 'open' || this.recovering || this.active !== relay) return this.retire(next)
@@ -309,17 +326,47 @@ export class PathSession implements SessionLink {
     }
   }
 
-  private async discover(path: Path): Promise<void> {
+  /** Asks the computer which direct paths it takes; resolves with the LAN addresses it reported, if any. */
+  private async discover(path: Path): Promise<LanHint[] | undefined> {
     path.busy++
     try {
-      const endpoints = parseDirectEndpoints(await path.leaf.rpc(ENDPOINTS_METHOD, {}, { deadlineMs: 10_000 }))
-      this.endpoints = endpoints
+      const answer = await path.leaf.rpc(ENDPOINTS_METHOD, {}, { deadlineMs: 10_000 })
+      this.endpoints = parseDirectEndpoints(answer)
+      return parseLanEndpoints(answer)
     } catch (error) {
       // A computer without the method refuses it; it never offers a direct path.
       if (codeOf(error) === 'forbidden') {
         this.directSupported = false
         this.endpoints = []
       }
+      return undefined
+    } finally {
+      path.busy--
+      this.retireIfIdle(path)
+    }
+  }
+
+  /** Keeps the LAN addresses the computer reported; true when one is new. Never throws. */
+  private async learnLan(addresses: LanHint[]): Promise<boolean> {
+    try {
+      return (await this.options.open.learnLan?.(addresses)) ?? false
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Asks the computer for its current LAN addresses on a direct path that just opened, so they stay
+   * fresh without the relay. An answer without them is no news: the remembered ones stay.
+   */
+  private async refreshLan(path: Path): Promise<void> {
+    if (!this.options.open.learnLan || path.kind !== 'direct') return
+    path.busy++
+    try {
+      const reported = parseLanEndpoints(await path.leaf.rpc(ENDPOINTS_METHOD, {}, { deadlineMs: 10_000 }))
+      if (reported && this.stateValue === 'open') await this.learnLan(reported)
+    } catch {
+      // An older computer or a path that just dropped; the remembered addresses stay.
     } finally {
       path.busy--
       this.retireIfIdle(path)
@@ -398,6 +445,7 @@ export class PathSession implements SessionLink {
       this.retireIfIdle(old)
     }
     this.probeSoon()
+    if (old !== next) void this.refreshLan(next)
   }
 
   private attach(sub: Subscription, path: Path, first: boolean): void {
