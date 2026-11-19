@@ -7,8 +7,12 @@ import type { ListBot } from '../../connection/bots'
 import type { ComputerLists, ListChat, ListProject, ListThread, ThreadStatus } from '../../connection/types'
 import { LazyBotFace } from '../bots/face/LazyBotFace'
 import { BotBoundary } from '../bots/BotBoundary'
+import { Mascot } from '../bots/Mascot'
+import { botRowLine } from '../bots/botChatShape'
+import { botGroupTime, botDayLabel } from '../bots/messageGroups'
 import {
   ChevronDown,
+  ChevronRight,
   CircleAlert,
   CircleCheck,
   Folder,
@@ -19,7 +23,7 @@ import {
   Monitor,
   Pin,
 } from '../components/icons'
-import { SearchField, SectionHeading } from '../components/primitives'
+import { Button, SearchField, SectionHeading } from '../components/primitives'
 import { useLongPress } from '../hooks/useLongPress'
 import {
   chatColor,
@@ -264,17 +268,101 @@ function MoreRows({ onNear }: { onNear(): void }) {
   return <div ref={ref} className="m-sb-more" aria-hidden style={{ height: 1 }} />
 }
 
-/** A bot's row: its face holds the state's pose, and the row says the state in words. */
-function BotRow({ bot, active, computer, onOpen }: { bot: ListBot; active: boolean; computer?: RowComputer; onOpen(): void }) {
+const CHATS_COLLAPSED_KEY = 'mousse.sidebar.chatsCollapsed'
+
+function readChatsCollapsed(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(CHATS_COLLAPSED_KEY)
+    const parsed = raw ? JSON.parse(raw) : {}
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, boolean>) : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveChatsCollapsed(value: Record<string, boolean>): void {
+  try {
+    localStorage.setItem(CHATS_COLLAPSED_KEY, JSON.stringify(value))
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function FoldableChatHeading({ title, open, onToggle }: { title: string; open: boolean; onToggle(): void }) {
   return (
-    <button type="button" className={`m-chat-row${active ? ' is-active' : ''}`} aria-current={active ? 'true' : undefined} onClick={onOpen}>
-      <LazyBotFace look={bot.look} state={bot.state} size={40} view="head" still />
-      <span className="m-chat-row__text">
-        <span className="m-chat-row__name">{bot.name}</span>
-        <span className="m-chat-row__preview">{computer && <span>{`${computer.name}${computer.offline ? ' (offline)' : ''} · `}</span>}{bot.stateText || bot.last?.text || bot.description}</span>
-      </span>
-      {bot.unread > 0 && <span className="bot-unread" aria-label={`${bot.unread} unread`}>{bot.unread}</span>}
-    </button>
+    <div className="m-section-heading bot-section-heading">
+      <h2>
+        <button type="button" className="bot-section-toggle" aria-expanded={open} onClick={onToggle}>
+          <span>{title}</span>
+          <ChevronRight size={13} className={`bot-section-chevron${open ? ' is-open' : ''}`} aria-hidden="true" />
+        </button>
+      </h2>
+    </div>
+  )
+}
+
+function botRowTime(at: string, now = new Date()): string {
+  const date = new Date(at)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toDateString() === now.toDateString() ? botGroupTime(at) : botDayLabel(at, now)
+}
+
+const botActivityAt = (bot: ListBot) => bot.last?.at ?? bot.createdAt
+
+/**
+ * A bot's row (#1404, #915): its face (sleeping at full colour when idle), its name, unread count
+ * badge (hidden while open), last time, and under them what it does now in coloured words or its
+ * latest reply when idle. Press and hold opens its options.
+ */
+function BotRow({ bot, active, computer, onOpen, onOptions }: {
+  bot: ListBot
+  active: boolean
+  computer?: RowComputer
+  onOpen(): void
+  onOptions?(): void
+}) {
+  const hold = useLongPress(onOptions)
+  const line = botRowLine(bot)
+  const preview = line.resting && bot.lastReply ? bot.lastReply : undefined
+  const time = bot.last ? botRowTime(bot.last.at) : undefined
+  const unread = active ? 0 : bot.unread
+  return (
+    <>
+      <button
+        type="button"
+        className={`m-chat-row bot-list-row${active ? ' is-active' : ''}`}
+        aria-current={active ? 'true' : undefined}
+        aria-label={`Message ${bot.name}`}
+        aria-keyshortcuts={onOptions ? 'Shift+F10' : undefined}
+        onClick={onOpen}
+        {...hold}
+      >
+        <span className={`bot-row-face${line.resting ? ' is-resting' : ''}`}>
+          <LazyBotFace
+            look={bot.look}
+            state={line.resting ? 'paused' : bot.state}
+            size={40}
+            view="head"
+            still={bot.state === 'idle' || bot.state === 'paused'}
+          />
+          {unread > 0 && <span className="bot-row-dot" aria-hidden="true" />}
+        </span>
+        <span className="m-chat-row__text">
+          <span className="bot-row-head">
+            <span className="m-chat-row__name">{bot.name}</span>
+            {unread > 0 && <span className="bot-unread" aria-label={`${unread} unread`}>{unread}</span>}
+            {time && <span className="bot-row-time">{time}</span>}
+          </span>
+          <span className="m-chat-row__preview bot-row-state" data-tone={preview ? 'idle' : line.tone}>
+            {computer && <span className="bot-row-computer">{`${computer.name}${computer.offline ? ' (offline)' : ''} · `}</span>}
+            {preview ?? line.text}
+          </span>
+        </span>
+      </button>
+      {onOptions && (
+        <button type="button" className="m-sr-only" tabIndex={-1} onClick={onOptions}>{`Options for ${bot.name}`}</button>
+      )}
+    </>
   )
 }
 
@@ -287,6 +375,10 @@ export interface SidebarProps {
   onNewThread?(project: ListProject): void
   /** Opens a bot's chat; without it the Chats tab lists no bots. */
   onOpenBot?(bot: ListBot): void
+  /** Opens a bot's options sheet (press and hold on a bot row). */
+  onBotOptions?(bot: ListBot): void
+  /** Opens the New bot sheet from the empty Bots page. */
+  onNewBot?(): void
   /** The home dock's + makes a bot now; the empty Bots line then says so. */
   canMakeBots?: boolean
   /** The open bot's id. */
@@ -310,13 +402,27 @@ function useNow(ms = 30_000): number {
   return now
 }
 
-export function Sidebar({ lists, tab, selectedId, onOpenThread, onOpenChat, onNewThread, onOpenBot, canMakeBots, selectedBotId, banner, computerOf, order = 'desktop', onThreadOptions }: SidebarProps) {
+export function Sidebar({ lists, tab, selectedId, onOpenThread, onOpenChat, onNewThread, onOpenBot, onBotOptions, onNewBot, canMakeBots, selectedBotId, banner, computerOf, order = 'desktop', onThreadOptions }: SidebarProps) {
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [settledOpen, setSettledOpen] = useState(false)
   const [standaloneOpen, setStandaloneOpen] = useState(false)
+  const [chatsCollapsed, setChatsCollapsed] = useState<Record<string, boolean>>(readChatsCollapsed)
   const now = useNow()
   const model = useMemo(() => sidebarModel(lists, query, order), [lists, query, order])
+
+  const searching = !!query.trim()
+  const needle = query.trim().toLowerCase()
+  const toggleChatSection = (key: string) => {
+    setChatsCollapsed((current) => {
+      const next = { ...current, [key]: !current[key] }
+      saveChatsCollapsed(next)
+      return next
+    })
+  }
+  const botsOpen = searching || !chatsCollapsed.bots
+  const groupsOpen = searching || !chatsCollapsed.groups
+  const recentOpen = searching || !chatsCollapsed.recent
 
   // Like the desktop, the project holding the open thread starts expanded.
   const selectedProject = lists.threads.find((thread) => thread.id === selectedId)?.projectId
@@ -328,14 +434,16 @@ export function Sidebar({ lists, tab, selectedId, onOpenThread, onOpenChat, onNe
     if (!next.delete(id)) next.add(id)
     return next
   })
-  const searching = !!query.trim()
-  const needle = query.trim().toLowerCase()
-  const bots = onOpenBot ? (lists.bots ?? []).filter((bot) => !needle || bot.name.toLowerCase().includes(needle)) : []
-  // Recent: bot chats and direct chats together, the latest first (like the desktop).
-  const recent = [
-    ...model.direct.map((chat) => ({ at: chat.updatedAt, key: chat.id, row: () => <ChatRow key={chat.id} chat={chat} active={!!chat.threadId && chat.threadId === selectedId} computer={computerOf?.(chat.id)} onOpen={() => onOpenChat(chat)} /> })),
-    ...bots.map((bot) => ({ at: Date.parse(bot.last?.at ?? bot.createdAt) || 0, key: bot.id, row: () => <BotBoundary key={`bot:${bot.id}`}><BotRow bot={bot} active={bot.id === selectedBotId} computer={computerOf?.(bot.id)} onOpen={() => onOpenBot!(bot)} /></BotBoundary> })),
-  ].sort((a, b) => b.at - a.at)
+  // Bots are listed once in the Bots section, ordered by latest activity (desktop #1404).
+  const bots = onOpenBot
+    ? (lists.bots ?? [])
+      .filter((bot) => !needle || bot.name.toLowerCase().includes(needle) || bot.stateText.toLowerCase().includes(needle))
+      .sort((a, b) => botActivityAt(b).localeCompare(botActivityAt(a)))
+    : []
+  // Recent: direct chats, the latest first.
+  const recent = model.direct
+    .map((chat) => ({ at: chat.updatedAt, key: chat.id, row: () => <ChatRow key={chat.id} chat={chat} active={!!chat.threadId && chat.threadId === selectedId} computer={computerOf?.(chat.id)} onOpen={() => onOpenChat(chat)} /> }))
+    .sort((a, b) => b.at - a.at)
   const [recentShown, setRecentShown] = useState(RECENT_PAGE)
   useEffect(() => setRecentShown(RECENT_PAGE), [tab, needle])
   const projects = [...lists.projects].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
@@ -410,40 +518,65 @@ export function Sidebar({ lists, tab, selectedId, onOpenThread, onOpenChat, onNe
           <>
             {onOpenBot && (
               <BotBoundary fallback={<p className="m-sb-empty">Bots can't be shown right now.</p>}>
-              <section aria-label="Bots">
-                <SectionHeading>Bots</SectionHeading>
-                {bots.length > 0 ? (
-                  <div className="bot-roster">
-                    {bots.map((bot) => (
-                      <button key={bot.id} type="button" className={bot.id === selectedBotId ? 'is-active' : ''} aria-label={`Message ${bot.name}`} onClick={() => onOpenBot(bot)}>
-                        {/* On a phone only a face with something to show moves (working, needs you, stuck); the rest are still, so a long row costs no GPU. */}
-                        <LazyBotFace look={bot.look} state={bot.state} size={48} view="head" still={bot.state === 'idle' || bot.state === 'paused'} />
-                        {bot.unread > 0 && bot.id !== selectedBotId && <span className="bot-roster-unread" role="img" aria-label={`${bot.unread} unread`} />}
-                        <span>{bot.name}</span>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="m-sb-empty">{searching ? `No bots match “${query.trim()}”.` : canMakeBots ? 'No bots yet. Press + to make one.' : 'No bots yet.'}</p>
-                )}
-              </section>
+                <section aria-label="Bots">
+                  <FoldableChatHeading title="Bots" open={botsOpen} onToggle={() => toggleChatSection('bots')} />
+                  {botsOpen && (
+                    bots.length > 0 ? (
+                      <div className="m-chat-list bot-list">
+                        {bots.map((bot) => (
+                          <BotBoundary key={`bot:${bot.id}`}>
+                            <BotRow
+                              bot={bot}
+                              active={bot.id === selectedBotId}
+                              computer={computerOf?.(bot.id)}
+                              onOpen={() => onOpenBot(bot)}
+                              {...(onBotOptions ? { onOptions: () => onBotOptions(bot) } : {})}
+                            />
+                          </BotBoundary>
+                        ))}
+                      </div>
+                    ) : searching ? (
+                      <p className="m-sb-empty">{`No bots match “${query.trim()}”.`}</p>
+                    ) : (
+                      <div className="bot-empty-page">
+                        <Mascot size={88} />
+                        <p className="bot-empty-page__title">{model.groups.length + recent.length === 0 ? 'Make your first bot' : 'Talk to your bots'}</p>
+                        <p className="bot-empty-page__body">
+                          {canMakeBots ? 'Pick a look and say what it should do. It asks for anything else it needs as it goes.' : 'No bots yet.'}
+                        </p>
+                        {canMakeBots && onNewBot && (
+                          <Button variant="primary" onClick={onNewBot}>New bot</Button>
+                        )}
+                      </div>
+                    )
+                  )}
+                </section>
               </BotBoundary>
             )}
-            {model.groups.length + recent.length === 0 && (
+            {model.groups.length + recent.length === 0 && !onOpenBot && (
               <p className="m-sb-empty">{searching ? `No chats match “${query.trim()}”.` : 'No chats yet. Start one with an agent on the computer.'}</p>
             )}
+            {searching && model.groups.length + recent.length + bots.length === 0 && onOpenBot && (
+              <p className="m-sb-empty">{`No chats match “${query.trim()}”.`}</p>
+            )}
             {model.groups.length > 0 && (
-              <>
-                <SectionHeading>Groups</SectionHeading>
-                <div className="m-chat-list">{model.groups.map((chat) => <ChatRow key={chat.id} chat={chat} active={!!chat.threadId && chat.threadId === selectedId} computer={computerOf?.(chat.id)} onOpen={() => onOpenChat(chat)} />)}</div>
-              </>
+              <section aria-label="Groups">
+                <FoldableChatHeading title="Groups" open={groupsOpen} onToggle={() => toggleChatSection('groups')} />
+                {groupsOpen && (
+                  <div className="m-chat-list">{model.groups.map((chat) => <ChatRow key={chat.id} chat={chat} active={!!chat.threadId && chat.threadId === selectedId} computer={computerOf?.(chat.id)} onOpen={() => onOpenChat(chat)} />)}</div>
+                )}
+              </section>
             )}
             {recent.length > 0 && (
-              <>
-                <SectionHeading>Recent</SectionHeading>
-                <div className="m-chat-list">{recent.slice(0, recentShown).map((entry) => entry.row())}</div>
-                {recent.length > recentShown && <MoreRows key={recentShown} onNear={() => setRecentShown((shown) => shown + RECENT_PAGE)} />}
-              </>
+              <section aria-label="Recent">
+                <FoldableChatHeading title="Recent" open={recentOpen} onToggle={() => toggleChatSection('recent')} />
+                {recentOpen && (
+                  <>
+                    <div className="m-chat-list">{recent.slice(0, recentShown).map((entry) => entry.row())}</div>
+                    {recent.length > recentShown && <MoreRows key={recentShown} onNear={() => setRecentShown((shown) => shown + RECENT_PAGE)} />}
+                  </>
+                )}
+              </section>
             )}
           </>
         )}
