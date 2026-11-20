@@ -1,7 +1,7 @@
 // The real MousseConnection: Mousse ID sign-in and inventory, phone enrollment through enrollment
 // requests or QR offers, and sessions with the user's computers over the hosted relay.
 import { Capacitor } from '@capacitor/core'
-import { MousseIdError, checkedOrigin, type FetchLike, MousseIdHttp } from '../mousseId/http'
+import { FOLDED_MESSAGE, MousseIdError, checkedOrigin, type FetchLike, MousseIdHttp } from '../mousseId/http'
 import { MousseIdNet, type ControlIdentity, type Inventory, type InventoryBinding, type InventoryRegistration, type Registration, type RegistrationGrant } from '../mousseId/net'
 import { MOUSSE_ID_ORIGIN } from '../mousseId/origin'
 import { matchCode, openOfferSeal, openRequestSeal, parseJoinQr } from '../mousseId/seal'
@@ -58,6 +58,11 @@ const REREGISTER = new Set(['not_found', 'forbidden', 'expired', 'unauthorized']
  * Mousse ID when it renews or registers a phone whose roster revokes it.
  */
 const REMOVED = new Set(['revoked', 'not_member'])
+/**
+ * The list this phone joined was merged into the account's one devices list. The phone forgets that
+ * enrollment without remembering a removal, so it can join the one list.
+ */
+const FOLDED = 'account_network'
 /** The computers Mousse ID last listed, per account: shown, with what the LAN sees, while Mousse ID is out of reach. */
 const COMPUTERS_KEY = 'net.lastComputers'
 /** The longest wait before renewing again while Mousse ID is out of reach. */
@@ -153,7 +158,8 @@ function connectFailure(error: unknown, name: string): Error {
   }
 }
 
-function removedError(name: string): Error {
+function removedError(name: string, error?: unknown): Error {
+  if (codeOf(error) === FOLDED) return new Error(FOLDED_MESSAGE)
   return new Error(`${name} removed this phone. Add it again to reconnect.`)
 }
 
@@ -499,7 +505,7 @@ class RealConnection implements MousseConnection {
       try {
         grant = await this.ensureGrant(entry, identity, accountId)
       } catch (error) {
-        if (await this.confirmRemoved(entry, accountId, error)) throw removedError(name)
+        if (await this.confirmRemoved(entry, accountId, error)) throw removedError(name, error)
         channel = await lanFallback()
         if (!channel) throw new Error(`Mousse ID did not admit this phone: ${errorMessage(error)}`)
       }
@@ -520,7 +526,7 @@ class RealConnection implements MousseConnection {
       try {
         channel = await relayChannel(grant!)
       } catch (error) {
-        if (await this.confirmRemoved(entry, accountId, error)) throw removedError(name)
+        if (await this.confirmRemoved(entry, accountId, error)) throw removedError(name, error)
         channel = await lanFallback()
         if (!channel) throw connectFailure(error, name)
       }
@@ -558,7 +564,7 @@ class RealConnection implements MousseConnection {
         await this.forget(ownNode)
         throw removedError(name)
       }
-      throw (await this.confirmRemoved(entry, accountId, error)) ? removedError(name) : connectFailure(error, name)
+      throw (await this.confirmRemoved(entry, accountId, error)) ? removedError(name, error) : connectFailure(error, name)
     }
     // Later sessions to the same computer, over the relay again or over a direct path.
     const openLeaf = async (opened: SecureChannel, pingIntervalMs?: number): Promise<LeafSession> => {
@@ -665,10 +671,12 @@ class RealConnection implements MousseConnection {
         },
         async (error: unknown) => {
           const code = codeOf(error) ?? ''
-          if (!REREGISTER.has(code) && !REMOVED.has(code)) return scheduleRenewal(code)
+          if (!REREGISTER.has(code) && !REMOVED.has(code) && code !== FOLDED) return scheduleRenewal(code)
           const removed = await this.confirmRemoved(entry, accountId, error).catch(() => false)
           leaf.close(
-            removed
+            code === FOLDED
+              ? new NetError(FOLDED, FOLDED_MESSAGE)
+              : removed
               ? new NetError('revoked', `${name} removed this phone.`)
               : new NetError('forbidden', 'Mousse ID no longer admits this phone.'),
           )
@@ -713,10 +721,10 @@ class RealConnection implements MousseConnection {
     return removed
   }
 
-  /** Forgets an enrollment the user's computers removed. */
-  private async forget(node: string): Promise<void> {
+  /** Forgets an enrollment the user's computers removed; a merged list is forgotten without remembering a removal. */
+  private async forget(node: string, removed = true): Promise<void> {
     this.forgotten.add(node)
-    await this.markRemoved()
+    if (removed) await this.markRemoved()
     await this.forgetThreads(node).catch(() => undefined)
     await this.store.forget(node)
     await this.refreshLan()
@@ -749,6 +757,10 @@ class RealConnection implements MousseConnection {
   private async confirmRemoved(entry: LoadedEnrollment, accountId: string, error: unknown): Promise<boolean> {
     const node = entry.stored.enrollment.node
     const code = codeOf(error)
+    if (code === FOLDED) {
+      await this.forget(node, false)
+      return true
+    }
     if (code && REMOVED.has(code)) {
       await this.forget(node)
       return true
@@ -973,7 +985,8 @@ function nodeName(roster: Roster, nodeId: string, now: number): string | undefin
 function chooseNetwork(bindings: InventoryBinding[], now: number): { userId: string; roster: Roster } | undefined {
   let best: { userId: string; roster: Roster; size: number } | undefined
   for (const binding of bindings) {
-    if (!binding.roster) continue
+    // A revoked list, also one merged into the account's one devices list, is never joined.
+    if (!binding.roster || binding.revokedAt !== null) continue
     let roster: Roster
     try {
       const rootKey = peekDocument<{ rootKey?: unknown }>(binding.roster).rootKey

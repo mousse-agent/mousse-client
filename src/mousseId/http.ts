@@ -12,6 +12,7 @@ export type MousseIdErrorCode =
   | 'revoked'
   | 'not_found'
   | 'conflict'
+  | 'account_network'
   | 'expired'
   | 'quota_exceeded'
   | 'rate_limited'
@@ -19,6 +20,9 @@ export type MousseIdErrorCode =
   | 'offline'
   | 'not_configured'
   | 'bad_response'
+
+/** A Mousse ID account has one devices list; a list merged into it answers `account_network`. */
+export const FOLDED_MESSAGE = 'Your devices are now on one list. Join it from Settings to reach your computers.'
 
 export class MousseIdError extends Error {
   constructor(
@@ -54,6 +58,8 @@ function defaultMessage(code: MousseIdErrorCode): string {
       return 'Mousse ID does not know this item.'
     case 'revoked':
       return 'This device was removed from Mousse ID.'
+    case 'account_network':
+      return FOLDED_MESSAGE
     default:
       return `Mousse ID refused the request (${code}).`
   }
@@ -70,6 +76,7 @@ const SERVER_CODES: Record<string, MousseIdErrorCode> = {
   revoked: 'revoked',
   not_found: 'not_found',
   conflict: 'conflict',
+  account_network: 'account_network',
   expired: 'expired',
   quota_exceeded: 'quota_exceeded',
   rate_limited: 'rate_limited',

@@ -65,7 +65,9 @@ function idServer(world: World) {
             : []),
         ],
         bindings: [
-          ...(world.hostedRoster ? [{ userId: world.user.user, rootKey: world.user.rootKey, roster: world.hostedRoster, revocations: {} }] : []),
+          ...(world.hostedRoster
+            ? [{ userId: world.user.user, rootKey: world.user.rootKey, roster: world.hostedRoster, revocations: {}, revokedAt: world.hostedRevokedAt ?? null }]
+            : []),
           ...(world.otherBindings ?? []),
         ],
         limits: { maxComputers: 3 },
@@ -156,7 +158,9 @@ interface World {
   /** The roster the user's computers last pushed to Mousse ID. */
   hostedRoster?: Signed
   /** Rosters of other computers on the account, set up apart from the world's computer. */
-  otherBindings?: Array<{ userId: string; roster: Signed; revocations: Record<string, unknown> }>
+  otherBindings?: Array<{ userId: string; roster: Signed; revocations: Record<string, unknown>; revokedAt?: number | null; foldedInto?: string }>
+  /** Set on the world's own list once Mousse ID merged it into the account's one devices list. */
+  hostedRevokedAt?: number
   onRequest?: (id: string, body: Record<string, unknown>) => void
   decide?: (id: string, polls: number) => { status?: string; sealedInvite?: string } | undefined
   /** How long a registration or renewal lasts; Mousse ID uses 60 seconds. */
@@ -795,6 +799,47 @@ describe('real connection', () => {
     w.otherBindings = [{ userId: other.user, roster: roster(other, lone.node), revocations: {} }]
     // That computer has no registration with Mousse ID: it is offline and named from the roster.
     expect(await connection.joinPlan()).toEqual({ status: 'needed', target: { nodeId: lone.node, name: 'Lone', online: false } })
+  })
+
+  it('never joins a list that was merged into the account\'s one devices list', async () => {
+    const w = world()
+    w.hostedRoster = roster(w.user, w.computer.node)
+    const other = testUser()
+    const lone = testComputer(other, 'Lone')
+    testComputer(other, 'Two')
+    testComputer(other, 'Three')
+    // The larger list was merged into the world's list, so it is revoked.
+    w.otherBindings = [{ userId: other.user, roster: roster(other, lone.node), revocations: {}, revokedAt: Date.now() - 1000, foldedInto: w.user.user }]
+    const { connection } = await connect(w)
+    await connection.signInWithPassword('a@b.test', 'pw')
+    expect(await connection.joinPlan()).toMatchObject({ status: 'needed', target: { nodeId: w.computer.node } })
+    expect((await connection.listComputers()).find((c) => c.nodeId === w.computer.node)).toMatchObject({ authority: true })
+  })
+
+  it('forgets a computer whose list was merged, without counting it as a removal, and offers the one list', async () => {
+    const w = world()
+    w.hostedRoster = roster(w.user, w.computer.node)
+    const { connection, storage, deps } = await connect(w, { renewMs: 20 })
+    await connection.signInWithPassword('a@b.test', 'pw')
+    w.offer = sealForOffer(invite(w), new Uint8Array(32).fill(3))
+    await connection.enrollFromQr(`mousse://net/join?v=1&plus=${encodeURIComponent(ORIGIN)}&offer=off_1&key=${b64url(new Uint8Array(32).fill(3))}`, () => undefined)
+    deps.openChannel = async () => {
+      const [a, b] = streamPair()
+      void fakeComputer(b, w.user, w.computer, roster(w.user, w.computer.node)).handshake()
+      return channelOf(a, w.computer.keys.transport.spki)
+    }
+    const session = await connection.openComputer(w.computer.node)
+    // Mousse ID merged this list into another one of the account.
+    const other = testUser()
+    const keeper = testComputer(other, 'Keeper')
+    w.hostedRevokedAt = Date.now()
+    w.otherBindings = [{ userId: other.user, roster: roster(other, keeper.node), revocations: {} }]
+    w.renewError = 'account_network'
+    w.renewStatus = 409
+    await until(() => session.state() === 'closed')
+    expect(session.endReason()).not.toBe('removed')
+    expect(await stored(storage)).toEqual([])
+    expect(await connection.joinPlan()).toEqual({ status: 'needed', target: { nodeId: keeper.node, name: 'Keeper', online: false } })
   })
 
   it('does not join again on its own after the computers removed the phone, until the user signs in again', async () => {

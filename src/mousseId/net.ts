@@ -75,6 +75,8 @@ export interface InventoryBinding {
   roster?: Signed
   /** Revoked nodes and the key epoch they are revoked through, as Mousse ID reports them. */
   revocations: Record<string, number>
+  /** Set once the list is revoked, also when it was merged into the account's one devices list. */
+  revokedAt: number | null
 }
 
 export interface Inventory {
@@ -190,7 +192,8 @@ function checkedBinding(value: unknown): InventoryBinding | undefined {
       const through = isObject(row) ? positive(row.throughKeyEpoch) : undefined
       if (through) revocations[node] = through
     }
-  return { userId: value.userId, ...(signed ? { roster: signed } : {}), revocations }
+  const revokedAt = typeof value.revokedAt === 'number' ? value.revokedAt : null
+  return { userId: value.userId, ...(signed ? { roster: signed } : {}), revocations, revokedAt }
 }
 
 function positive(value: unknown): number | undefined {
