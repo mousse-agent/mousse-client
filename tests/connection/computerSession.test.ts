@@ -84,6 +84,22 @@ describe('leaf session snapshots', () => {
 })
 
 describe('computer session', () => {
+  it('explains why an older desktop created the thread but could not return it inline', async () => {
+    const { session, remote } = await setup()
+    try {
+      const created = session.createThread({ projectId: '' })
+      const rejected = expect(created).rejects.toMatchObject({
+        code: 'upgrade_required',
+        message: expect.stringMatching(/created the thread.*Update Mousse/),
+      })
+      const request = await remote.answer('threads.create', { kind: 'bridge.artifact.result.v1' })
+      expect(request.params).toEqual({ name: 'New Thread' })
+      await rejected
+    } finally {
+      session.close()
+    }
+  })
+
   it('maps projects and threads to the desktop RPCs', async () => {
     const { session, remote } = await setup()
     const projects = session.listProjects()

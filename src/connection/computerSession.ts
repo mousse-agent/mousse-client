@@ -649,6 +649,9 @@ export class RealComputerSession implements ComputerSession {
       { name, ...(input.projectId ? { projectId: input.projectId, ...(input.worktreeEnabled ? { worktreeEnabled: true } : {}) } : {}) },
       { idem: crypto.randomUUID() },
     )
+    if (isObject(value) && value.kind === 'bridge.artifact.result.v1') {
+      throw new NetError('upgrade_required', 'The computer created the thread, but your first message was not sent. Update Mousse on the computer before starting another thread from your phone.')
+    }
     const thread = isObject(value) ? threadSummary(value.thread) : undefined
     if (!thread) return badAnswer('threads.create')
     return thread
