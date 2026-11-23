@@ -1,31 +1,18 @@
 /* Bot faces (bot-ui §4.3). The mouse stands on its own: no circle, tile or badge behind it. */
 .bot-face { position: relative; display: inline-block; flex: none; line-height: 0; vertical-align: middle; }
 .bot-face-canvas,
-.bot-face-shot { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
-/* The live face fades in over its picture or loader once its first frame is drawn. */
+.bot-face-shot,
+.bot-face-layers,
+.bot-face-layer { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+.bot-face-layer { user-select: none; -webkit-user-drag: none; }
+/* The live face fades in over its picture once its first frame is drawn. */
 .bot-face-canvas { opacity: 0; transition: opacity 180ms ease-out; }
 .bot-face[data-drawn] .bot-face-canvas { opacity: 1; }
-/* Paused: asleep and faded (bot-ui §4.9). */
+/* Paused: asleep and faded (bot-ui §4.9). The layers fade as one picture. */
 .bot-face[data-state="paused"][data-drawn] .bot-face-canvas,
-.bot-face[data-state="paused"] .bot-face-shot { opacity: 0.6; }
-
-/* Until the 3D face draws: a soft round glow in the bot's colour where its head will be. While the
-   face is on its way it breathes; with 3D faces off it rests. */
-.bot-face-placeholder {
-  position: absolute;
-  inset: 16% 14% 10%;
-  border-radius: 50%;
-  background: radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--bot-face-colour, #9b87f5) 55%, transparent), color-mix(in srgb, var(--bot-face-colour, #9b87f5) 18%, transparent) 70%);
-  opacity: 0.45;
-}
-.bot-face[data-view="full"] .bot-face-placeholder { inset: 22% 24% 14%; }
-.bot-face-placeholder[data-loading] { animation: bot-face-loading 1.4s ease-in-out infinite; }
-@keyframes bot-face-loading {
-  0%, 100% { opacity: 0.22; transform: scale(0.9); }
-  50% { opacity: 0.6; transform: scale(1); }
-}
+.bot-face[data-state="paused"] .bot-face-shot,
+.bot-face[data-state="paused"] .bot-face-layers { opacity: 0.6; }
 @media (prefers-reduced-motion: reduce) {
-  .bot-face-placeholder[data-loading] { animation: none; }
   .bot-face-canvas { transition: none; }
 }
 
