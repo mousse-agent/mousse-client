@@ -6,14 +6,17 @@ import { hexToRgb, mousseEyesWhite } from './facePoses'
 import { facePixelRatio, sharedFaceRenderer, sharedFaceRendererStatus, stillFrameKey, subscribeSharedFaceRenderer, type FaceHandle, type FaceSpec } from './faceRenderer'
 import { faceGuardWaiting, faceMode } from './faceGuard'
 import { faceShot } from './faceShots'
+import { bakedFaceLayers, bakedFaceUrl, type BakedFaceView } from './bakedFaces'
+import { LIVE_FACES } from './liveFaces'
 import { BotBoundary } from '../BotBoundary'
 import './face.css'
 
 /**
  * A bot's face (Bot Phase 1 §5.12, bot-ui §4.3): its clay mouse or Mousse, whose pose shows the state.
- * `happy` is the renderer-only "done" moment. `head` shows the head (lists, header, messages: 34 to
- * 48 px); `full` the whole mouse (About, the empty page: 88 to 104 px). `still` draws the pose
- * without motion; reduced motion does the same.
+ * `happy` is the renderer-only "done" moment. `head` shows the head (lists, header, messages: 22 to
+ * 60 px); `full` the whole mouse (About, the empty page: 84 to 112 px). Faces show as baked pictures
+ * (`bakedFaces.ts`) unless `LIVE_FACES` turns the live 3D renderer back on; then `still` draws the
+ * pose without motion, and reduced motion does the same.
  */
 export type BotFaceState = BotState | 'happy'
 
@@ -27,7 +30,7 @@ export interface BotFaceProps {
   /** Accessible name; without it the face is decorative. */
   label?: string
   className?: string
-  /** Show only the loading state for now: the live face is not to start yet (lists wait until it is near the screen). */
+  /** Show only the picture for now: the live face is not to start yet (lists wait until it is near the screen). */
   hold?: boolean
 }
 
@@ -64,8 +67,8 @@ function a11y(label: string | undefined) {
  *   fades in on its first frame.
  * - `waiting`: the live face will come (the guard is saving its mark, or `hold`); the loader moves.
  * - `off`: no 3D faces on this phone (no WebGL, a failed or stalled renderer, or turned off in Settings).
- * Until the live face draws, the face shows its saved picture from an earlier visit, or the loader.
- * On failure or when off, it shows the saved picture if there is one, otherwise `BotFaceStill`.
+ * Until the live face draws, the face shows its saved picture from an earlier visit, or its baked
+ * picture. On failure or when off, it shows the saved picture if there is one, otherwise the baked one.
  */
 type FaceShow = 'live' | 'waiting' | 'off'
 
@@ -81,6 +84,57 @@ function useFaceShow(hold: boolean | undefined): FaceShow {
 }
 
 export function BotFace(props: BotFaceProps) {
+  return LIVE_FACES ? <LiveBotFace {...props} /> : <BakedBotFace {...props} />
+}
+
+/**
+ * The face as its baked pictures, stacked. Nothing moves but the paused "z". A picture that fails to
+ * load (a build without them) shows the flat `BotFaceStill` instead of a broken image.
+ */
+function BakedBotFace(props: BotFaceProps) {
+  const { look, state, size, view } = normalizeFaceProps(props)
+  const [failed, setFailed] = useState(false)
+  const motionOff = useMotionScale() === 0
+  if (failed) return <BotFaceStill {...props} />
+  return (
+    <span
+      className={`bot-face${props.className ? ` ${props.className}` : ''}`}
+      style={{ width: size, height: size }}
+      data-state={state}
+      data-view={view}
+      data-colour={look.colour}
+      data-accessory={look.accessory}
+      data-kind={botKindOf(look)}
+      data-eyes={botEyesOf(look)}
+      data-still={props.still === true || motionOff ? 'true' : undefined}
+      {...a11y(props.label)}
+    >
+      <BakedLayers look={look} state={state} view={view} size={size} onError={() => setFailed(true)} />
+      {state === 'paused' && <PausedZ size={size} />}
+    </span>
+  )
+}
+
+/** The face's baked layers, bottom first, filling the face. */
+function BakedLayers({ look, state, view, size, onError }: { look: KnownBotLook; state: BotFaceState; view: BakedFaceView; size: number; onError(): void }) {
+  return (
+    <span className="bot-face-layers" aria-hidden>
+      {bakedFaceLayers(look, state, view, size).map((face) => (
+        <img key={face.layer.layer} className="bot-face-layer" src={bakedFaceUrl(face)} alt="" draggable={false} decoding="async" onError={onError} />
+      ))}
+    </span>
+  )
+}
+
+function PausedZ({ size }: { size: number }) {
+  return (
+    <span className="bot-face-z" style={{ fontSize: Math.max(8, Math.round(size * 0.18)) }} aria-hidden>
+      z
+    </span>
+  )
+}
+
+function LiveBotFace(props: BotFaceProps) {
   const { look, state, size, view } = normalizeFaceProps(props)
   const show = useFaceShow(props.hold)
   const [broken, setBroken] = useState(false)
@@ -92,10 +146,9 @@ export function BotFace(props: BotFaceProps) {
   const shot = faceShot(stillFrameKey({ look, state, view, size }, Math.max(1, Math.round(size * ratio))))
   const live = show === 'live' && !broken
   const off = show === 'off' || broken
-  const loading = !shot && !off
-  // A face that goes back to waiting (a lost context) shows its picture or loader until it draws again.
+  // A face that goes back to waiting (a lost context) shows its picture until it draws again.
   if (!live && drawn) setDrawn(false)
-  if (off && !shot) return <BotFaceStill {...props} />
+  if (off && !shot) return <BakedBotFace {...props} />
   return (
     <span
       className={`bot-face${props.className ? ` ${props.className}` : ''}`}
@@ -112,18 +165,14 @@ export function BotFace(props: BotFaceProps) {
     >
       {!(live && drawn) && (shot
         ? <img className="bot-face-shot" src={shot} alt="" aria-hidden draggable={false} />
-        : <span className="bot-face-placeholder" data-loading={loading ? 'true' : undefined} aria-hidden />)}
+        : <BakedLayers look={look} state={state} view={view} size={size} onError={() => {}} />)}
       {live && (
         // A live face that throws (a lost context, a driver quirk) falls back to the picture or still face, never a blank app.
         <BotBoundary fallback={<OnBroken onBroken={() => setBroken(true)} />}>
           <BotFaceCanvas spec={{ look, state, size, view, still }} onDrawn={() => setDrawn(true)} onBroken={() => setBroken(true)} />
         </BotBoundary>
       )}
-      {state === 'paused' && (
-        <span className="bot-face-z" style={{ fontSize: Math.max(8, Math.round(size * 0.18)) }} aria-hidden>
-          z
-        </span>
-      )}
+      {state === 'paused' && <PausedZ size={size} />}
     </span>
   )
 }
@@ -169,7 +218,7 @@ function BotFaceCanvas({ spec, onDrawn, onBroken }: { spec: FaceSpec; onDrawn():
 }
 
 /**
- * The flat fallback, for a face with no live renderer and no saved picture: the mouse's round head
+ * The flat fallback, for a face whose baked pictures fail to load: the mouse's round head
  * and ears, or the Mousse in its glass, in the look's colour with eyes, and a badge in the
  * accessory's colour. Unknown look values draw as the default.
  */

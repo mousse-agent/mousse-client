@@ -1,17 +1,22 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
 import { BotFace, type BotFaceProps } from './BotFace'
 import { sharedFaceRendererStatus, subscribeSharedFaceRenderer } from './faceRenderer'
+import { LIVE_FACES } from './liveFaces'
 
 /**
  * A face for lists (the Bots row, Recent, a chat's messages) that never slows the screen it is on.
- * It shows the face's saved picture or its loader at once, and starts the live face only when both
- * are true:
+ * With baked faces (the default) it is the face's pictures, like any `BotFace`. With `LIVE_FACES` it
+ * shows the face's picture at once, and starts the live face only when both are true:
  * - the face renderer is ready: it starts after the screen has painted, off the render path, so
  *   opening the Chats tab never waits for the WebGL shader to compile;
  * - the face is on screen or close to it.
  * A face that went live stays live while it is mounted.
  */
 export function LazyBotFace(props: BotFaceProps) {
+  return LIVE_FACES ? <LiveLazyBotFace {...props} /> : <BotFace {...props} />
+}
+
+function LiveLazyBotFace(props: BotFaceProps) {
   const ready = useRendererReady()
   const [ref, near] = useNearScreen<HTMLSpanElement>()
   const go = ready && near

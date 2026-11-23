@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+// These tests cover the live 3D renderer, which `LIVE_FACES` keeps for a rollback; the app shows baked pictures.
+vi.mock('../../src/ui/bots/face/liveFaces', () => ({ LIVE_FACES: true }))
 import { faceGuardState, faceGuardTripped, faceMode, faceRendererAllowed, faceRendererReady, FACE_RENDERER_REVISION, resetFaceGuard, setFaceMode, CONFIRM_MS } from '../../src/ui/bots/face/faceGuard'
 import { faceDiagnosticsLines, type FaceDiagnosticsInput } from '../../src/ui/bots/face/faceDiagnosticsText'
 
@@ -162,8 +164,8 @@ describe('turning 3D faces off', () => {
     expect(view.container.querySelector('canvas.bot-face-canvas')).not.toBeNull()
     await act(() => setFaceMode('still'))
     expect(view.container.querySelector('canvas')).toBeNull()
-    expect(view.container.querySelector('svg.bot-face-still')).not.toBeNull()
-    expect(view.container.querySelector('.bot-face-placeholder')).toBeNull()
+    expect(view.container.querySelector('.bot-face-layers')).not.toBeNull()
+    expect(view.container.querySelector('canvas.bot-face-canvas')).toBeNull()
     await act(() => setFaceMode('live'))
     expect(view.container.querySelector('canvas.bot-face-canvas')).not.toBeNull()
     view.unmount()
