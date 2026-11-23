@@ -10,8 +10,9 @@ import { AddPhoneSheet } from './AddPhoneSheet'
 import { faceGuardTripped, faceMode, setFaceMode, subscribeFaceGuard, type FaceMode } from '../bots/face/faceGuard'
 import { subscribeFaceDiagnostics } from '../bots/face/faceRenderer'
 import { currentFaceDiagnosticsLines } from '../bots/face/faceDiagnosticsText'
+import { LIVE_FACES } from '../bots/face/liveFaces'
 
-/** 3D bot faces on or off. The app turns them off by itself when they stopped it last time. */
+/** 3D bot faces on or off, with `LIVE_FACES` only. The app turns them off by itself when they stopped it last time. */
 function BotFacesSection() {
   const mode = useSyncExternalStore(subscribeFaceGuard, faceMode, faceMode)
   const tripped = useSyncExternalStore(subscribeFaceGuard, faceGuardTripped, faceGuardTripped)
@@ -233,7 +234,7 @@ export function SettingsScreen() {
           </SettingsRow>
         </SettingsGroup>
 
-        <BotFacesSection />
+        {LIVE_FACES && <BotFacesSection />}
 
         <SettingsGroup title="About" icon={Info}>
           <SettingsRow leading={<MousseLogo size={22} />} title="Mousse for phones" control={<span className="m-set-row__value">Version {__APP_VERSION__}</span>} />
@@ -248,7 +249,7 @@ export function SettingsScreen() {
             <div id={advancedId} className="m-set-rows">
               <SettingsRow title="Mousse ID server" description={<span className="font-mono">{signedIn?.idOrigin || 'Not signed in'}</span>} />
               <SettingsRow title="Account id" description={<span className="font-mono">{signedIn?.account.id ?? '—'}</span>} />
-              <BotFacesDiagnosticsRow />
+              {LIVE_FACES && <BotFacesDiagnosticsRow />}
             </div>
           )}
         </section>
