@@ -39,3 +39,18 @@ See [FEATURE_PARITY.md](FEATURE_PARITY.md). Server capabilities are authoritativ
 ## Accessibility and mobile behavior
 
 The UI uses semantic buttons, labels, focus-visible states, live message updates, labelled icon buttons, color-independent connection text, reduced-density mobile navigation, and `viewport-fit=cover` with safe-area insets. On a compact viewport the workspace sidebar becomes an accessible drawer and the main areas use a bottom navigation bar.
+
+## Releases
+
+`.github/workflows/release.yml` publishes a GitHub release with the web bundle (`mousse-client-web-<version>.zip`), a signed Android APK (`mousse-client-<version>.apk`) and `SHA256SUMS.txt`. It typechecks and runs the tests first.
+
+1. Set `version` in `package.json` (and `package-lock.json`) to the new version and merge it.
+2. Push a matching tag, `git tag v0.2.0 && git push origin v0.2.0`, or run the Release workflow from the Actions tab.
+
+A version with a suffix such as `0.3.0-beta.1` becomes a pre-release. The APK's version code comes from the version: `1.2.3` is `1002003`.
+
+The APK is signed with the release key in the `release` environment's secrets: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and optionally `ANDROID_KEY_PASSWORD` (defaults to the keystore password). Keep a copy of that key: Android installs updates only when they are signed with the same key. A local `assembleRelease` signs the same way when `MOUSSE_KEYSTORE_FILE` and the other `MOUSSE_KEY*` variables are set.
+
+## License
+
+[MIT](LICENSE)

@@ -1,14 +1,19 @@
 {
   "name": "mousse-client",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mousse-agent/mousse-client.git"
+  },
   "type": "module",
   "description": "Official responsive Capacitor client for Mousse",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "vitest run && node --test scripts/team-status.test.mjs",
     "test:watch": "vitest",
     "test:integration": "vitest run tests/integration",
     "typecheck": "tsc --noEmit",
