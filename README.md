@@ -49,7 +49,7 @@ The UI uses semantic buttons, labels, focus-visible states, live message updates
 
 A version with a suffix such as `0.3.0-beta.1` becomes a pre-release. The APK's version code comes from the version: `1.2.3` is `1002003`.
 
-The APK is signed with the release key in the `release` environment's secrets: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and optionally `ANDROID_KEY_PASSWORD` (defaults to the keystore password). Keep a copy of that key: Android installs updates only when they are signed with the same key. A local `assembleRelease` signs the same way when `MOUSSE_KEYSTORE_FILE` and the other `MOUSSE_KEY*` variables are set.
+The APK is signed with the release key in the repository's Actions secrets: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and optionally `ANDROID_KEY_PASSWORD` (defaults to the keystore password). Keep a copy of that key: Android installs updates only when they are signed with the same key. A local `assembleRelease` signs the same way when `MOUSSE_KEYSTORE_FILE` and the other `MOUSSE_KEY*` variables are set.
 
 ## License
 
