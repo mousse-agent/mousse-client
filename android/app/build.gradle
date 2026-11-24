@@ -7,8 +7,9 @@ android {
         applicationId "com.ryspa.mousse.client"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // Release builds set these from the release version (see .github/workflows/release.yml).
+        versionCode((System.getenv("MOUSSE_VERSION_CODE") ?: "1").toInteger())
+        versionName(System.getenv("MOUSSE_VERSION_NAME") ?: "1.0")
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,8 +17,22 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        // Signed only when the release key is supplied; otherwise assembleRelease gives an unsigned APK.
+        if (System.getenv("MOUSSE_KEYSTORE_FILE")) {
+            release {
+                storeFile file(System.getenv("MOUSSE_KEYSTORE_FILE"))
+                storePassword System.getenv("MOUSSE_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("MOUSSE_KEY_ALIAS")
+                keyPassword System.getenv("MOUSSE_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
+            if (System.getenv("MOUSSE_KEYSTORE_FILE")) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

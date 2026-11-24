@@ -1,0 +1,151 @@
+# Builds the web bundle and a signed Android APK and publishes them as a GitHub release.
+#
+# Start a release by pushing a tag (`git tag v0.2.0 && git push origin v0.2.0`) or with
+# "Run workflow" in the Actions tab. The version must match package.json.
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, for example 0.2.0. Empty uses the package.json version.
+        required: false
+        default: ''
+      prerelease:
+        description: Mark the release as a pre-release
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Typecheck and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  build:
+    name: Build web bundle and APK
+    needs: check
+    runs-on: ubuntu-latest
+    environment: release
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="${INPUT_VERSION:-$pkg}"; v="${v#v}"; fi
+          if ! [[ "$v" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$v' is not a version like 1.2.3 or 1.2.3-beta.1"; exit 1
+          fi
+          if [ "$v" != "$pkg" ]; then
+            echo "::error::Releasing $v but package.json says $pkg. Bump package.json first."; exit 1
+          fi
+          # Android needs an increasing whole number: 1.2.3 -> 1002003. A pre-release shares its final version's code.
+          code=$(( BASH_REMATCH[1] * 1000000 + BASH_REMATCH[2] * 1000 + BASH_REMATCH[3] ))
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "Releasing $v (Android version code $code)"
+
+      - run: npm ci
+
+      - name: Build web bundle
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          npm run build
+          mkdir -p out
+          (cd dist && zip -qr "../out/mousse-client-web-$VERSION.zip" .)
+
+      - name: Copy the web bundle into the Android project
+        run: npx cap sync android
+
+      - name: Build signed APK
+        working-directory: android
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          MOUSSE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          MOUSSE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          MOUSSE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          MOUSSE_VERSION_NAME: ${{ steps.version.outputs.version }}
+          MOUSSE_VERSION_CODE: ${{ steps.version.outputs.code }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$MOUSSE_KEYSTORE_PASSWORD" ] || [ -z "$MOUSSE_KEY_ALIAS" ]; then
+            echo "::error::The ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD and ANDROID_KEY_ALIAS secrets are required."; exit 1
+          fi
+          export MOUSSE_KEYSTORE_FILE="$RUNNER_TEMP/release.keystore"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$MOUSSE_KEYSTORE_FILE"
+          export MOUSSE_KEY_PASSWORD="${MOUSSE_KEY_PASSWORD:-$MOUSSE_KEYSTORE_PASSWORD}"
+          sh ./gradlew assembleRelease --no-daemon --stacktrace
+          rm -f "$MOUSSE_KEYSTORE_FILE"
+          apk=app/build/outputs/apk/release/app-release.apk
+          apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$apksigner" verify --print-certs "$apk"
+          cp "$apk" "../out/mousse-client-$VERSION.apk"
+
+      - name: Checksums
+        working-directory: out
+        run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ steps.version.outputs.version }}
+          path: out/
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ needs.build.outputs.version }}
+          path: out
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          PRERELEASE: ${{ inputs.prerelease || contains(needs.build.outputs.version, '-') }}
+        run: |
+          flags=()
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          gh release create "v$VERSION" out/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Mousse Client $VERSION" \
+            --generate-notes \
+            "${flags[@]}"
